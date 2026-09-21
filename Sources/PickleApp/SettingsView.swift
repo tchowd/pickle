@@ -115,10 +115,15 @@ struct SettingsView: View {
                 Text("After granting permission, select your passage and invoke Pickle again. Excluded apps and protected selections are never captured.").font(.caption).foregroundStyle(.secondary)
                 Link("Set up the optional vision model", destination: URL(string: "https://developers.cloudflare.com/workers-ai/models/llama-3.2-11b-vision-instruct/")!)
             }
+            GlassSection("Browser and video context") {
+                Toggle("Include webpage references", isOn: $settings.webContextEnabled)
+                Text("When enabled, Pickle fetches the current public webpage once per session. This contacts the website without browser cookies. Offline mode stops these fetches. The browser extension can share the page you already have open, including available captions.").font(.caption).foregroundStyle(.secondary)
+                Text("Video context uses captions first. Listen for 30 seconds records source-app audio only when you choose it; local speech recognition must be available.").font(.caption).foregroundStyle(.secondary)
+            }
             GlassSection("Your session") {
                 Text("Passages and answers stay in memory until you clear them or quit. Only answers you explicitly bookmark are saved on this Mac.").font(.callout).foregroundStyle(.secondary)
                 Button("Clear current passage and answers") { coordinator.clear() }
-                Button("Ask before sharing again") { settings.cloudConsent = false; settings.jevConsent = false; settings.screenContextConsent = false }
+                Button("Ask before sharing again") { settings.cloudConsent = false; settings.jevConsent = false; settings.screenContextConsent = false; settings.webContextConsent = false }
             }
             GlassSection {
                 DisclosureGroup("Excluded apps") {

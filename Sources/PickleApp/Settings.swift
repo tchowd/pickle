@@ -24,11 +24,13 @@ import PickleCore
     @Published var themeIntensity: Double { didSet { save("themeIntensity", themeIntensity) } }
     @Published var screenContextEnabled: Bool { didSet { save("screenContextEnabled", screenContextEnabled) } }
     @Published var screenContextConsent: Bool { didSet { save("screenContextConsent", screenContextConsent) } }
+    @Published var webContextEnabled: Bool { didSet { save("webContextEnabled", webContextEnabled) } }
+    @Published var webContextConsent: Bool { didSet { save("webContextConsent", webContextConsent) } }
     @Published var streaming: Bool { didSet { save("streaming", streaming) } }
     let defaults: UserDefaults
     var requestPolicy: [String] {
         [String(paused), accountID, model, String(jevEnabled), String(localOnly), level.rawValue,
-         exclusions, String(cloudConsent), String(jevConsent), String(screenContextEnabled), String(screenContextConsent)]
+         exclusions, String(cloudConsent), String(jevConsent), String(screenContextEnabled), String(screenContextConsent), String(webContextEnabled), String(webContextConsent)]
     }
     var floatingFrame: NSRect? {
         get { defaults.string(forKey: "floatingFrame").map(NSRectFromString) }
@@ -44,6 +46,8 @@ import PickleCore
     }
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        webContextEnabled = defaults.bool(forKey: "webContextEnabled")
+        webContextConsent = defaults.bool(forKey: "webContextConsent")
         screenContextEnabled = defaults.object(forKey: "screenContextEnabled") as? Bool ?? true
         screenContextConsent = defaults.bool(forKey: "screenContextConsent")
         textSize = min(24, max(14, defaults.object(forKey: "textSize") as? Double ?? 18))

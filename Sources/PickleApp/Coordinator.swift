@@ -2,17 +2,24 @@ import SwiftUI
 import PickleCore
 
 @MainActor final class SessionStore: ObservableObject {
+    @Published var reference: WebReference?
+    var captureTarget: ScreenContextTarget?
     @Published var snapshot: SelectionSnapshot?
     @Published var result: ReadingResult?
     @Published var conversation: [ConversationTurn] = []
     @Published var context = ""
     @Published var page: CapturedPage?
     @Published var visualSummary = ""
-    func clear() { snapshot = nil; result = nil; conversation = []; context = ""; page = nil; visualSummary = "" }
+    func clear() { reference = nil; captureTarget = nil; snapshot = nil; result = nil; conversation = []; context = ""; page = nil; visualSummary = "" }
 }
 @MainActor final class RequestCoordinator: ObservableObject {
     @Published var progress: String?
     @Published var draft = ""
+    @Published var referenceLoading = false
+    @Published var referenceStatus: String?
+    private var referenceTask: Task<Void, Never>?
+    private var referenceTimeout: Task<Void, Never>?
+    private var referenceGeneration = UUID()
     @Published var pageLoading = false
     @Published var pageStatus: String?
     @Published var visualBusy = false
@@ -40,9 +47,10 @@ import PickleCore
     private var credential: String?
     init(session: SessionStore, settings: SettingsStore) { self.session = session; self.settings = settings }
     func cancel() { queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; draft = ""; credential = nil }
-    func clear() { cancel(); pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; pendingAction = .simplify }
-    func setSelection(_ snapshot: SelectionSnapshot) { clear(); session.snapshot = snapshot }
+    func clear() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil; pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; pendingAction = .simplify }
+    func setSelection(_ snapshot: SelectionSnapshot) { clear(); session.snapshot = snapshot; captureReference() }
     func capturePage(_ target: ScreenContextTarget?) {
+        session.captureTarget = target
         guard settings.screenContextEnabled, let snapshot = session.snapshot, snapshot.bundleID != "sample", snapshot.bundleID != "manual", !settings.isExcluded(snapshot.bundleID) else { return }
         pageGeneration = UUID(); let generation = pageGeneration
         pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false
@@ -75,6 +83,7 @@ import PickleCore
     }
     private func finishPageCapture() {
         pageLoading = false; pageTimeout?.cancel(); pageTimeout = nil
+        guard !referenceLoading else { return }
         let next = queuedPageAction; queuedPageAction = nil
         next?()
     }
@@ -105,6 +114,48 @@ import PickleCore
             }
         }
     }
+    private func cancelReference() {
+        referenceGeneration = UUID(); referenceTask?.cancel(); referenceTask = nil
+        referenceTimeout?.cancel(); referenceTimeout = nil; referenceLoading = false
+    }
+    func removeReference() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil }
+    func captureReference() {
+        guard settings.webContextEnabled, !settings.localOnly, !settings.paused,
+              let snapshot = session.snapshot, !settings.isExcluded(snapshot.bundleID),
+              let url = snapshot.sourceURL else { return }
+        cancelReference(); let generation = referenceGeneration
+        referenceLoading = true; referenceStatus = "Reading page reference…"
+        referenceTask = Task { [weak self] in
+            do {
+                let reference = try await WebReferenceService.fetch(url, selection: snapshot.text)
+                guard let self, !Task.isCancelled, self.referenceGeneration == generation, self.session.snapshot?.id == snapshot.id else { return }
+                self.session.reference = reference; self.referenceStatus = nil
+                self.finishReference()
+            } catch {
+                guard let self, !Task.isCancelled, self.referenceGeneration == generation else { return }
+                self.referenceStatus = "Page unavailable. Use the browser extension for signed-in pages and videos."
+                self.finishReference()
+            }
+        }
+        referenceTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self, !Task.isCancelled, self.referenceGeneration == generation, self.referenceLoading else { return }
+            self.cancelReference(); self.referenceStatus = "Page reference timed out. Your selection is still available."
+            self.finishReference()
+        }
+    }
+    private func finishReference() {
+        referenceLoading = false; referenceTimeout?.cancel(); referenceTimeout = nil
+        if !pageLoading { finishPageCapture() }
+    }
+    func receiveReference(_ reference: WebReference, selection: String, bundleID: String) throws {
+        guard !settings.paused, settings.webContextEnabled, !settings.isExcluded(bundleID) else { throw PickleError.message("Enable browser context in Pickle Settings, or resume Pickle.") }
+        try reference.validate()
+        guard selection.utf8.count <= Limits.selection else { throw PickleError.message("Select a shorter passage.") }
+        clear()
+        session.snapshot = SelectionSnapshot(text: selection, appName: "Browser", bundleID: bundleID, method: "Browser extension", sourceTitle: reference.title, sourceURL: reference.url)
+        session.reference = reference
+    }
     func pasteSelection() {
         let text = manualText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.utf8.count <= Limits.selection else { error = "This passage is a little long. Try a shorter excerpt."; return }
@@ -133,7 +184,7 @@ import PickleCore
         guard !settings.isExcluded(snapshot.bundleID) else { error = "This source application is excluded."; return }
         if action == .followUp && session.conversation.count >= Limits.turns { error = "This conversation has reached six follow-ups. Clear follow-ups to keep reading with the same selection."; return }
         pendingAction = action; lastLimited = limited; lastChart = chart; lastQuestion = followUp
-        if pageLoading {
+        if pageLoading || referenceLoading {
             progress = "Reading page…"
             let id = snapshot.id
             queuedPageAction = { [weak self] in
@@ -144,13 +195,13 @@ import PickleCore
         }
         if !isSample {
             guard !settings.localOnly else { error = "Online explanations are turned off. Try an example, or enable them in Settings."; return }
-            guard settings.cloudConsent, !settings.jevEnabled || settings.jevConsent, session.page == nil || settings.screenContextConsent else { needsDisclosure = true; return }
+            guard settings.cloudConsent, !settings.jevEnabled || settings.jevConsent, session.page == nil || settings.screenContextConsent, session.reference == nil || settings.webContextConsent else { needsDisclosure = true; return }
         }
         let token: String
         do { token = isSample ? "" : try CredentialStore.read(); credential = token }
         catch { self.error = error.localizedDescription; return }
         guard isSample || !token.isEmpty else { error = "Add your Cloudflare API token in Settings."; return }
-        let input = RequestInput(snapshot: snapshot, action: action, context: session.context, level: settings.level, limited: limited, chartChoice: chart, question: followUp, previousResult: action == .followUp ? (session.conversation.last?.answer ?? session.result?.text ?? "") : "", conversation: action == .followUp ? session.conversation : [], pageContext: settings.screenContextEnabled ? session.page?.text ?? "" : "", visualContext: settings.screenContextEnabled ? session.visualSummary : "")
+        let input = RequestInput(snapshot: snapshot, action: action, context: session.context, level: settings.level, limited: limited, chartChoice: chart, question: followUp, previousResult: action == .followUp ? (session.conversation.last?.answer ?? session.result?.text ?? "") : "", conversation: action == .followUp ? session.conversation : [], pageContext: settings.screenContextEnabled ? session.page?.text ?? "" : "", visualContext: settings.screenContextEnabled ? session.visualSummary : "", reference: session.reference)
         do { try input.validate() } catch { self.error = error.localizedDescription; return }
         let provider: any GenerativeProvider = isSample ? SampleProvider() : CloudflareProvider(accountID: settings.accountID, token: token, model: settings.model)
         let evaluator: (any DecisionClient)? = settings.jevEnabled && !isSample ? JevClient(accountID: settings.accountID, token: token) : nil
@@ -188,6 +239,7 @@ import PickleCore
         if progress != nil { cancel(); error = "Settings changed. Run the action again with your updated preferences." }
         if visualBusy { cancel() }
         if !settings.screenContextEnabled || settings.paused || session.snapshot.map({ settings.isExcluded($0.bundleID) }) == true { removePage() }
+        if !settings.webContextEnabled || settings.paused || session.snapshot.map({ settings.isExcluded($0.bundleID) }) == true { removeReference() }
         if settings.paused { needsDisclosure = false }
     }
 }

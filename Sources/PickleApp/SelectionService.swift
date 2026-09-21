@@ -24,7 +24,9 @@ import PickleCore
             guard !role.lowercased().contains("secure"), !subrole.lowercased().contains("secure"), (attribute(current, "AXProtectedContent") as? Bool) != true else { throw PickleError.message("Pickle does not capture secure or protected fields.") }
             if let parent = attribute(current, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() { ancestor = (parent as! AXUIElement) } else { break }
         }
-        guard let text = attribute(element, kAXSelectedTextAttribute) as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw PickleError.message("No usable selection was exposed by \(app.localizedName ?? "this app"). Try selecting text again, or paste it manually.") }
+        let sourceURL = Self.browsers.contains(bundle) ? browserURL(element) : nil
+        let text = attribute(element, kAXSelectedTextAttribute) as? String ?? ""
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sourceURL != nil else { throw PickleError.message("No usable selection was exposed by \(app.localizedName ?? "this app"). Try selecting text again, or paste it manually.") }
         guard text.utf8.count <= Limits.selection else { throw PickleError.message("This selection is too long. Select at most \(Limits.selection.formatted()) UTF-8 bytes.") }
         var bounds: SelectionBounds?
         if let range = attribute(element, kAXSelectedTextRangeAttribute) {
@@ -37,7 +39,21 @@ import PickleCore
                 }
             }
         }
-        return SelectionSnapshot(text: text, appName: app.localizedName ?? "Application", bundleID: bundle, bounds: bounds, limitations: bounds == nil ? ["Selection coordinates unavailable; positioned near the pointer."] : [])
+        return SelectionSnapshot(text: text, appName: app.localizedName ?? "Application", bundleID: bundle, bounds: bounds, limitations: bounds == nil ? ["Selection coordinates unavailable; positioned near the pointer."] : [], sourceURL: sourceURL)
+    }
+    static let browsers: Set<String> = ["com.apple.Safari", "com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "company.thebrowser.Browser", "company.thebrowser.dia", "org.mozilla.firefox"]
+    private func browserURL(_ element: AXUIElement) -> String? {
+        var current: AXUIElement? = element
+        for _ in 0..<24 {
+            guard let node = current else { break }
+            for key in ["AXURL", "AXDocument"] {
+                let raw = attribute(node, key)
+                let string = (raw as? URL)?.absoluteString ?? raw as? String
+                if let string, let url = WebReference.publicURL(string) { return url.absoluteString }
+            }
+            if let parent = attribute(node, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() { current = (parent as! AXUIElement) } else { break }
+        }
+        return nil
     }
     private func attribute(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
         var value: CFTypeRef?

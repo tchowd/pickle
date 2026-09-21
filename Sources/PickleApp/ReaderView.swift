@@ -155,10 +155,10 @@ struct ReaderView: View {
     private func selection(_ snapshot: SelectionSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Label(snapshot.appName, systemImage: "macwindow"); Spacer(); Text(snapshot.capturedAt, style: .time) }.font(.caption).foregroundStyle(.secondary)
-            DisclosureGroup("Original passage", isExpanded: $originalExpanded) {
+            DisclosureGroup(snapshot.text.isEmpty ? "Current page" : "Original passage", isExpanded: $originalExpanded) {
                 SelectablePassage(text: snapshot.text, size: settings.textSize, explain: coordinator.explainTerm).padding(.top, 10)
             }
-            if session.result == nil { Text(snapshot.text).lineLimit(floating ? 2 : 4).foregroundStyle(.secondary).italic() }
+            if session.result == nil { Text(snapshot.text.isEmpty ? (snapshot.sourceURL ?? "Current page") : snapshot.text).lineLimit(floating ? 2 : 4).foregroundStyle(.secondary).italic() }
             HStack(spacing: 8) {
                 actionButton(.simplify, icon: "text.alignleft", key: "1")
                 actionButton(.expand, icon: "text.badge.plus", key: "2")
@@ -173,6 +173,7 @@ struct ReaderView: View {
                         Button("Explain", action: explainWord).disabled(term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || coordinator.progress != nil)
                     }.padding(20).frame(width: 300).background { PortalSurface() }.pickleAppearance(settings)
                 }.disabled(coordinator.progress != nil || settings.paused)
+            WebReferenceView(coordinator: coordinator, session: session, settings: settings)
             PageContextView(coordinator: coordinator, session: session, settings: settings, openSettings: app.openSettings)
             DisclosureGroup("Add surrounding context") {
                 TextEditor(text: $session.context).font(.callout).scrollContentBackground(.hidden).frame(height: 90).padding(10).glassInset().accessibilityLabel("Additional source context")
@@ -191,10 +192,13 @@ struct ReaderView: View {
             if session.page != nil {
                 Text("Page context adds text read from the captured source window. This text and any visual summary are also sent with your request and answer checks. The screenshot itself is uploaded only when you choose Analyze visuals.").font(.callout)
             }
-            Text("Nothing is sent until you choose an action. You can change this in Settings.").font(.caption).foregroundStyle(.secondary)
+            if session.reference != nil {
+                Text("Your page reference or video transcript is also shared with Cloudflare and enabled answer checks.").font(.callout)
+            }
+            Text("Nothing is sent to AI providers until you choose an action. You can change this in Settings.").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Agree and continue") {
-                    settings.cloudConsent = true; if session.page != nil { settings.screenContextConsent = true }; if settings.jevEnabled { settings.jevConsent = true }
+                    settings.cloudConsent = true; if session.reference != nil { settings.webContextConsent = true }; if session.page != nil { settings.screenContextConsent = true }; if settings.jevEnabled { settings.jevConsent = true }
                     coordinator.needsDisclosure = false
                     // Allow settings observers to settle before starting an authorized request.
                     Task { @MainActor in await Task.yield(); coordinator.retry() }
