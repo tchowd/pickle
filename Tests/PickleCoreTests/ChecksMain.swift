@@ -93,6 +93,9 @@ import PickleCore
         await run("testOCRIsLabeledAndVisualSummaryIsNotEvidence") { try await PageContextTests().testOCRIsLabeledAndVisualSummaryIsNotEvidence() }
         await run("testScreenNumbersCannotCreateAChart") { try await PageContextTests().testScreenNumbersCannotCreateAChart() }
         await run("testVisionRequestContainsOneBoundedDataImage") { try await PageContextTests().testVisionRequestContainsOneBoundedDataImage() }
+        await run("testReferenceURLAndBudgets") { try WebReferenceTests().testReferenceURLAndBudgets() }
+        await run("testReferenceExcerptsAndPageOnlyInput") { try WebReferenceTests().testReferenceExcerptsAndPageOnlyInput() }
+        await run("testReferencesReachProseButNotChartEvidence") { try await WebReferenceTests().testReferencesReachProseButNotChartEvidence() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)
     }
