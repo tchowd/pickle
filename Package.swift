@@ -6,7 +6,7 @@ let package = Package(
     products: [.library(name: "PickleCore", targets: ["PickleCore"]), .executable(name: "Pickle", targets: ["PickleApp"])],
     targets: [
         .target(name: "PickleCore"),
-        .executableTarget(name: "PickleApp", dependencies: ["PickleCore"]),
+        .executableTarget(name: "PickleApp", dependencies: ["PickleCore"], resources: [.copy("Resources")]),
         .executableTarget(name: "PickleChecks", dependencies: ["PickleCore"], path: "Tests/PickleCoreTests")
     ],
     swiftLanguageModes: [.v5]
