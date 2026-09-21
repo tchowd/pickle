@@ -22,6 +22,7 @@ import PickleCore
     private var positioning = false
     lazy var coordinator = RequestCoordinator(session: session, settings: settings)
     private var statusItem: NSStatusItem!, resultPanel: ReaderPanel?, actionPanel: ActionPanel?, settingsWindow: NSWindow?
+    private var browserBridge: BrowserBridge?
     private var invocation: InvocationController?
     private var escapeMonitor: Any?
     private var actionExpanded = false
@@ -57,6 +58,15 @@ import PickleCore
             self.statusItem.button?.image = self.settings.paused ? NSImage(systemSymbolName: "pause.circle", accessibilityDescription: "Pickle paused") : pickleStatusIcon()
         }
         invocation?.shortcutError = { [weak self] message in self?.coordinator.error = message }
+        if !CommandLine.arguments.contains("--smoke-test") && !CommandLine.arguments.contains("--preview-actions") {
+            browserBridge = BrowserBridge { [weak self] message in
+                guard let self else { return }
+                try self.coordinator.receiveReference(message.reference, selection: message.selection, bundleID: message.bundleID)
+                self.coordinator.capturePage(self.session.captureTarget)
+                self.actionPanel?.orderOut(nil); self.actionExpanded = false; self.presentReader()
+            }
+            try? browserBridge?.start()
+        }
         if CommandLine.arguments.contains("--smoke-test") {
             coordinator.sample(); showResult()
             Task { @MainActor in
@@ -108,7 +118,9 @@ import PickleCore
                     && self.resultPanel?.isVisible == true && self.actionPanel?.isVisible == false
                 let features = await self.checkReadingFeatures()
                 let pageFeatures = await self.checkPageContextFeatures()
-                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures
+                let webFeatures = await self.checkWebReferenceFeatures()
+                let bridgeFeatures = await self.checkBrowserBridge()
+                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures && webFeatures && bridgeFeatures
                 print(ok ? "PICKLE_SMOKE_PASS: movable action bar, anchored expansion, screen-edge clamping, remembered position, reopen, fresh sessions, saved answers, appearance persistence, and reading actions" : "PICKLE_SMOKE_FAIL")
                 if !ok { exit(1) }
                 NSApp.terminate(nil)
@@ -116,6 +128,78 @@ import PickleCore
         } else if CommandLine.arguments.contains("--preview-actions") {
             showActions(.init(text: "The treatment may reduce symptoms in some patients, but the evidence remains limited.", appName: "Pickle sample", bundleID: "sample"), automatic: false)
         } else { presentReader() }
+    }
+    private func checkBrowserBridge() async -> Bool {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pickle-bridge-test-" + UUID().uuidString)
+        var accepted = 0
+        let bridge = BrowserBridge(directory: directory) { _ in accepted += 1 }
+        defer { bridge.stop(); try? FileManager.default.removeItem(at: directory) }
+        do {
+            try bridge.start()
+            let config = directory.appendingPathComponent("connection.json")
+            for _ in 0..<20 {
+                if FileManager.default.fileExists(atPath: config.path) { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let path = FileManager.default.currentDirectoryPath + "/Tests/BrowserExtensionTests/bridge_probe.py"
+            let success = await Task.detached {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                process.arguments = [path, config.path]
+                do { try process.run(); process.waitUntilExit(); return process.terminationStatus == 0 } catch { return false }
+            }.value
+            let ok = success && accepted == 1
+            print(ok ? "PICKLE_BROWSER_BRIDGE_PASS" : "PICKLE_BROWSER_BRIDGE_FAIL")
+            return ok
+        } catch { print("PICKLE_BROWSER_BRIDGE_FAIL"); return false }
+    }
+    private func checkWebReferenceFeatures() async -> Bool {
+        do {
+            if ProcessInfo.processInfo.environment["PICKLE_TEST_PUBLIC_PAGE"] == "1" {
+                let reference = try await WebReferenceService.fetch("https://example.com", selection: "")
+                guard !reference.text.isEmpty, reference.title.contains("Example Domain") else { return false }
+                print("PICKLE_PUBLIC_FETCH_PASS: public HTTPS fetch, pinned public address, native article extraction")
+            }
+            let parser = WebReferenceService()
+            let paragraph = "Mitochondria help cells release energy. This article explains the process and its limitations. "
+            let fixture = "<html><head><title>Energy article</title></head><body><nav>Unrelated navigation</nav><article><h1>Energy article</h1><p>" + String(repeating: paragraph, count: 12) + "</p></article><script>document.body.textContent='SCRIPT EXECUTED';</script></body></html>"
+            let extracted = try await parser.extract(fixture, url: URL(string: "https://example.com/article")!)
+            let text = extracted["text"] ?? ""
+            let parsed = text.contains("Mitochondria") && !text.contains("SCRIPT EXECUTED") && !text.contains("Unrelated navigation")
+            let suite = "com.pickle.web-check." + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = SettingsStore(defaults: defaults); settings.webContextEnabled = true
+            let session = SessionStore(), coordinator: RequestCoordinator
+            coordinator = RequestCoordinator(session: session, settings: settings)
+            let reference = WebReference(url: "https://example.com/article", title: "Energy", text: "Mitochondria release energy.")
+            try coordinator.receiveReference(reference, selection: "", bundleID: "com.google.Chrome")
+            coordinator.run(.simplify)
+            let disclosure = coordinator.needsDisclosure && session.reference == reference
+            coordinator.clear()
+            let cleared = session.reference == nil && !coordinator.referenceLoading
+            try coordinator.receiveReference(reference, selection: "", bundleID: "com.google.Chrome")
+            settings.webContextEnabled = false; coordinator.policyChanged()
+            let disabled = session.reference == nil
+            let localBlocked = await Task.detached { WebReferenceService.publicAddress("localhost") == nil }.value
+            settings.webContextEnabled = true
+            let delayed = RequestCoordinator(session: session, settings: settings, referenceFetcher: { _, _ in
+                // Ignore cancellation deliberately, reproducing a late source response.
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.08) { continuation.resume() }
+                }
+                return reference
+            })
+            delayed.setSelection(.init(text: "A selection", appName: "Browser", bundleID: "com.google.Chrome", sourceURL: reference.url))
+            delayed.run(.simplify)
+            let queued = delayed.progress != nil && delayed.referenceLoading
+            delayed.clear()
+            try await Task.sleep(for: .milliseconds(120))
+            let staleIgnored = session.reference == nil && session.snapshot == nil && delayed.progress == nil && !delayed.needsDisclosure
+            let ok = parsed && disclosure && cleared && disabled && localBlocked && queued && staleIgnored
+            print(ok ? "PICKLE_WEB_REFERENCE_PASS: isolated HTML extraction, page-only consent, cleanup, local-address rejection" : "PICKLE_WEB_REFERENCE_FAIL")
+            return ok
+        } catch { print("PICKLE_WEB_REFERENCE_FAIL: \(error.localizedDescription)"); return false }
     }
     private func checkPageContextFeatures() async -> Bool {
         // Synthetic pixels only: this check never captures the desktop or sends a request.
@@ -197,6 +281,7 @@ import PickleCore
         }
         return appearance && saved && removed && adjusted && explained && invalidTerm && cleared && resized
     }
+    func applicationWillTerminate(_ notification: Notification) { browserBridge?.stop() }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         presentReader()
         return true
@@ -246,6 +331,7 @@ import PickleCore
         }
         do {
             let snapshot = try readSelection()
+            if automatic && snapshot.text.isEmpty { return }
             showActions(snapshot, automatic: automatic, pageTarget: ScreenContextService.target(for: snapshot))
         } catch {
             guard !automatic else { return }

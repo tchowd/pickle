@@ -11,6 +11,9 @@ struct SettingsView: View {
     @State private var tab = 0
     @Environment(\.scenePhase) private var scenePhase
 
+    @State private var extensionID = ""
+    @State private var extensionBrowser = "Chrome"
+    @State private var extensionMessage = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 12) {
@@ -118,6 +121,21 @@ struct SettingsView: View {
             GlassSection("Browser and video context") {
                 Toggle("Include webpage references", isOn: $settings.webContextEnabled)
                 Text("When enabled, Pickle fetches the current public webpage once per session. This contacts the website without browser cookies. Offline mode stops these fetches. The browser extension can share the page you already have open, including available captions.").font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup("Connect browser extension") {
+                    Text("Load the extension folder as an unpacked extension in your browser’s extension manager. Paste its ID here to connect it to Pickle.").font(.caption).foregroundStyle(.secondary)
+                    Button("Show extension folder") {
+                        if let folder = Bundle.main.resourceURL?.appendingPathComponent("browser-extension") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                    }
+                    Picker("Browser", selection: $extensionBrowser) {
+                        ForEach(["Chrome", "Edge", "Brave", "Arc"], id: \.self) { Text($0) }
+                    }
+                    TextField("Extension ID", text: $extensionID).textFieldStyle(GlassFieldStyle())
+                    Button("Connect") {
+                        do { try BrowserBridge.installExtension(id: extensionID.trimmingCharacters(in: .whitespacesAndNewlines), browser: extensionBrowser); extensionMessage = "Connected. Use the Pickle button in your browser." }
+                        catch { extensionMessage = error.localizedDescription }
+                    }
+                    if !extensionMessage.isEmpty { Text(extensionMessage).font(.caption) }
+                }
                 Text("Video context uses captions first. Listen for 30 seconds records source-app audio only when you choose it; local speech recognition must be available.").font(.caption).foregroundStyle(.secondary)
             }
             GlassSection("Your session") {

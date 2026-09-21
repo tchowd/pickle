@@ -15,6 +15,10 @@ import PickleCore
 @MainActor final class RequestCoordinator: ObservableObject {
     @Published var progress: String?
     @Published var draft = ""
+    @Published var listening = false
+    private var audioTask: Task<Void, Never>?
+    private var audioService: AudioContextService?
+    private var audioGeneration = UUID()
     @Published var referenceLoading = false
     @Published var referenceStatus: String?
     private var referenceTask: Task<Void, Never>?
@@ -41,12 +45,15 @@ import PickleCore
     @Published var jevStatus = "Not tested"
     let session: SessionStore, settings: SettingsStore
     private let runner = RequestRunner()
+    private let referenceFetcher: @MainActor (String, String) async throws -> WebReference
     let metrics = ContentFreeMetrics()
     private var lastQuestion = "", lastLimited = false
     private var lastChart: ChartKind?
     private var credential: String?
-    init(session: SessionStore, settings: SettingsStore) { self.session = session; self.settings = settings }
-    func cancel() { queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; draft = ""; credential = nil }
+    init(session: SessionStore, settings: SettingsStore, referenceFetcher: @escaping @MainActor (String, String) async throws -> WebReference = { try await WebReferenceService.fetch($0, selection: $1) }) {
+        self.session = session; self.settings = settings; self.referenceFetcher = referenceFetcher
+    }
+    func cancel() { stopListening(); queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; draft = ""; credential = nil }
     func clear() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil; pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; pendingAction = .simplify }
     func setSelection(_ snapshot: SelectionSnapshot) { clear(); session.snapshot = snapshot; captureReference() }
     func capturePage(_ target: ScreenContextTarget?) {
@@ -118,6 +125,18 @@ import PickleCore
         referenceGeneration = UUID(); referenceTask?.cancel(); referenceTask = nil
         referenceTimeout?.cancel(); referenceTimeout = nil; referenceLoading = false
     }
+    func skipReference() {
+        let next = queuedPageAction
+        removeReference()
+        if pageLoading { queuedPageAction = next; if next != nil { progress = "Reading page…" } }
+        else { next?() }
+    }
+    func skipPage() {
+        let next = queuedPageAction
+        removePage()
+        if referenceLoading { queuedPageAction = next; if next != nil { progress = "Reading page…" } }
+        else { next?() }
+    }
     func removeReference() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil }
     func captureReference() {
         guard settings.webContextEnabled, !settings.localOnly, !settings.paused,
@@ -127,7 +146,7 @@ import PickleCore
         referenceLoading = true; referenceStatus = "Reading page reference…"
         referenceTask = Task { [weak self] in
             do {
-                let reference = try await WebReferenceService.fetch(url, selection: snapshot.text)
+                let reference = try await self?.referenceFetcher(url, snapshot.text)
                 guard let self, !Task.isCancelled, self.referenceGeneration == generation, self.session.snapshot?.id == snapshot.id else { return }
                 self.session.reference = reference; self.referenceStatus = nil
                 self.finishReference()
@@ -155,6 +174,31 @@ import PickleCore
         clear()
         session.snapshot = SelectionSnapshot(text: selection, appName: "Browser", bundleID: bundleID, method: "Browser extension", sourceTitle: reference.title, sourceURL: reference.url)
         session.reference = reference
+        session.captureTarget = ScreenContextService.target(for: session.snapshot!)
+    }
+    func stopListening() {
+        audioGeneration = UUID(); audioTask?.cancel(); audioTask = nil
+        audioService?.stop(); audioService = nil; listening = false
+    }
+    func listen() {
+        guard !settings.paused, settings.webContextEnabled, progress == nil, !referenceLoading, !pageLoading,
+              !visualBusy, !listening, let snapshot = session.snapshot, let url = snapshot.sourceURL,
+              let target = session.captureTarget, !settings.isExcluded(snapshot.bundleID) else { return }
+        let service = AudioContextService(); audioService = service
+        audioGeneration = UUID(); let generation = audioGeneration
+        listening = true; error = nil
+        audioTask = Task { [weak self] in
+            do {
+                let text = try await service.record(target)
+                guard let self, !Task.isCancelled, self.audioGeneration == generation, self.session.snapshot?.id == snapshot.id else { return }
+                self.session.reference = WebReference(url: url, title: "Recorded 30-second excerpt", text: text, kind: "recorded audio")
+                self.listening = false; self.audioService = nil; self.audioTask = nil
+            } catch {
+                guard let self, !Task.isCancelled, self.audioGeneration == generation else { return }
+                self.listening = false; self.audioService = nil; self.audioTask = nil
+                self.error = (error as? PickleError)?.localizedDescription ?? "Couldn’t transcribe this audio. Try captions or paste a transcript."
+            }
+        }
     }
     func pasteSelection() {
         let text = manualText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -177,6 +221,7 @@ import PickleCore
     }
     func retry() { run(pendingAction, limited: lastLimited, chart: lastChart, followUp: lastQuestion) }
     func run(_ action: ReadingAction, limited: Bool = false, chart: ChartKind? = nil, followUp: String = "") {
+        guard !listening else { error = "Finish listening or cancel the recording first."; return }
         guard !visualBusy else { error = "Wait for visual context, or remove it to continue."; return }
         cancel(); error = nil; needsContext = nil; needsChart = false
         guard !settings.paused else { error = "Pickle is paused. Resume from the menu bar."; return }
@@ -237,9 +282,9 @@ import PickleCore
     func policyChanged() {
         // Any settings edit invalidates an in-flight request; no stale consent or provider configuration.
         if progress != nil { cancel(); error = "Settings changed. Run the action again with your updated preferences." }
-        if visualBusy { cancel() }
+        if visualBusy || listening { cancel() }
         if !settings.screenContextEnabled || settings.paused || session.snapshot.map({ settings.isExcluded($0.bundleID) }) == true { removePage() }
-        if !settings.webContextEnabled || settings.paused || session.snapshot.map({ settings.isExcluded($0.bundleID) }) == true { removeReference() }
+        if !settings.webContextEnabled || settings.localOnly || settings.paused || session.snapshot.map({ settings.isExcluded($0.bundleID) }) == true { removeReference() }
         if settings.paused { needsDisclosure = false }
     }
 }

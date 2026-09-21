@@ -7,7 +7,7 @@ struct PageContextView: View {
     let openSettings: () -> Void
     var body: some View {
         if coordinator.pageLoading {
-            HStack(spacing: 8) { ProgressView().controlSize(.mini); Text("Reading page on this Mac…"); Spacer(); Button("Skip", action: coordinator.removePage) }
+            HStack(spacing: 8) { ProgressView().controlSize(.mini); Text("Reading page on this Mac…"); Spacer(); Button("Skip", action: coordinator.skipPage) }
                 .font(.caption).foregroundStyle(.secondary)
         } else if let page = session.page {
             DisclosureGroup {
