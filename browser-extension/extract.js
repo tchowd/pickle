@@ -12,7 +12,10 @@ globalThis.pickleExtract = function(mode) {
     const clone = document.cloneNode(true);
     clone.querySelectorAll('input,textarea,[contenteditable],script,style,nav,footer').forEach(n => n.remove());
     const article = new Readability(clone, {maxElemsToParse: 20000}).parse();
-    const text = bound(article?.textContent || document.querySelector('article,main')?.innerText || '', 12000);
+    let content = article?.textContent || clone.querySelector('article,main')?.textContent || '';
+    const match = selection.trim() ? content.toLowerCase().indexOf(selection.trim().toLowerCase()) : -1;
+    if (match > 1500) content = content.slice(match - 1500);
+    const text = bound(content, 11700) + (new TextEncoder().encode(content).length > 11700 || match > 1500 ? '\n[Page excerpt; the entire article is not included.]' : '');
     if (!text.trim()) throw new Error('No article found. Try selecting a passage.');
     return {selection, reference:{url,title,text,kind:'article',timestamp:null}};
   }
