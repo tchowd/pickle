@@ -109,3 +109,8 @@ All 44 core checks pass. The native smoke verifies window identity is unchanged 
 ## Funded Jev integration (September 18)
 
 Browser review confirmed $10.00 AI Gateway credits. A direct public sample returned HTTP 200 with Unified billing and a Completed-job response. The production Swift decoder now supports this response envelope and rejects incomplete jobs. All 46 checks pass. A full live simplification through Llama 1B and Jev returned “Checked against your selection” in 2.33 seconds; see `evidence/jev-live-pipeline.txt` and `evidence/jev-after-credit-check.json`. Prior billing-blocked and pending entries above are historical. Human-reviewed model accuracy evaluation remains pending.
+
+
+## Control + Option shortcut
+
+The default shortcut is Control + Option alone, pressed together and released. The recognizer verifies either modifier order, single-modifier rejection, one invocation per release, and cancellation by other keys/modifiers, mouse input, or pause. Conventional Control + Option + letter shortcuts do not open the chooser when this mode is active. Tab interception and deferred input replay have been removed. macOS permission changes are being handled by the user.

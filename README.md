@@ -1,6 +1,6 @@
 # Pickle
 
-A native macOS menu-bar reading assistant. Highlight a passage, press **Control + Option + P**, then choose **Simplify**, **Expand**, or **Chart**. Results appear in a movable, resizable floating panel. Pickle never edits the source app.
+A native macOS menu-bar reading assistant. Highlight a passage, press and release **Control + Option** together, then choose **Simplify**, **Expand**, or **Chart**. Results appear in a movable, resizable floating panel. Pickle never edits the source app.
 
 This is a **development build**, not a signed/notarized release. The generative model is Cloudflare Workers AI’s Llama 3.3 70B. Jev is integrated through **Cloudflare `typesafe/jev`**, separately from generation. Live Llama and Jev checks now pass. After the user funded AI Gateway, a September 18 browser review confirmed $10.00 credit and the production Swift pipeline completed a Jev-checked simplification. Cloudflare’s Completed-job envelope is now supported.
 
@@ -30,10 +30,10 @@ The [recorded test results](docs/evidence/deterministic-checks.txt) contain the 
 1. Open **Pickle → Settings → Request Accessibility access**.
 2. In **System Settings → Privacy & Security → Accessibility**, enable Pickle yourself. If necessary, add `dist/Pickle.app` using the + button.
 3. Return to Pickle Settings and refresh permission status. Reopen Pickle if macOS requires it.
-4. Select text in another app, then tap and release **Option twice** quickly. Pickle automatically imports the highlighted text and shows a two-line preview in a compact floating bar with **Simplify**, **Expand**, and **Generate chart**. You do not need to copy or paste manually. Capture occurs before any panel receives focus; no request starts until you click an action.
+4. Select text in another app, then press **Control + Option** together, then release both keys. Pickle automatically imports the highlighted text and shows a two-line preview in a compact floating bar with **Simplify**, **Expand**, and **Generate chart**. You do not need to copy or paste manually. Capture occurs before any panel receives focus; no request starts until you click an action.
 5. Click an action to expand the same floater upward and show the result inline. The floater is centered 24 points above the active screen’s usable bottom edge, keeping clear of the Dock. Escape or the × button dismisses the bar. Command+1 / Command+2 / Command+3 still work inside the result panel.
 
-Double Option is the default for new and existing installations without an explicit preference. Settings can restore a conventional key combination. Each tap must be shorter than 0.3 seconds; complete the second tap within 0.5 seconds of the first release. Other keys, modifiers, clicks, and pause interrupt the sequence. Global Option monitoring requires Accessibility permission. If Claude or another app uses double Option, change that app’s shortcut to prevent both apps opening.
+Control + Option is the default shortcut. Press both modifiers together and release them to open Pickle. No letter key or double-tap is needed. Other keys, extra modifiers, clicks, and pause interrupt the gesture. Settings can restore a conventional key combination. Global shortcut monitoring and selection capture require Accessibility permission.
 
 A development rebuild can invalidate Accessibility trust because the app is ad-hoc signed. Remove/re-add the app if permission stops working. Stable Developer ID signing is recommended before daily use.
 
@@ -115,7 +115,7 @@ The writing-model setting controls Simplify, Expand, and follow-ups. Diagrams al
 
 ### Inline floating responses
 
-Both double-Option and the optional mouse-release chooser open at bottom center. Clicking an action keeps the same native window and expands it upward to show progress, consent/context prompts, errors, prose, charts, and follow-ups. The result scrolls inside the floater. Closing cancels pending work; reopening the session returns to the same floater. The menu-bar manual-paste window remains available.
+Both Control + Option and the optional mouse-release chooser open at bottom center. Clicking an action keeps the same native window and expands it upward to show progress, consent/context prompts, errors, prose, charts, and follow-ups. The result scrolls inside the floater. Closing cancels pending work; reopening the session returns to the same floater. The menu-bar manual-paste window remains available.
 
 ### Jev funding and runtime verified
 

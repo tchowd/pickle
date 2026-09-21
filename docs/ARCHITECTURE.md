@@ -1,11 +1,11 @@
 # Architecture and behavior
 
-`PickleCore` contains provider-independent immutable models, typed evaluators, policy, validation, the async workflow, transport, and lifecycle gating. `PickleApp` provides AppKit/SwiftUI presentation, Accessibility capture, double-Option event monitoring and optional Carbon shortcuts, settings, Keychain, and the in-memory session. `PickleChecks` is the deterministic test executable.
+`PickleCore` contains provider-independent immutable models, typed evaluators, policy, validation, the async workflow, transport, and lifecycle gating. `PickleApp` provides AppKit/SwiftUI presentation, Accessibility capture, Control + Option event monitoring and optional Carbon shortcuts, settings, Keychain, and the in-memory session. `PickleChecks` is the deterministic test executable.
 
 | Module | Responsibility |
 |---|---|
 | SelectionService | Read focused app’s selected text; reject excluded/known secure controls; capture optional bounds before focus changes |
-| InvocationController | Recognize clean double-Option taps or register a conventional shortcut; optional mouse-release monitoring; hide on mouse-down; stop monitors when paused |
+| InvocationController | Recognize Control + Option alone on release or register a conventional shortcut; optional mouse-release monitoring; hide on mouse-down; stop monitors when paused |
 | RequestCoordinator | Local action/consent/exclusion checks, immutable input assembly, session updates, explicit retry/context UI |
 | RequestRunner | Own one active task and generation identity; drop cancelled/late results and progress |
 | RequestPipeline | Select relevant evaluators, generate, validate, one repair, recheck, return honest status |
