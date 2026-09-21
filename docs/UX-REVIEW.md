@@ -38,3 +38,7 @@ Added compact answer adjustments, native selected-text explanations plus a word-
 ## Page context update
 
 A compact disclosure shows whether page context is available, with a source-window preview, extracted text, capture time, and removal. Capture happens once per selection session; follow-ups reuse context. Local OCR precedes normal reading, with a five-second selection-only fallback. Settings exposes page capture and screen permission. Image upload is a separately labeled action with its recipient and potential charge shown before use. New-session and disabled-feature cleanup are covered by native checks; synthetic OCR avoids capturing private screen content during testing. All 54 core checks and native smoke checks passed. Live screen permission behavior and live image inference remain unverified.
+
+## Web and video references
+
+A compact page/video disclosure exposes the source title, timestamp, plain text excerpt, open-source link and removal. Page references default off until enabled in Privacy settings. A dedicated browser setup disclosure keeps extension details outside the reading flow. Page-only invocation is supported; automatic mouse-selection UI still requires selected text. Video captions use the current moment or an explicitly bounded transcript. Audio fallback has a visible recording state, source-app scope explanation and Cancel. Reading actions wait for bounded context and never restart when a late reference arrives.

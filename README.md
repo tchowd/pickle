@@ -23,7 +23,7 @@ swift run PickleChecks
 ./scripts/test.sh
 ```
 
-The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 55 checks, plus native window, persistence, and reading-action smoke checks.
+The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 58 checks, plus native window, persistence, and reading-action smoke checks.
 
 ## Set up selection capture
 
@@ -37,7 +37,7 @@ Control + Option is the default shortcut. Press both modifiers together and rele
 
 A development rebuild can invalidate Accessibility trust because the app is ad-hoc signed. Remove/re-add the app if permission stops working. Stable Developer ID signing is recommended before daily use.
 
-Selection capture uses `AXSelectedText` and optional selection bounds. Optional page context captures the source window once per session using Screen Recording permission and reads visible text locally with Apple Vision. It does not fetch the full document, synthesize Copy, read browser internals, or use an extension. Known secure roles/ancestors, protected-content flags, and excluded bundle IDs are blocked locally. Apps that do not expose a usable selection require manual paste. Accessibility cannot promise uniform coverage across apps or all custom password controls.
+Selection capture uses `AXSelectedText` and optional selection bounds. Optional page context captures the source window once per session using Screen Recording permission and reads visible text locally with Apple Vision. Optional browser references can additionally fetch the current public page, and the companion extension can share a loaded page or captions. Pickle does not synthesize Copy. Known secure roles/ancestors, protected-content flags, and excluded bundle IDs are blocked locally. Browser pages with an exposed URL can start a session without selected text; otherwise manual paste remains available. Accessibility cannot promise uniform coverage across apps or all custom password controls.
 
 ## Cloudflare configuration (CLI supported)
 
@@ -142,3 +142,13 @@ Apple Vision reads the screenshot locally. Ordinary reading requests include at 
 **Analyze visuals with Cloudflare** explicitly uploads the screenshot and selection once to the vision model, then reuses a bounded text summary. It may incur a charge and requires the [Cloudflare vision model](https://developers.cloudflare.com/workers-ai/models/llama-3.2-11b-vision-instruct/) to be enabled in your account. OCR may misread text and visual summaries may misinterpret images; neither supplies numeric evidence for generated charts. Excluded apps and rejected selections are not captured.
 
 Validation uses synthetic local OCR, mock provider payloads, context bounds, chart-evidence isolation, and session cleanup. Real-window capture permissions and live vision inference still need device/account validation.
+
+## Browser references and videos
+
+Enable **Settings → Privacy → Browser and video context → Include webpage references**. Control + Option resolves a supported browser’s exposed URL and fetches a bounded article reference once per session. Page-only sessions work without a text selection. References are reused for follow-ups, previewable/removable, and included only after the reference-sharing disclosure. Late context never regenerates an answer. Public fetching is disabled in offline mode.
+
+For loaded pages and captions, use **Connect browser extension** in the same settings section. The packaged app includes the extension folder and setup controls. See [browser setup and limitations](browser-extension/README.md). Available actions are **Use this page**, **Explain this moment**, and **Summarize video**. YouTube currently needs its transcript opened; generic players need loaded caption tracks. Long transcripts are explicitly excerpts, not full-video coverage.
+
+**Listen for 30 seconds** provides an explicit, local audio-transcription fallback when a source window is known. It needs macOS permissions and an available on-device speech recognizer. It records source-app audio from the moment you start, including other playing tabs in that app, and writes no audio file.
+
+Verification includes 58 core checks, caption/extension fixtures, native-host framing, isolated HTML parsing, source cleanup and late-result rejection, and a real authenticated loopback bridge test. A public HTTPS fetch of example.com and article extraction passed. Live browser-extension installation, site compatibility, caption extraction on real videos, and microphone-free source-audio capture remain unverified on-device. No private page, real audio, or live AI request was used for validation.
