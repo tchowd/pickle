@@ -23,7 +23,7 @@ swift run PickleChecks
 ./scripts/test.sh
 ```
 
-The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 46 checks.
+The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 55 checks, plus native window, persistence, and reading-action smoke checks.
 
 ## Set up selection capture
 
@@ -37,7 +37,7 @@ Control + Option is the default shortcut. Press both modifiers together and rele
 
 A development rebuild can invalidate Accessibility trust because the app is ad-hoc signed. Remove/re-add the app if permission stops working. Stable Developer ID signing is recommended before daily use.
 
-Capture uses `AXSelectedText` and optional selection bounds only. It does not fetch the full document, synthesize Copy, read browser internals, capture the screen, request Screen Recording, or use an extension. Known secure roles/ancestors, protected-content flags, and excluded bundle IDs are blocked locally. Apps that do not expose a usable selection require manual paste. Accessibility cannot promise uniform coverage across apps or all custom password controls.
+Selection capture uses `AXSelectedText` and optional selection bounds. Optional page context captures the source window once per session using Screen Recording permission and reads visible text locally with Apple Vision. It does not fetch the full document, synthesize Copy, read browser internals, or use an extension. Known secure roles/ancestors, protected-content flags, and excluded bundle IDs are blocked locally. Apps that do not expose a usable selection require manual paste. Accessibility cannot promise uniform coverage across apps or all custom password controls.
 
 ## Cloudflare configuration (CLI supported)
 
@@ -80,7 +80,7 @@ Do not rerun it merely to confirm the known unpaid Jev state. Read [the actual s
 
 - Native menu bar, settings, global shortcut, optional nonactivating menu after mouse release, pause, exclusions, manual paste, and secure-field checks.
 - Immutable source snapshots, app metadata, optional AX coordinates, pointer fallback, monitor clamping, and fixed-selection conversation.
-- SwiftUI/AppKit panel with source disclosure, actions, progress, cancel, copy, retry, pin, follow-up, context entry, light/dark system colors, and accessibility labels.
+- SwiftUI/AppKit panel with source disclosure, actions, progress, cancel, copy, retry, follow-up, context entry, translucent pickle-themed surfaces, and accessibility labels.
 - Injectable Cloudflare writer and Cloudflare Jev clients; ephemeral bounded transport; no redirects, logging of content, arbitrary HTML, JavaScript, or remote assets.
 - Five separate Jev evaluator banks: chart routing, context, difficulty, fidelity, and expansion support. Relevant questions are batched; dependent post-generation checks wait for the candidate.
 - Explicit pass/concern/uncertain/unavailable policy, one repair maximum, full relevant recheck, honest quality labels, and generation fallback during Jev outages.
@@ -94,7 +94,7 @@ Do not rerun it merely to confirm the known unpaid Jev state. Read [the actual s
 - **Cross-app compatibility:** Accessibility permission and selection testing in a browser and a native app are pending; see the [test matrix](docs/TESTING.md). No universal app support claim.
 - **Polish validation:** fast/reverse/multiline highlighting, keyboard-only VoiceOver audit, multiple monitors, full-screen spaces, permission revocation, and long-running network stress tests need real-device coverage.
 - **Distribution:** Developer ID signing, notarization, universal Intel build verification, app icon, installer, and auto-update are deferred. The current app is locally ad-hoc signed.
-- **Optional features:** local AI providers, persistent history, streaming, screenshot/OCR, and arbitrary graph layouts are not included.
+- **Optional features:** local AI providers, automatic persistent history and arbitrary graph layouts are not included. Explicit local bookmarks and prose streaming are supported.
 - **Bar parsing:** intentionally conservative explicit currency/percentage and a small unit whitelist. Dates, unitless numbers, implicit units, conversions, locale-specific decimal formats, and illustrative quantities are not supported.
 
 [Architecture and policies](docs/ARCHITECTURE.md) · [Provider verification](docs/PROVIDERS.md) · [Testing and evaluation](docs/TESTING.md) · [Packaging](docs/DISTRIBUTION.md)
@@ -115,8 +115,30 @@ The writing-model setting controls Simplify, Expand, and follow-ups. Diagrams al
 
 ### Inline floating responses
 
-Both Control + Option and the optional mouse-release chooser open at bottom center. Clicking an action keeps the same native window and expands it upward to show progress, consent/context prompts, errors, prose, charts, and follow-ups. The result scrolls inside the floater. Closing cancels pending work; reopening the session returns to the same floater. The menu-bar manual-paste window remains available.
+Both Control + Option and the optional mouse-release chooser initially open at bottom center, then remember their moved position. Clicking an action keeps the same native window and expands it upward to show progress, consent/context prompts, errors, prose, charts, and follow-ups. The result scrolls inside the floater. Closing cancels pending work; reopening the session returns to the same floater. The menu-bar manual-paste window remains available.
 
 ### Jev funding and runtime verified
 
 On September 18, the user funded AI Gateway and browser review confirmed $10.00 in credits for the configured account. A fixed-sample Jev request returned HTTP 200 using Unified Billing (0.875 seconds). Cloudflare wraps the model answer in `result: { state: "Completed", result: ... }`; Pickle now decodes this alongside the older direct and REST-wrapped formats. One live production Swift simplification returned “Checked against your selection” from `jev-1.13.0` in 2.33 seconds. Earlier 402/pending notes describe the historical unfunded state. This is a connectivity and integration check, not an accuracy benchmark. The saved Wrangler credential is still temporary.
+
+
+## Reading tools and personal preferences
+
+- **Adjust an answer:** Shorter, More detail, and Give an example send a follow-up grounded in the same passage. Adjustments participate in the existing six-turn conversation limit.
+- **Explain a word:** Select a word or short phrase in the original passage or an answer, right-click, and choose **Explain selection in context**. The **Explain a word** button provides an alternative for keyboard use. Pickle uses the supplied passage, conversation, and available page context.
+- **Resize:** Drag the lower-right corner of the expanded panel. Size and placement persist across launches. Compact actions stay compact; expansion uses the remembered reading size and stays within the screen.
+- **Save:** The bookmark beside an answer saves that answer and its passage on this Mac. Open the header bookmark or **Saved answers…** in the menu bar to search, copy, or remove entries. Saving is explicit; Control + Option still clears the working session. The local library holds up to 200 answers and is separate from cloud credentials.
+- **Appearance:** Settings → Appearance controls reading text size (14–24 pt), background opacity, and pickle-theme intensity. Changes preview immediately without cancelling a reading request.
+- **Streaming:** Prose arrives incrementally using Cloudflare's SSE responses. Settings → Reading → Show answers as they arrive can disable streaming for models without support. Charts stay buffered until validated; drafts are temporary and may be revised by answer checks. Interrupted or oversized streams fail instead of becoming completed answers. See [Cloudflare's streaming API description](https://blog.cloudflare.com/workers-ai-streaming/).
+
+Streaming was verified with deterministic SSE fixtures, including Unicode, truncated/malformed events, output bounds, and stale callback cancellation. No live billable provider request was used for this feature validation.
+
+## Page context
+
+Enable **Settings → Privacy → Page context**, then use **Allow screen access** to grant macOS Screen Recording permission. Invoke Pickle again from the source app. Each new selection session takes one source-window screenshot; retries and follow-ups reuse it. Manual paste and samples do not capture a window. Failure or a five-second timeout falls back to the selected passage.
+
+Apple Vision reads the screenshot locally. Ordinary reading requests include at most 6,000 UTF-8 bytes of extracted page text after the page-context disclosure; they do not upload the image. The context disclosure lets you preview or remove the capture. Screenshot pixels are capped at 2,000 on the longest edge for OCR, then reduced to at most 1,440 and compressed under 750 KB for retention. Screenshots, extracted text, and visual summaries stay in the working session and are cleared for a new selection; bookmarks do not save them.
+
+**Analyze visuals with Cloudflare** explicitly uploads the screenshot and selection once to the vision model, then reuses a bounded text summary. It may incur a charge and requires the [Cloudflare vision model](https://developers.cloudflare.com/workers-ai/models/llama-3.2-11b-vision-instruct/) to be enabled in your account. OCR may misread text and visual summaries may misinterpret images; neither supplies numeric evidence for generated charts. Excluded apps and rejected selections are not captured.
+
+Validation uses synthetic local OCR, mock provider payloads, context bounds, chart-evidence isolation, and session cleanup. Real-window capture permissions and live vision inference still need device/account validation.
