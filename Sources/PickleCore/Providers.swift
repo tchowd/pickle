@@ -55,13 +55,30 @@ private func post<T: Encodable>(_ url: URL, token: String, body: T) throws -> UR
     request.httpBody = try JSONEncoder().encode(body)
     return request
 }
-public struct CloudflareProvider: GenerativeProvider {
+public struct CloudflareProvider: StreamingGenerativeProvider {
     public static let defaultModel = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
     public static let diagramModel = defaultModel
     public let isRemote = true
     private let accountID: String, token: String, model: String, transport: any HTTPTransport
     public init(accountID: String, token: String, model: String = Self.defaultModel, transport: any HTTPTransport = BoundedHTTPTransport()) {
         self.accountID = accountID; self.token = token; self.model = model; self.transport = transport
+    }
+    public func generate(_ prompt: GenerationPrompt, draft: @escaping DraftSink) async throws -> Generation {
+        guard !prompt.structured, let streaming = transport as? any StreamingHTTPTransport else { return try await generate(prompt) }
+        guard accountID.range(of: "^[a-fA-F0-9]{32}$", options: .regularExpression) != nil, !token.isEmpty,
+              model.range(of: "^@cf/[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$", options: .regularExpression) != nil else {
+            throw PickleError.message("Connect your account in Settings first.")
+        }
+        struct Message: Encodable { let role: String, content: String }
+        struct Body: Encodable { let messages: [Message]; let max_tokens = 1800; let temperature = 0.2; let stream = true }
+        let url = URL(string: "https://api.cloudflare.com/client/v4/accounts/\(accountID)/ai/run/\(model)")!
+        let body = Body(messages: [.init(role: "system", content: prompt.system), .init(role: "user", content: prompt.user)])
+        var request = try post(url, token: token, body: body)
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        let accumulator = ProseStream()
+        try await streaming.stream(request) { line in try await accumulator.receive(line, draft: draft) }
+        try Task.checkCancellation()
+        return try await accumulator.finish(model: model)
     }
     public func generate(_ prompt: GenerationPrompt) async throws -> Generation {
         guard accountID.range(of: "^[a-fA-F0-9]{32}$", options: .regularExpression) != nil, !token.isEmpty,

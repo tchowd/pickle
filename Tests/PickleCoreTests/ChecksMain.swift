@@ -84,6 +84,15 @@ import PickleCore
         await run("testSmallWritingModelIsPreservedForProse") { try await TransportTests().testSmallWritingModelIsPreservedForProse() }
         await run("testSingleModifiersDoNotInvoke") { InvocationTests().testSingleModifiersDoNotInvoke() }
         await run("testOtherInputCancelsUntilRelease") { InvocationTests().testOtherInputCancelsUntilRelease() }
+        await run("testStreamingProviderAndPipeline") { try await StreamingTests().testStreamingProviderAndPipeline() }
+        await run("testDraftRemainsVisibleThroughoutRepair") { try await StreamingTests().testDraftRemainsVisibleThroughoutRepair() }
+        await run("testIncompleteAndInvalidStreamsFail") { try await StreamingTests().testIncompleteAndInvalidStreamsFail() }
+        await run("testStreamOutputLimitAndOpenAIChunks") { try await StreamingTests().testStreamOutputLimitAndOpenAIChunks() }
+        await run("testLateDraftCannotEnterNewSession") { try await StreamingTests().testLateDraftCannotEnterNewSession() }
+        await run("testPageContextBudgetsAndUnicode") { PageContextTests().testPageContextBudgetsAndUnicode() }
+        await run("testOCRIsLabeledAndVisualSummaryIsNotEvidence") { try await PageContextTests().testOCRIsLabeledAndVisualSummaryIsNotEvidence() }
+        await run("testScreenNumbersCannotCreateAChart") { try await PageContextTests().testScreenNumbersCannotCreateAChart() }
+        await run("testVisionRequestContainsOneBoundedDataImage") { try await PageContextTests().testVisionRequestContainsOneBoundedDataImage() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)
     }

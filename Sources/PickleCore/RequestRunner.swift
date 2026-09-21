@@ -5,12 +5,16 @@ import Foundation
     private var generation = UUID()
     public init() {}
     public func cancel() { generation = UUID(); task?.cancel(); task = nil }
-    public func start(pipeline: RequestPipeline, input: RequestInput, progress: @escaping @MainActor (String) -> Void, completion: @escaping @MainActor (Result<PipelineOutcome, Error>) -> Void) {
+    public func start(pipeline: RequestPipeline, input: RequestInput, draft: (@MainActor (String) -> Void)? = nil, progress: @escaping @MainActor (String) -> Void, completion: @escaping @MainActor (Result<PipelineOutcome, Error>) -> Void) {
         cancel()
         let id = UUID(); generation = id
         task = Task { [weak self] in
             do {
-                let outcome = try await pipeline.run(input) { [weak self] message in
+                let draftCallback: DraftSink?
+                if let draft {
+                    draftCallback = { @Sendable [weak self] text in await self?.deliverProgress(text, id: id, callback: draft) }
+                } else { draftCallback = nil }
+                let outcome = try await pipeline.run(input, draft: draftCallback) { [weak self] message in
                     await self?.deliverProgress(message, id: id, callback: progress)
                 }
                 try Task.checkCancellation()

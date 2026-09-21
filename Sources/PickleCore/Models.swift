@@ -57,13 +57,17 @@ public struct ReadingResult: Identifiable, Sendable {
     }
 }
 public struct RequestInput: Sendable {
+    public let pageContext: String, visualContext: String
     public let snapshot: SelectionSnapshot, action: ReadingAction, context: String, level: ReadingLevel
     public let limited: Bool, chartChoice: ChartKind?, question: String, previousResult: String, conversation: [ConversationTurn]
-    public init(snapshot: SelectionSnapshot, action: ReadingAction, context: String = "", level: ReadingLevel = .automatic, limited: Bool = false, chartChoice: ChartKind? = nil, question: String = "", previousResult: String = "", conversation: [ConversationTurn] = []) {
+    public init(snapshot: SelectionSnapshot, action: ReadingAction, context: String = "", level: ReadingLevel = .automatic, limited: Bool = false, chartChoice: ChartKind? = nil, question: String = "", previousResult: String = "", conversation: [ConversationTurn] = [], pageContext: String = "", visualContext: String = "") {
+        self.pageContext = pageContext; self.visualContext = visualContext
         self.snapshot = snapshot; self.action = action; self.context = context; self.level = level; self.limited = limited; self.chartChoice = chartChoice; self.question = question; self.previousResult = previousResult; self.conversation = conversation
     }
     public var source: String { snapshot.text + (context.isEmpty ? "" : "\n\nUser-supplied context:\n" + context) }
+    public var readingSource: String { source + (pageContext.isEmpty ? "" : "\n\nVisible page text (automatic OCR; may contain reading errors):\n" + pageContext) }
     public func validate() throws {
+        guard pageContext.utf8.count <= PageContextLimits.textBytes, visualContext.utf8.count <= PageContextLimits.summaryBytes else { throw PickleError.message("Page context is too large. Remove it and try again.") }
         guard !snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw PickleError.message("Select or paste some text first.") }
         guard snapshot.text.utf8.count <= Limits.selection, context.utf8.count <= Limits.context, question.utf8.count <= Limits.question else { throw PickleError.message("This selection, context, or question is too large. Use a shorter passage.") }
         guard previousResult.utf8.count <= Limits.output, conversation.count <= Limits.turns,
