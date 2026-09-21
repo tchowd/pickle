@@ -7,3 +7,12 @@ dist/
 .wrangler/
 __pycache__/
 *.pyc
+/ops/
+
+# Private local-integration work; do not commit.
+/Sources/PickleCore/OllamaProvider.swift
+/Tests/PickleCoreTests/LocalBenchmark.swift
+/Tests/PickleCoreTests/OllamaTests.swift
+/docs/LOCAL-AI.md
+/docs/evidence/local-ai-*
+/scripts/local-ai/
