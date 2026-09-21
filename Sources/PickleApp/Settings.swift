@@ -14,8 +14,8 @@ import PickleCore
     @Published var exclusions: String { didSet { save("exclusions", exclusions) } }
     @Published var shortcutKey: String { didSet { save("shortcutKey", shortcutKey) } }
     @Published var shortcutModifiers: String { didSet { save("shortcutModifiers", shortcutModifiers) } }
-    @Published var doubleOption: Bool { didSet { save("doubleOption", doubleOption) } }
-    var shortcutLabel: String { doubleOption ? "Option → Option" : "\(shortcutModifiers) + \(shortcutKey)" }
+    @Published var controlOption: Bool { didSet { save("controlOption", controlOption) } }
+    var shortcutLabel: String { controlOption ? "Control + Option" : "\(shortcutModifiers) + \(shortcutKey)" }
     @Published var cloudConsent: Bool { didSet { save("cloudConsentV2", cloudConsent) } }
     @Published var jevConsent: Bool { didSet { save("jevConsentV2", jevConsent) } }
     @Published var onboarded: Bool { didSet { save("onboarded", onboarded) } }
@@ -31,7 +31,7 @@ import PickleCore
         exclusions = defaults.string(forKey: "exclusions") ?? "com.1password.1password\ncom.apple.keychainaccess"
         shortcutKey = defaults.string(forKey: "shortcutKey") ?? "P"
         shortcutModifiers = defaults.string(forKey: "shortcutModifiers") ?? "Control + Option"
-        doubleOption = defaults.object(forKey: "doubleOption") as? Bool ?? true
+        controlOption = defaults.object(forKey: "controlOption") as? Bool ?? true
         cloudConsent = defaults.bool(forKey: "cloudConsentV2"); jevConsent = defaults.bool(forKey: "jevConsentV2")
         onboarded = defaults.bool(forKey: "onboarded")
     }

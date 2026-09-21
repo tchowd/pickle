@@ -2,37 +2,29 @@ import SwiftUI
 import Charts
 import PickleCore
 
-private let pickleGreen = Color(red: 0.30, green: 0.43, blue: 0.22)
 struct ActionMenu: View {
     let snapshot: SelectionSnapshot, choose: (ReadingAction) -> Void, dismiss: () -> Void
     var body: some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 9) {
-                Image(systemName: "leaf.fill").foregroundStyle(pickleGreen)
-                Text("Pickle").font(.system(size: 16, weight: .semibold, design: .rounded))
-                Text("\(snapshot.text.count) characters captured").font(.callout).foregroundStyle(.secondary)
-                Spacer()
-                Button(action: dismiss) { Image(systemName: "xmark").padding(5) }.buttonStyle(.plain).accessibilityLabel("Dismiss selection menu")
-            }
-            Text(snapshot.text).font(.callout).foregroundStyle(.secondary)
-                .lineLimit(2).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .accessibilityLabel("Captured selection: \(snapshot.text)")
-            HStack(spacing: 10) {
+        VStack(spacing: 10) {
+            DragGrip()
+            Text(snapshot.text).font(.system(size: 14, design: .rounded)).foregroundStyle(.secondary)
+                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
                 action(.simplify, icon: "text.alignleft")
                 action(.expand, icon: "text.badge.plus")
                 action(.chart, icon: "chart.bar.xaxis")
             }
-        }.padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(.white.opacity(0.35)))
+        }.padding(.horizontal, 16).padding(.bottom, 16)
+            .background { PortalSurface().clipShape(RoundedRectangle(cornerRadius: 20)) }
+            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.16)))
             .padding(6)
+            .onExitCommand(perform: dismiss)
+            .preferredColorScheme(.dark)
     }
     private func action(_ action: ReadingAction, icon: String) -> some View {
         Button { choose(action) } label: {
-            Label(action.rawValue, systemImage: icon).font(.system(size: 16, weight: .medium))
-                .frame(maxWidth: .infinity).padding(.vertical, 12)
-                .background(pickleGreen.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
-                .contentShape(RoundedRectangle(cornerRadius: 12))
-        }.buttonStyle(.plain).accessibilityLabel(action.rawValue)
+            Label(action.title, systemImage: icon).frame(maxWidth: .infinity)
+        }.buttonStyle(PickleActionStyle(selected: action == .simplify)).accessibilityLabel(action.title)
     }
 }
 struct ReaderView: View {
@@ -42,11 +34,11 @@ struct ReaderView: View {
     @ObservedObject var app: AppDelegate
     var floating = false
     @State private var originalExpanded = false
+    @State private var copied = false
     @FocusState private var questionFocused: Bool
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if settings.paused { notice("Pickle is paused", detail: "Resume from the menu bar to capture text or run an action.", icon: "pause.circle") }
@@ -58,9 +50,9 @@ struct ReaderView: View {
                     if coordinator.needsDisclosure { disclosure }
                     if let flags = coordinator.needsContext { contextRequest(flags) }
                     if coordinator.needsChart { chartChoice }
-                    if let progress = coordinator.progress {
-                        HStack(spacing: 12) { ProgressView().controlSize(.small); Text(progress).font(.callout); Spacer(); Button("Cancel") { coordinator.cancel() } }
-                            .padding(16).background(pickleGreen.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                    if coordinator.progress != nil {
+                        HStack(spacing: 12) { ProgressView().controlSize(.small); Text("Finding the words…").font(.callout); Spacer(); Button("Cancel") { coordinator.cancel() } }
+                            .padding(16).glassInset()
                             .accessibilityElement(children: .combine)
                     }
                     if let error = coordinator.error { notice("Couldn’t complete this action", detail: error, icon: "exclamationmark.triangle"); Button("Retry") { coordinator.retry() } }
@@ -68,66 +60,81 @@ struct ReaderView: View {
                     ForEach(session.conversation) { turn in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(turn.question).font(.headline)
-                            Text(turn.answer).textSelection(.enabled).lineSpacing(5)
-                            Label(turn.quality.label, systemImage: "text.badge.checkmark").font(.caption).foregroundStyle(.secondary)
-                        }.padding(16).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
+                            Text(turn.answer).font(.system(size: 17, design: .rounded)).textSelection(.enabled).lineSpacing(6)
+                        }.padding(16).glassInset()
                     }
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
             }
             if session.result != nil { followUp }
             HStack {
-                Image(systemName: "hand.raised").font(.caption)
-                Text("Session stays in memory. Cloud actions send text to providers.").font(.caption2)
+                Text(session.result == nil ? "Small pickle. Big ideas." : "Stay curious. Get out of a pickle.").font(.caption)
                 Spacer()
-                Button("Clear") { coordinator.clear() }.buttonStyle(.plain).font(.caption)
-            }.foregroundStyle(.secondary).padding(.horizontal, 20).padding(.vertical, 10)
+                if session.snapshot != nil { Button("New passage") { coordinator.clear() }.buttonStyle(.plain).font(.caption) }
+            }.foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 12)
         }
-        .background {
-            if floating { RoundedRectangle(cornerRadius: 24).fill(.regularMaterial) }
-            else { Color(nsColor: .windowBackgroundColor) }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: floating ? 24 : 0))
-        .overlay { if floating { RoundedRectangle(cornerRadius: 24).strokeBorder(.white.opacity(0.35)) } }
+        .background { PortalSurface() }
+        .clipShape(RoundedRectangle(cornerRadius: floating ? 20 : 0))
+        .overlay { if floating { RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.16)) } }
         .padding(floating ? 6 : 0).tint(pickleGreen)
+        .onChange(of: session.result?.id) { copied = false }
         .onExitCommand { app.closePanel() }
+        .preferredColorScheme(.dark)
+        .buttonStyle(PickleActionStyle())
+        .fontDesign(.rounded)
     }
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "leaf.fill").font(.title2).foregroundStyle(pickleGreen)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Pickle").font(.system(size: 19, weight: .semibold, design: .rounded))
-                Text(floating ? "\(session.snapshot?.text.count ?? 0) characters captured" : "A little clarity, right here.").font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button { app.openSettings() } label: { Image(systemName: "gearshape") }.help("Settings").accessibilityLabel("Open settings")
-            Button { app.togglePin() } label: { Image(systemName: app.pinned ? "pin.fill" : "pin") }.help(app.pinned ? "Unpin" : "Pin above other windows").accessibilityLabel(app.pinned ? "Unpin result" : "Pin result")
-            Button { app.closePanel() } label: { Image(systemName: "xmark") }.help("Close").accessibilityLabel("Close result")
-        }.buttonStyle(.borderless).padding(.horizontal, 22).padding(.vertical, 16)
+        ZStack {
+            DragGrip().padding(.horizontal, 48)
+            HStack {
+                Spacer()
+                Button { app.openSettings() } label: {
+                    Image(systemName: "gearshape").font(.system(size: 13)).frame(width: 28, height: 28)
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Settings").accessibilityLabel("Open settings")
+            }.padding(.horizontal, 12)
+        }.frame(height: 32)
     }
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Stay with what\nyou’re reading.").font(.system(size: 33, weight: .semibold, design: .rounded)).tracking(-0.7)
-            Text("Highlight a passage. Invoke Pickle. Find the explanation that makes it click.").font(.title3).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack { Label("1  Highlight", systemImage: "text.cursor"); Spacer(); Label("2  Invoke", systemImage: "command"); Spacer(); Label("3  Understand", systemImage: "sparkles") }.font(.caption).foregroundStyle(pickleGreen)
-            Text(settings.shortcutLabel).font(.system(.callout, design: .monospaced)).padding(12).frame(maxWidth: .infinity).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-            HStack {
-                Button("Set up Pickle…") { app.openSettings(); settings.onboarded = true }.buttonStyle(.borderedProminent)
-                Button("Try offline sample") { coordinator.sample() }.buttonStyle(.bordered)
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .center, spacing: 0) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("OUT OF THE WORDS.\nINTO THE KNOW.")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced)).tracking(2).foregroundStyle(pickleCyan)
+                    Text("Big brain.\nPickle energy.").font(.system(size: 34, weight: .heavy, design: .rounded)).tracking(-1)
+                }
+                Spacer(minLength: 0)
+                PicklePortal()
+            }
+            Text("Untangle a passage. Connect the dots. Take your brain somewhere new.")
+                .font(.system(size: 15)).foregroundStyle(.secondary).lineSpacing(4)
+            HStack(spacing: 10) {
+                Image(systemName: "text.cursor").foregroundStyle(pickleGreen)
+                Text("Highlight text, then press").font(.callout)
+                Text(settings.shortcutLabel).font(.system(size: 12, weight: .medium)).padding(8)
+                    .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
             }
             Divider()
-            Text("Or paste a passage").font(.headline)
-            TextEditor(text: $coordinator.manualText).font(.body).frame(minHeight: 100, maxHeight: 160).padding(8).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary)).accessibilityLabel("Passage to explain")
-            HStack { Text("Up to 12,000 UTF-8 bytes").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Use this passage") { coordinator.pasteSelection() }.disabled(coordinator.manualText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || settings.paused) }
-            Text("Pickle reads supported selections through macOS Accessibility. No browser extension is needed. Some apps require manual paste.").font(.caption).foregroundStyle(.secondary)
+            Text("Or bring a passage here").font(.system(size: 14, weight: .medium))
+            TextEditor(text: $coordinator.manualText).font(.system(size: 16, design: .rounded))
+                .scrollContentBackground(.hidden).frame(minHeight: 100, maxHeight: 150).padding(12)
+                .glassInset()
+                .accessibilityLabel("Passage to explain")
+            HStack {
+                Button("Try an example") { coordinator.sample() }.buttonStyle(.plain).foregroundStyle(pickleGreen)
+                Spacer()
+                Button("Continue", action: coordinator.pasteSelection).buttonStyle(PickleActionStyle(selected: true))
+                    .disabled(coordinator.manualText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || settings.paused)
+            }
+            if !SelectionService.trusted || settings.accountID.isEmpty {
+                Button("Finish setting up Pickle", action: app.openSettings).buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
     private func selection(_ snapshot: SelectionSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Label(snapshot.appName, systemImage: "macwindow"); Spacer(); Text(snapshot.capturedAt, style: .time) }.font(.caption).foregroundStyle(.secondary)
-            DisclosureGroup("Original selection · \(snapshot.text.count) characters", isExpanded: $originalExpanded) {
+            DisclosureGroup("Original passage", isExpanded: $originalExpanded) {
                 Text(snapshot.text).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10)
-                Text("\(snapshot.method) · \(snapshot.bundleID)").font(.caption2).foregroundStyle(.secondary)
-                ForEach(snapshot.limitations, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
             }
             if session.result == nil { Text(snapshot.text).lineLimit(floating ? 2 : 4).foregroundStyle(.secondary).italic() }
             HStack(spacing: 8) {
@@ -136,67 +143,70 @@ struct ReaderView: View {
                 actionButton(.chart, icon: "chart.bar.xaxis", key: "3")
             }.disabled(coordinator.progress != nil || settings.paused || coordinator.needsDisclosure)
             DisclosureGroup("Add surrounding context") {
-                TextEditor(text: $session.context).font(.callout).frame(height: 90).accessibilityLabel("Additional source context")
-                Text("Only text you add is used. Up to 6,000 UTF-8 bytes.").font(.caption).foregroundStyle(.secondary)
+                TextEditor(text: $session.context).font(.callout).scrollContentBackground(.hidden).frame(height: 90).padding(10).glassInset().accessibilityLabel("Additional source context")
+                Text("Paste a few surrounding sentences for a fuller explanation.").font(.caption).foregroundStyle(.secondary)
             }.font(.callout).disabled(coordinator.progress != nil)
         }
     }
     private func actionButton(_ action: ReadingAction, icon: String, key: KeyEquivalent) -> some View {
-        Button { coordinator.run(action) } label: { Label(action == .chart ? "Chart" : action.rawValue, systemImage: icon).frame(maxWidth: .infinity) }
-            .buttonStyle(.bordered).controlSize(.large).keyboardShortcut(key, modifiers: .command)
+        Button { coordinator.run(action) } label: { Label(action.title, systemImage: icon).frame(maxWidth: .infinity) }
+            .buttonStyle(PickleActionStyle(selected: (session.result?.action ?? .simplify) == action)).keyboardShortcut(key, modifiers: .command)
     }
     private var disclosure: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Before your first cloud request", systemImage: "network").font(.headline)
-            Text("Your selection, added context, and relevant conversation are sent to Cloudflare for generation. With Jev enabled, Cloudflare also routes the selection and generated answer to TypeSafe for evaluation. Provider handling follows their policies; native does not mean local.").font(.callout)
-            Text("Highlighting alone never sends text. You can pause Pickle, exclude apps, disable Jev, or use local-only mode in Settings.").font(.caption).foregroundStyle(.secondary)
+            Label("Before we begin", systemImage: "network").font(.headline)
+            Text("Pickle sends your passage and conversation to Cloudflare to write an explanation. When answer checks are enabled, TypeSafe also receives the passage and answer.").font(.callout)
+            Text("Nothing is sent until you choose an action. You can change this in Settings.").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Agree and continue") {
                     settings.cloudConsent = true; if settings.jevEnabled { settings.jevConsent = true }
                     coordinator.needsDisclosure = false
                     // Allow settings observers to settle before starting an authorized request.
                     Task { @MainActor in await Task.yield(); coordinator.retry() }
-                }.buttonStyle(.borderedProminent)
+                }.buttonStyle(PickleActionStyle(selected: true))
                 Button("Cancel") { coordinator.needsDisclosure = false }
             }
-        }.padding(18).background(pickleGreen.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        }.padding(18).glassInset(radius: 14)
     }
     private func contextRequest(_ flags: [String]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            notice("A little more context would help", detail: "The passage may depend on information outside your selection. Add surrounding text above, or continue with an explicitly limited explanation.", icon: "text.bubble")
-            Text(flags.joined(separator: ", ").replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(.secondary)
+            notice("A little more context would help", detail: "Add a few surrounding sentences above, or continue with just this passage.", icon: "text.bubble")
             Button("Use added context and retry") { coordinator.retry() }
             Button("Continue with a limited explanation") { coordinator.run(coordinator.pendingAction, limited: true, followUp: coordinator.question) }
         }
     }
     private var chartChoice: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Choose a supported format").font(.headline)
-            Text("Jev is unavailable or did not make a clear choice. Choose a bar chart for explicit quantities with matching units, or a flow diagram for stated steps and relationships. Source and structure checks still apply.").font(.callout).foregroundStyle(.secondary)
+            Text("How would you like to see it?").font(.headline)
+            Text("Compare numbers with a bar chart, or connect ideas with a flow diagram.").font(.callout).foregroundStyle(.secondary)
             HStack { Button("Bar chart") { coordinator.run(.chart, chart: .bar) }; Button("Flow diagram") { coordinator.run(.chart, chart: .flow) } }
         }
     }
     private func resultBody(_ result: ReadingResult) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack { Text(result.action.rawValue).font(.system(.title, design: .rounded).weight(.semibold)); Spacer(); Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(result.text, forType: .string) } label: { Label("Copy", systemImage: "doc.on.doc") }; Button("Retry") { coordinator.run(result.action) }.disabled(coordinator.progress != nil) }
+            HStack(alignment: .firstTextBaseline) {
+                Text(result.action.resultTitle).font(.system(size: 27, weight: .bold, design: .rounded)).tracking(-0.5)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(result.text, forType: .string)
+                    copied = true
+                } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc") }
+                    .buttonStyle(.plain).help(copied ? "Copied" : "Copy answer").accessibilityLabel(copied ? "Copied" : "Copy answer")
+                Button { coordinator.run(result.action) } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).help("Try again").accessibilityLabel("Try again").disabled(coordinator.progress != nil)
+            }
             if let chart = result.chart { ResultRenderer(chart: chart) }
-            else { Text(result.text).font(.system(size: 16)).lineSpacing(6).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-            VStack(alignment: .leading, spacing: 7) {
-                Label(result.quality.label, systemImage: "text.badge.checkmark").font(.caption.weight(.medium))
-                Text(result.quality.details).font(.caption).foregroundStyle(.secondary)
-                ForEach(result.notes, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
-                Text("\(result.model) · \(result.elapsed.formatted(.number.precision(.fractionLength(1))))s\(result.repairs > 0 ? " · 1 revision" : "")").font(.caption2).foregroundStyle(.secondary)
-                if let evaluator = result.evaluatorModel { Text("Jev: \(evaluator) via Cloudflare").font(.caption2).foregroundStyle(.secondary) }
-            }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
+            else { Text(result.text).font(.system(size: 18, design: .rounded)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+
         }
     }
     private var followUp: some View {
         VStack(spacing: 8) {
-            Divider()
             HStack {
                 TextField("Ask about this selection…", text: $coordinator.question).textFieldStyle(.plain).focused($questionFocused).onSubmit(sendFollowUp).accessibilityLabel("Follow-up question")
                 Button(action: sendFollowUp) { Image(systemName: "arrow.up.circle.fill").font(.title2) }.buttonStyle(.plain).foregroundStyle(pickleGreen).accessibilityLabel("Send follow-up").disabled(coordinator.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || coordinator.progress != nil || settings.paused)
-            }.padding(.horizontal, 22).padding(.vertical, 10)
+            }.padding(12).glassInset(focused: questionFocused)
+                .padding(.horizontal, 20).padding(.vertical, 8)
             if !session.conversation.isEmpty { Button("Clear follow-ups (keep selection)") { session.conversation = [] }.font(.caption).padding(.bottom, 5).disabled(coordinator.progress != nil) }
         }
     }
@@ -206,7 +216,8 @@ struct ReaderView: View {
         coordinator.run(.followUp, followUp: question)
     }
     private func notice(_ title: String, detail: String, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) { Label(title, systemImage: icon).font(.headline); Text(detail).font(.callout).foregroundStyle(.secondary) }
+        VStack(alignment: .leading, spacing: 8) { Label(title, systemImage: icon).font(.headline).foregroundStyle(pickleCyan); Text(detail).font(.callout).foregroundStyle(.secondary) }
+            .frame(maxWidth: .infinity, alignment: .leading).padding(16).glassInset()
     }
 }
 struct ResultRenderer: View {
@@ -229,14 +240,14 @@ struct ResultRenderer: View {
                 Text("Relationships in your selection").font(.headline)
                 ForEach(Array(edges.enumerated()), id: \.offset) { _, edge in
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(labels[edge.from] ?? "").padding(10).frame(maxWidth: .infinity).background(pickleGreen.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                        Text(labels[edge.from] ?? "").padding(10).frame(maxWidth: .infinity).glassInset(radius: 8)
                         HStack { Image(systemName: "arrow.down"); Text(edge.condition.isEmpty ? "leads to" : edge.condition).font(.caption) }.frame(maxWidth: .infinity)
-                        Text(labels[edge.to] ?? "").padding(10).frame(maxWidth: .infinity).background(pickleGreen.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                        Text(labels[edge.to] ?? "").padding(10).frame(maxWidth: .infinity).glassInset(radius: 8)
                         Text("Source: \(edge.evidence)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
             }
-            DisclosureGroup("Accessible text alternative") { Text(chart.alternative).font(.callout).textSelection(.enabled) }
+            DisclosureGroup("Read as text") { Text(chart.alternative).font(.callout).textSelection(.enabled) }
         }
     }
 }

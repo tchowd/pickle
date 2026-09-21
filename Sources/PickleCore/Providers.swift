@@ -136,7 +136,7 @@ public struct SampleProvider: GenerativeProvider {
     public init() {}
     public func generate(_ prompt: GenerationPrompt) async throws -> Generation {
         try Task.checkCancellation()
-        return Generation(text: "The treatment might help some people, but there isn’t much evidence yet.\n\nThis is a fixed demonstration for the sample passage. Configure Cloudflare in Settings to explain your own text.", model: "Offline sample · fixed response")
+        return Generation(text: "The treatment might help some people, but there isn’t much evidence yet.\n\nThis is a sample explanation. Connect your account in Settings to explore your own passages.", model: "Offline sample · fixed response")
     }
 }
 

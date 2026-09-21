@@ -28,11 +28,11 @@ import PickleCore
     private var credential: String?
     init(session: SessionStore, settings: SettingsStore) { self.session = session; self.settings = settings }
     func cancel() { if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; credential = nil }
-    func clear() { cancel(); session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = "" }
+    func clear() { cancel(); session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; pendingAction = .simplify }
     func setSelection(_ snapshot: SelectionSnapshot) { clear(); session.snapshot = snapshot }
     func pasteSelection() {
         let text = manualText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text.utf8.count <= Limits.selection else { error = "Paste a passage of at most \(Limits.selection.formatted()) UTF-8 bytes."; return }
+        guard !text.isEmpty, text.utf8.count <= Limits.selection else { error = "This passage is a little long. Try a shorter excerpt."; return }
         setSelection(.init(text: text, appName: "Manual paste", bundleID: "manual", method: "Manual paste", limitations: ["App and source coordinates are unavailable for manual input."]))
     }
     func sample() {
@@ -47,7 +47,7 @@ import PickleCore
         if action == .followUp && session.conversation.count >= Limits.turns { error = "This conversation has reached six follow-ups. Clear follow-ups to keep reading with the same selection."; return }
         pendingAction = action; lastLimited = limited; lastChart = chart; lastQuestion = followUp
         if !isSample {
-            guard !settings.localOnly else { error = "Cloudflare is remote and is blocked in local-only mode. The offline sample is available."; return }
+            guard !settings.localOnly else { error = "Online explanations are turned off. Try an example, or enable them in Settings."; return }
             guard settings.cloudConsent, !settings.jevEnabled || settings.jevConsent else { needsDisclosure = true; return }
         }
         let token: String

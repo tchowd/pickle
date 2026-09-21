@@ -20,7 +20,9 @@ import PickleCore
     lazy var coordinator = RequestCoordinator(session: session, settings: settings)
     private var statusItem: NSStatusItem!, resultPanel: ReaderPanel?, actionPanel: ActionPanel?, settingsWindow: NSWindow?
     private var invocation: InvocationController?
+    private var escapeMonitor: Any?
     private var actionExpanded = false
+    private var floatingOrigin: NSPoint?
     @Published var pinned = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let index = CommandLine.arguments.firstIndex(of: "--import-cli-credential"), CommandLine.arguments.count > index + 1 {
@@ -28,19 +30,28 @@ import PickleCore
             do { try CredentialStore.save(token); settings.accountID = CommandLine.arguments[index + 1]; print("Credential imported into Keychain. OAuth tokens expire."); exit(0) }
             catch { print("Keychain import failed."); exit(1) }
         }
+        NSApp.appearance = NSAppearance(named: .darkAqua)
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "leaf.fill", accessibilityDescription: "Pickle reading assistant")
+        statusItem.button?.image = pickleStatusIcon()
         let menu = NSMenu(); menu.delegate = self; statusItem.menu = menu
         invocation = InvocationController(settings: settings)
         invocation?.onInvoke = { [weak self] automatic in self?.capture(automatic: automatic) }
         invocation?.onDrag = { [weak self] in if self?.actionExpanded == false { self?.actionPanel?.orderOut(nil) } }
-        invocation?.onDismiss = { [weak self] in self?.dismissFloater() }
+        invocation?.onDismiss = { [weak self] in self?.closePanel() }
+        // Handle Escape before a text editor consumes it, including while paused.
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.keyCode == 53,
+                  let window = event.window,
+                  window === self.resultPanel || window === self.actionPanel else { return event }
+            self.closePanel()
+            return nil
+        }
         invocation?.onPolicyChanged = { [weak self] in
             guard let self else { return }
             self.coordinator.policyChanged()
             if !self.actionExpanded { self.actionPanel?.orderOut(nil) }
-            self.statusItem.button?.image = NSImage(systemSymbolName: self.settings.paused ? "pause.circle" : "leaf.fill", accessibilityDescription: self.settings.paused ? "Pickle paused" : "Pickle active")
+            self.statusItem.button?.image = self.settings.paused ? NSImage(systemSymbolName: "pause.circle", accessibilityDescription: "Pickle paused") : pickleStatusIcon()
         }
         invocation?.shortcutError = { [weak self] message in self?.coordinator.error = message }
         if CommandLine.arguments.contains("--smoke-test") {
@@ -49,13 +60,18 @@ import PickleCore
                 try? await Task.sleep(for: .seconds(1))
                 let snapshotID = self.session.snapshot?.id
                 let generated = self.session.result != nil && self.resultPanel?.isVisible == true
-                self.closePanel()
+                let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: self.resultPanel!.windowNumber, context: nil, characters: "\u{1b}",
+                    charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+                NSApp.sendEvent(escape)
                 let hidden = self.resultPanel?.isVisible == false
                 _ = self.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
                 let reopened = self.resultPanel?.isVisible == true && self.session.snapshot?.id == snapshotID
                 let fixture = SelectionSnapshot(text: "The treatment may reduce symptoms in some patients, but the evidence remains limited.", appName: "Pickle sample", bundleID: "sample")
                 self.showActions(fixture, automatic: false)
                 let chooserPanel = self.actionPanel
+                // Expansion must preserve a user-moved anchor, not recenter the panel.
+                self.actionPanel!.setFrameOrigin(NSPoint(x: self.actionPanel!.frame.minX - 60, y: self.actionPanel!.frame.minY))
                 let chooserFrame = self.actionPanel!.frame
                 let chooser = self.actionPanel?.isVisible == true && self.resultPanel?.isVisible == false && self.session.snapshot?.id == fixture.id && self.coordinator.manualText == fixture.text && self.session.result == nil && self.coordinator.progress == nil
                 self.chooseAction(.simplify, snapshot: fixture)
@@ -67,8 +83,28 @@ import PickleCore
                 self.closePanel()
                 _ = self.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
                 let inlineReopened = self.actionPanel === chooserPanel && self.actionPanel?.isVisible == true && self.resultPanel?.isVisible == false
-                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened
-                print(ok ? "PICKLE_SMOKE_PASS: bottom-centered action bar expands in the same window, inline result, stable bottom edge, and reopen" : "PICKLE_SMOKE_FAIL")
+                let visible = self.actionPanel!.screen!.visibleFrame
+                self.actionPanel!.setFrameOrigin(NSPoint(x: visible.maxX - 60, y: visible.maxY - 60))
+                self.positionFloater(self.actionPanel!, on: self.actionPanel!.screen, expanded: true)
+                let clamped = visible.contains(self.actionPanel!.frame)
+                let rememberedOrigin = self.actionPanel!.frame.origin
+                self.showActions(fixture, automatic: false)
+                let remembered = self.actionPanel!.frame.origin == rememberedOrigin
+                self.session.context = "Previous context"
+                self.session.conversation = [.init(question: "Previous question", answer: "Previous answer", quality: .checked)]
+                self.coordinator.question = "Unsent question"
+                self.capture(automatic: false) { fixture }
+                let freshSelection = self.session.snapshot?.id == fixture.id && self.session.result == nil
+                    && self.session.context.isEmpty && self.session.conversation.isEmpty && self.coordinator.question.isEmpty
+                self.chooseAction(.simplify, snapshot: fixture)
+                try? await Task.sleep(for: .milliseconds(250))
+                self.capture(automatic: false) { throw PickleError.message("No text selected") }
+                let freshEmpty = self.session.snapshot == nil && self.session.result == nil
+                    && self.coordinator.progress == nil && self.coordinator.manualText.isEmpty
+                    && self.coordinator.captureMessage == "No text selected"
+                    && self.resultPanel?.isVisible == true && self.actionPanel?.isVisible == false
+                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty
+                print(ok ? "PICKLE_SMOKE_PASS: movable action bar, anchored expansion, screen-edge clamping, remembered position, reopen, and fresh shortcut sessions" : "PICKLE_SMOKE_FAIL")
                 if !ok { exit(1) }
                 NSApp.terminate(nil)
             }
@@ -93,12 +129,10 @@ import PickleCore
         }
         add(settings.paused ? "Resume Pickle" : "Pause Pickle", #selector(togglePause))
         menu.addItem(.separator())
-        add("Cloudflare · \(settings.model.split(separator: "/").last.map(String.init) ?? settings.model)", nil)
-        add("Jev via Cloudflare · \(settings.jevEnabled ? "enabled" : "disabled")", nil)
         add("Selection shortcut: \(settings.shortcutLabel)", nil)
         add("Paste a passage…", #selector(manual))
         add("Reopen current result", #selector(reopen))
-        add("Try offline sample", #selector(sample))
+        add("Try an example", #selector(sample))
         menu.addItem(.separator())
         add("Settings…", #selector(openSettings), key: ",")
         add("Clear session", #selector(clearSession))
@@ -111,28 +145,41 @@ import PickleCore
     @objc func clearSession() { coordinator.clear(); actionPanel?.orderOut(nil); resultPanel?.orderOut(nil) }
     @objc func quit() { coordinator.cancel(); NSApp.terminate(nil) }
     func capture(automatic: Bool) {
+        capture(automatic: automatic) {
+            try SelectionService().capture(excluded: settings.isExcluded)
+        }
+    }
+    private func capture(automatic: Bool, readSelection: () throws -> SelectionSnapshot) {
         guard !settings.paused else { return }
         if automatic && (coordinator.progress != nil || pinned) { return }
+        if !automatic {
+            coordinator.clear()
+            actionExpanded = false
+            actionPanel?.orderOut(nil)
+            resultPanel?.orderOut(nil)
+        }
         do {
-            let snapshot = try SelectionService().capture(excluded: settings.isExcluded)
+            let snapshot = try readSelection()
             showActions(snapshot, automatic: automatic)
         } catch {
             guard !automatic else { return }
             actionPanel?.orderOut(nil)
-            // Preserve a current session when capture fails; manual input opens explicitly.
+            // A shortcut always starts fresh, even when no selection can be read.
             coordinator.captureMessage = error.localizedDescription; showResult()
         }
     }
     private func showActions(_ snapshot: SelectionSnapshot, automatic: Bool) {
+        if let actionPanel { floatingOrigin = actionPanel.frame.origin }
         actionPanel?.orderOut(nil)
         actionExpanded = false
         if !automatic {
             coordinator.setSelection(snapshot)
             coordinator.manualText = snapshot.text
         }
-        let panel = ActionPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 190), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = ActionPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 124), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Pickle actions"
-        panel.level = .floating; panel.isFloatingPanel = true; panel.hidesOnDeactivate = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.isMovable = true
+        panel.level = pinned ? .floating : .normal; panel.isFloatingPanel = true; panel.hidesOnDeactivate = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.contentView = NSHostingView(rootView: ActionMenu(snapshot: snapshot, choose: { [weak self] action in
             self?.chooseAction(action, snapshot: snapshot)
@@ -159,9 +206,14 @@ import PickleCore
     }
     private func positionFloater(_ panel: NSPanel, on screen: NSScreen?, expanded: Bool) {
         guard let frame = (screen ?? NSScreen.main)?.visibleFrame else { return }
-        let width = min(580, frame.width - 32)
-        let height = min(expanded ? 640 : 190, frame.height - 48)
-        panel.setFrame(NSRect(x: frame.midX - width / 2, y: frame.minY + 24, width: width, height: height), display: true)
+        let width = min(expanded ? 520 : 440, frame.width - 32)
+        let height = min(expanded ? 640 : 124, frame.height - 48)
+        let desired = expanded
+            ? NSPoint(x: panel.frame.midX - width / 2, y: panel.frame.minY)
+            : floatingOrigin ?? NSPoint(x: frame.midX - width / 2, y: frame.minY + 24)
+        let x = max(frame.minX + 16, min(desired.x, frame.maxX - width - 16))
+        let y = max(frame.minY + 16, min(desired.y, frame.maxY - height - 16))
+        panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
     private func dismissFloater() {
         if actionExpanded { coordinator.cancel() }
@@ -174,8 +226,9 @@ import PickleCore
         }
         if resultPanel == nil {
             let panel = ReaderPanel(contentRect: NSRect(x: 0, y: 0, width: 540, height: 720), styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.delegate = self; panel.title = "Pickle"; panel.minSize = NSSize(width: 420, height: 460); panel.level = .floating; panel.isFloatingPanel = true; panel.hidesOnDeactivate = false
+            panel.delegate = self; panel.title = "Pickle"; panel.minSize = NSSize(width: 420, height: 460); panel.level = pinned ? .floating : .normal; panel.isFloatingPanel = true; panel.hidesOnDeactivate = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.isOpaque = false; panel.backgroundColor = .clear
             panel.isReleasedWhenClosed = false
             panel.contentView = NSHostingView(rootView: ReaderView(coordinator: coordinator, session: session, settings: settings, app: self))
             resultPanel = panel; panel.center()
@@ -204,6 +257,7 @@ import PickleCore
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 760), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             window.title = "Pickle Settings"; window.isReleasedWhenClosed = false
+            window.isOpaque = false; window.backgroundColor = .clear
             window.minSize = NSSize(width: 560, height: 500)
             window.contentView = NSHostingView(rootView: SettingsView(settings: settings, coordinator: coordinator))
             window.center(); settingsWindow = window
