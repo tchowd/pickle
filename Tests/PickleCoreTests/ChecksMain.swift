@@ -80,10 +80,10 @@ import PickleCore
         await run("testStructuredCloudflareResponseObjectAndSchema") { try await TransportTests().testStructuredCloudflareResponseObjectAndSchema() }
         await run("testMalformedNumbersNeverBecomePartialEvidence") { ValidationTests().testMalformedNumbersNeverBecomePartialEvidence() }
         await run("testExplicitProcessCannotDropSteps") { ValidationTests().testExplicitProcessCannotDropSteps() }
-        await run("testTwoQuickOptionTaps") { InvocationTests().testTwoQuickTaps() }
+        await run("testChordInvokesOnceOnRelease") { InvocationTests().testChordInvokesOnceOnRelease() }
         await run("testSmallWritingModelIsPreservedForProse") { try await TransportTests().testSmallWritingModelIsPreservedForProse() }
-        await run("testSlowOptionTapsAndHoldsDoNotInvoke") { InvocationTests().testSlowTapsAndHoldsDoNotInvoke() }
-        await run("testTypingOrModifiersInterruptOptionTaps") { InvocationTests().testTypingOrModifiersInterruptTapSequence() }
+        await run("testSingleModifiersDoNotInvoke") { InvocationTests().testSingleModifiersDoNotInvoke() }
+        await run("testOtherInputCancelsUntilRelease") { InvocationTests().testOtherInputCancelsUntilRelease() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)
     }
