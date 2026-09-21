@@ -1,0 +1,26 @@
+{
+  "fixture": "The sky is blue.",
+  "date": "2026-09-18T04:34:45Z",
+  "status": 200,
+  "success": true,
+  "result": {
+    "state": "Completed",
+    "result": {
+      "model": "jev-1.13.0",
+      "answers": {
+        "sample": {
+          "type": "noul",
+          "noul": 1
+        }
+      },
+      "usage": {
+        "input_tokens": 283,
+        "output_tokens": 20
+      }
+    },
+    "gatewayMetadata": {
+      "keySource": "Unified"
+    }
+  },
+  "seconds": 0.875
+}

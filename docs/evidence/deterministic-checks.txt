@@ -1,0 +1,71 @@
+[0/1] Planning build
+Building for debugging...
+[0/5] Write sources
+[2/5] Write swift-version--1AB21518FC5DEDBE.txt
+[4/7] Emitting module PickleCore
+[5/7] Compiling PickleCore Providers.swift
+[6/10] Emitting module PickleChecks
+[7/10] Compiling PickleChecks ChecksMain.swift
+[8/10] Compiling PickleChecks ValidationTests.swift
+[8/11] Write Objects.LinkFileList
+[9/11] Linking PickleChecks
+[10/11] Applying PickleChecks
+Build of product 'PickleChecks' complete! (1.07s)
+[PASS] testSimplifyUsesOnlyContextDifficultyAndFidelity
+[PASS] testExpandUsesSupportNotFidelity
+[PASS] testMissingContextStopsBeforeWriter
+[PASS] testLimitedContextIsExplicitAndSameSource
+[PASS] testOneRepairAndRecheckAllDimensions
+[PASS] testRepeatedConcernNeverLoopsOrGetsSuccessLabel
+[PASS] testUncertainDoesNotAutomaticallyRepair
+[PASS] testJevOutageStillGeneratesWithHonestLabel
+[PASS] testDisabledJev
+[PASS] testLocalOnlyMakesNoRemoteCalls
+[PASS] testOversizeRejectedBeforeProviders
+[PASS] testCancellationPropagates
+[PASS] testChartUnavailableAsksWithoutWriterCall
+[PASS] testChartUnjustifiedDoesNotGenerate
+[PASS] testFollowUpStaysWithSourceAndUsesSupport
+[PASS] testReadingPreferenceOverridesAutomaticDifficulty
+[PASS] testExplicitQuantitiesAndScale
+[PASS] testDatesAndBareNumbersNotEvidence
+[PASS] testPercentagesAndSignedValues
+[PASS] testBarUsesOnlyLocallyExtractedValues
+[PASS] testInventedOrDuplicateQuantitiesRejected
+[PASS] testMixedUnitsRejected
+[PASS] testUnknownFieldsRejected
+[PASS] testFlowValidatesSourceNodesAndEdges
+[PASS] testOmittedFlowConditionRejected
+[PASS] testInvalidJevProbabilitiesRejected
+[PASS] testChoiceDistributionMustBeCompleteAndConsistent
+[PASS] testDecisionThresholdBoundaries
+[PASS] testJevCloudflareEnvelopeAndDirectModelPayload
+[PASS] testJevCompletedGatewayJob
+[PASS] testJevIncompleteGatewayJobIsNotAnAnswer
+[PASS] testCloudflareUsageFieldAliases
+[PASS] testConversationLimitsAndUTF8Budgets
+[PASS] testJevUsesCloudflareNativeEvaluationContract
+[PASS] testLlamaNativeEnvelopeAndReportedModelUsage
+[PASS] testProviderInitializationDoesNotSendAnything
+[PASS] testInvalidAccountCannotAlterEndpointOrSend
+[PASS] testLateResponseCannotReplaceNewResult
+[PASS] testCancelledRunnerDeliversNeitherResultNorError
+[PASS] testStructuredCloudflareResponseObjectAndSchema
+[PASS] testMalformedNumbersNeverBecomePartialEvidence
+[PASS] testExplicitProcessCannotDropSteps
+[PASS] testTwoQuickOptionTaps
+[PASS] testSmallWritingModelIsPreservedForProse
+[PASS] testSlowOptionTapsAndHoldsDoNotInvoke
+[PASS] testTypingOrModifiersInterruptOptionTaps
+46 checks; 0 failures
+[0/1] Planning build
+Building for debugging...
+[0/5] Write swift-version--1AB21518FC5DEDBE.txt
+[2/4] Emitting module PickleApp
+[2/5] Write Objects.LinkFileList
+[3/5] Linking Pickle
+[4/5] Applying Pickle
+Build complete! (0.74s)
+/Users/turjchowder/Github/pickle-1/dist/.pickle-build.I6hK2W/Pickle.app: replacing existing signature
+Built /Users/turjchowder/Github/pickle-1/dist/Pickle.app
+PICKLE_SMOKE_PASS: bottom-centered action bar expands in the same window, inline result, stable bottom edge, and reopen

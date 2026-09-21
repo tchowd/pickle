@@ -1,0 +1,51 @@
+{
+  "date": "2026-09-18T02:30:51Z",
+  "wrangler": "4.134.0",
+  "calls": [
+    {
+      "provider": "jev",
+      "http_status": 402,
+      "error_codes": [
+        2021
+      ],
+      "error_summary": "Insufficient balance; add money to your gateway or use BYOK",
+      "elapsed_seconds": 4.297
+    },
+    {
+      "provider": "llama",
+      "http_status": 200,
+      "success": true,
+      "response_fields": [
+        "choices",
+        "created",
+        "ec_transfer_params",
+        "id",
+        "kv_transfer_params",
+        "metrics",
+        "model",
+        "object",
+        "prompt_logprobs",
+        "prompt_text",
+        "prompt_token_ids",
+        "response",
+        "service_tier",
+        "tool_calls",
+        "usage"
+      ],
+      "model": "@cf/meta/llama-3.3-70b-instruct-sd",
+      "usage": {
+        "prompt_tokens": 67,
+        "completion_tokens": 25,
+        "total_tokens": 92,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "neurons": 6.906867027282715
+      },
+      "sample_response": "The effectiveness of the treatment in reducing symptoms is uncertain due to limited evidence, although it may be beneficial for some patients.",
+      "elapsed_seconds": 2.695
+    }
+  ],
+  "note": "Fixed public fixtures only; no user selection. No provider credentials logged.",
+  "jev_followup": "User chose to leave live Jev testing pending."
+}

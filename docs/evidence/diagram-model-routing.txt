@@ -1,0 +1,10 @@
+LIVE_CHART_PASS bar_chart · @cf/meta/llama-3.3-70b-json · 1.332685s
+Quantities in your selection
+Revenue was $10 million in 2024 and $15 million in 2025.: 10,000,000 USD
+Revenue was $10 million in 2024 and $15 million in 2025.: 15,000,000 USD
+LIVE_CHART_PASS flow_diagram · @cf/meta/llama-3.3-70b-json · 3.178124s
+Relationships in your selection
+received → validated
+Source: The request is received, validated, and saved.
+validated → saved
+Source: The request is received, validated, and saved.
