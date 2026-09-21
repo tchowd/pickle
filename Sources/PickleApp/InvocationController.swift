@@ -10,10 +10,12 @@ import PickleCore
     private var keyboardMonitor: Any?, localKeyboardMonitor: Any?
     private var chord = ControlOptionChord()
     private let settings: SettingsStore
+    private var observedPolicy: [String]
     var onInvoke: ((Bool) -> Void)?, onDrag: (() -> Void)?, onPolicyChanged: (() -> Void)?, onDismiss: (() -> Void)?
     var shortcutError: ((String) -> Void)?
     init(settings: SettingsStore) {
         self.settings = settings
+        observedPolicy = settings.requestPolicy
         var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, _, pointer -> OSStatus in
             guard let pointer else { return OSStatus(eventNotHandledErr) }
@@ -26,7 +28,11 @@ import PickleCore
         }.store(in: &cancellables)
         settings.$automaticMenu.combineLatest(settings.$paused).sink { [weak self] automatic, paused in self?.monitor(enabled: automatic && !paused) }.store(in: &cancellables)
         settings.objectWillChange.sink { [weak self] in
-            Task { @MainActor [weak self] in self?.onPolicyChanged?() }
+            Task { @MainActor [weak self] in
+                guard let self, self.observedPolicy != self.settings.requestPolicy else { return }
+                self.observedPolicy = self.settings.requestPolicy
+                self.onPolicyChanged?()
+            }
         }.store(in: &cancellables)
     }
     private func register(key: String, modifiers: String, controlOption: Bool, paused: Bool) {

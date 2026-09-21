@@ -9,11 +9,13 @@ let picklePaper = Color(red: 0.045, green: 0.075, blue: 0.065)
 let pickleSurface = Color(red: 0.085, green: 0.13, blue: 0.10)
 
 struct PortalSurface: View {
+    @Environment(\.glassOpacity) private var opacity
+    @Environment(\.themeIntensity) private var intensity
     var body: some View {
         ZStack {
             DesktopGlass()
-            picklePaper.opacity(0.12)
-            RadialGradient(colors: [pickleGreen.opacity(0.045), .clear], center: .topTrailing, startRadius: 0, endRadius: 360)
+            picklePaper.opacity(opacity)
+            RadialGradient(colors: [pickleGreen.opacity(0.045 * intensity), .clear], center: .topTrailing, startRadius: 0, endRadius: 360)
         }.allowsHitTesting(false)
     }
 }
@@ -34,6 +36,7 @@ private struct DesktopGlass: NSViewRepresentable {
 
 // Native vector artwork: a tiny pickle drifting through a dimensional portal.
 struct PicklePortal: View {
+    @Environment(\.themeIntensity) private var intensity
     var body: some View {
         ZStack {
             Ellipse().fill(pickleGreen.opacity(0.06)).frame(width: 126, height: 76)
@@ -55,7 +58,7 @@ struct PicklePortal: View {
                 }
             Image(systemName: "sparkle").font(.system(size: 12)).foregroundStyle(pickleCyan).offset(x: 64, y: -28)
             Circle().fill(pickleGreen).frame(width: 4, height: 4).offset(x: -61, y: 26)
-        }.frame(width: 150, height: 110).accessibilityHidden(true)
+        }.frame(width: 150, height: 110).opacity(0.3 + intensity * 0.7).accessibilityHidden(true)
     }
 }
 
@@ -78,11 +81,13 @@ struct PickleActionStyle: ButtonStyle {
         let selected: Bool
         @Environment(\.isEnabled) private var enabled
         @State private var hovered = false
+        @Environment(\.themeIntensity) private var intensity
+        private var accent: Color { Color(red: 0.70, green: 0.80 + intensity * 0.16, blue: 0.65 - intensity * 0.40) }
         var body: some View {
             configuration.label.font(.system(size: 13, weight: .semibold, design: .rounded))
                 .padding(.vertical, 12).padding(.horizontal, 10)
                 .foregroundStyle(selected ? picklePaper : Color(red: 0.88, green: 0.94, blue: 0.85))
-                .background(selected ? pickleGreen : (hovered ? pickleGreen.opacity(0.18) : Color.white.opacity(0.07)), in: RoundedRectangle(cornerRadius: 10))
+                .background(selected ? accent : (hovered ? pickleGreen.opacity(0.18) : Color.white.opacity(0.07)), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(pickleGreen.opacity(selected ? 0.8 : hovered ? 0.5 : 0.10)))
                 .shadow(color: selected ? pickleGreen.opacity(0.12) : .clear, radius: 8, y: 2)
                 .opacity(!enabled ? 0.4 : configuration.isPressed ? 0.7 : 1)
@@ -175,5 +180,45 @@ struct GlassToggleStyle: ToggleStyle {
             Toggle(isOn: configuration.$isOn) { configuration.label }
                 .labelsHidden().toggleStyle(.switch)
         }.frame(maxWidth: .infinity)
+    }
+}
+
+private struct GlassOpacityKey: EnvironmentKey { static let defaultValue = 0.12 }
+private struct ThemeIntensityKey: EnvironmentKey { static let defaultValue = 1.0 }
+extension EnvironmentValues {
+    var glassOpacity: Double { get { self[GlassOpacityKey.self] } set { self[GlassOpacityKey.self] = newValue } }
+    var themeIntensity: Double { get { self[ThemeIntensityKey.self] } set { self[ThemeIntensityKey.self] = newValue } }
+}
+struct PickleAppearance: ViewModifier {
+    @ObservedObject var settings: SettingsStore
+    func body(content: Content) -> some View {
+        content.environment(\.glassOpacity, settings.glassOpacity)
+            .environment(\.themeIntensity, settings.themeIntensity)
+            .tint(pickleGreen.opacity(0.55 + settings.themeIntensity * 0.45))
+            .preferredColorScheme(.dark)
+    }
+}
+extension View {
+    func pickleAppearance(_ settings: SettingsStore) -> some View { modifier(PickleAppearance(settings: settings)) }
+}
+
+struct WindowResizeHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ResizeView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+    private final class ResizeView: NSView {
+        private var startFrame = NSRect.zero
+        private var startPoint = NSPoint.zero
+        override init(frame: NSRect) { super.init(frame: frame); toolTip = "Drag to resize"; setAccessibilityLabel("Drag to resize window") }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func mouseDown(with event: NSEvent) { startFrame = window?.frame ?? .zero; startPoint = NSEvent.mouseLocation }
+        override func mouseDragged(with event: NSEvent) {
+            guard let window else { return }
+            let delta = NSEvent.mouseLocation
+            let bounds = window.screen?.visibleFrame ?? startFrame
+            let width = min(max(window.minSize.width, startFrame.width + delta.x - startPoint.x), max(window.minSize.width, bounds.maxX - startFrame.minX))
+            let height = min(max(window.minSize.height, startFrame.height - delta.y + startPoint.y), max(window.minSize.height, startFrame.maxY - bounds.minY))
+            window.setFrame(NSRect(x: startFrame.minX, y: startFrame.maxY - height, width: width, height: height), display: true)
+        }
     }
 }

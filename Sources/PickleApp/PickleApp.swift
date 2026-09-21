@@ -17,6 +17,9 @@ import PickleCore
 }
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, ObservableObject {
     let settings = SettingsStore(defaults: CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--preview-actions") ? UserDefaults(suiteName: "com.pickle.smoke." + UUID().uuidString)! : .standard), session = SessionStore()
+    lazy var bookmarks = BookmarkStore(defaults: settings.defaults)
+    private var savedWindow: NSWindow?
+    private var positioning = false
     lazy var coordinator = RequestCoordinator(session: session, settings: settings)
     private var statusItem: NSStatusItem!, resultPanel: ReaderPanel?, actionPanel: ActionPanel?, settingsWindow: NSWindow?
     private var invocation: InvocationController?
@@ -103,14 +106,96 @@ import PickleCore
                     && self.coordinator.progress == nil && self.coordinator.manualText.isEmpty
                     && self.coordinator.captureMessage == "No text selected"
                     && self.resultPanel?.isVisible == true && self.actionPanel?.isVisible == false
-                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty
-                print(ok ? "PICKLE_SMOKE_PASS: movable action bar, anchored expansion, screen-edge clamping, remembered position, reopen, and fresh shortcut sessions" : "PICKLE_SMOKE_FAIL")
+                let features = await self.checkReadingFeatures()
+                let pageFeatures = await self.checkPageContextFeatures()
+                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures
+                print(ok ? "PICKLE_SMOKE_PASS: movable action bar, anchored expansion, screen-edge clamping, remembered position, reopen, fresh sessions, saved answers, appearance persistence, and reading actions" : "PICKLE_SMOKE_FAIL")
                 if !ok { exit(1) }
                 NSApp.terminate(nil)
             }
         } else if CommandLine.arguments.contains("--preview-actions") {
             showActions(.init(text: "The treatment may reduce symptoms in some patients, but the evidence remains limited.", appName: "Pickle sample", bundleID: "sample"), automatic: false)
         } else { presentReader() }
+    }
+    private func checkPageContextFeatures() async -> Bool {
+        // Synthetic pixels only: this check never captures the desktop or sends a request.
+        let image = NSImage(size: NSSize(width: 900, height: 300), flipped: false) { rect in
+            NSColor.white.setFill(); rect.fill()
+            ("Pickle page context" as NSString).draw(at: NSPoint(x: 40, y: 140), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 36), .foregroundColor: NSColor.black
+            ])
+            return true
+        }
+        guard let pixels = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let page = try? await Task.detached(operation: { try ScreenContextService.process(pixels) }).value else { return false }
+        let ocr = page.text.contains("Pickle page context") && page.jpeg.count <= PageContextLimits.imageBytes
+        let suite = "com.pickle.page-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = SettingsStore(defaults: defaults)
+        let testSession = SessionStore()
+        let coordinator = RequestCoordinator(session: testSession, settings: preferences)
+        let selection = SelectionSnapshot(text: "A passage", appName: "Fixture", bundleID: "fixture")
+        coordinator.setSelection(selection)
+        testSession.page = page; testSession.visualSummary = "Visual context"
+        coordinator.run(.simplify)
+        let disclosure = coordinator.needsDisclosure
+        coordinator.cancel()
+        let retained = testSession.page?.id == page.id
+        coordinator.removePage()
+        let removed = testSession.page == nil && testSession.visualSummary.isEmpty
+        testSession.page = page; testSession.visualSummary = "Visual context"
+        coordinator.setSelection(selection)
+        let fresh = testSession.page == nil && testSession.visualSummary.isEmpty
+        testSession.page = page; testSession.visualSummary = "Visual context"
+        preferences.screenContextEnabled = false; coordinator.policyChanged()
+        let disabled = testSession.page == nil && testSession.visualSummary.isEmpty
+        let ok = ocr && disclosure && retained && removed && fresh && disabled
+        print(ok ? "PICKLE_PAGE_CONTEXT_PASS: synthetic OCR, bounded JPEG, consent, session reuse, removal, fresh session, disabled cleanup" : "PICKLE_PAGE_CONTEXT_FAIL")
+        return ok
+    }
+    private func checkReadingFeatures() async -> Bool {
+        let suite = "com.pickle.feature-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = SettingsStore(defaults: defaults)
+        preferences.textSize = 22; preferences.glassOpacity = 0.7; preferences.themeIntensity = 0.2
+        preferences.expandedSize = NSSize(width: 610, height: 710)
+        preferences.floatingFrame = NSRect(x: 100, y: 100, width: 610, height: 710)
+        let restored = SettingsStore(defaults: defaults)
+        let appearance = restored.textSize == 22 && restored.glassOpacity == 0.7 && restored.themeIntensity == 0.2
+            && restored.expandedSize == NSSize(width: 610, height: 710) && restored.floatingFrame == preferences.floatingFrame
+        let library = BookmarkStore(defaults: defaults)
+        library.save(passage: "A passage", answer: "An answer", source: "Sample")
+        library.save(passage: "A passage", answer: "An answer", source: "Sample")
+        let restoredLibrary = BookmarkStore(defaults: defaults)
+        let saved = restoredLibrary.items.count == 1 && restoredLibrary.items.first?.answer == "An answer"
+        if let item = restoredLibrary.items.first { restoredLibrary.remove(item.id) }
+        let removed = BookmarkStore(defaults: defaults).items.isEmpty
+        let testSession = SessionStore()
+        let testCoordinator = RequestCoordinator(session: testSession, settings: preferences)
+        testCoordinator.sample()
+        try? await Task.sleep(for: .milliseconds(100))
+        testCoordinator.adjust("Make this shorter.")
+        try? await Task.sleep(for: .milliseconds(100))
+        let adjusted = testSession.conversation.last?.question == "Make this shorter."
+        testCoordinator.explainTerm("evidence")
+        try? await Task.sleep(for: .milliseconds(100))
+        let explained = testSession.conversation.last?.question.contains("‘evidence’") == true
+        testCoordinator.explainTerm("not in the passage")
+        let invalidTerm = testCoordinator.error != nil
+        testCoordinator.clear()
+        let cleared = testSession.conversation.isEmpty && testSession.snapshot == nil
+        // Exercise native resize notifications, not only preference encoding.
+        var resized = false
+        if let panel = actionPanel {
+            actionExpanded = true
+            panel.setContentSize(NSSize(width: 600, height: 650))
+            rememberWindow(Notification(name: NSWindow.didResizeNotification, object: panel))
+            let reloaded = SettingsStore(defaults: settings.defaults)
+            resized = reloaded.expandedSize == panel.frame.size && reloaded.floatingFrame == panel.frame
+        }
+        return appearance && saved && removed && adjusted && explained && invalidTerm && cleared && resized
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         presentReader()
@@ -134,6 +219,7 @@ import PickleCore
         add("Reopen current result", #selector(reopen))
         add("Try an example", #selector(sample))
         menu.addItem(.separator())
+        add("Saved answers…", #selector(openSavedAnswers))
         add("Settings…", #selector(openSettings), key: ",")
         add("Clear session", #selector(clearSession))
         add("Quit Pickle", #selector(quit), key: "q")
@@ -160,7 +246,7 @@ import PickleCore
         }
         do {
             let snapshot = try readSelection()
-            showActions(snapshot, automatic: automatic)
+            showActions(snapshot, automatic: automatic, pageTarget: ScreenContextService.target(for: snapshot))
         } catch {
             guard !automatic else { return }
             actionPanel?.orderOut(nil)
@@ -168,35 +254,41 @@ import PickleCore
             coordinator.captureMessage = error.localizedDescription; showResult()
         }
     }
-    private func showActions(_ snapshot: SelectionSnapshot, automatic: Bool) {
+    private func showActions(_ snapshot: SelectionSnapshot, automatic: Bool, pageTarget: ScreenContextTarget? = nil) {
         if let actionPanel { floatingOrigin = actionPanel.frame.origin }
         actionPanel?.orderOut(nil)
         actionExpanded = false
         if !automatic {
             coordinator.setSelection(snapshot)
             coordinator.manualText = snapshot.text
+            coordinator.capturePage(pageTarget)
         }
         let panel = ActionPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 124), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Pickle actions"
         panel.isMovable = true
+        panel.delegate = self
         panel.level = pinned ? .floating : .normal; panel.isFloatingPanel = true; panel.hidesOnDeactivate = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.contentView = NSHostingView(rootView: ActionMenu(snapshot: snapshot, choose: { [weak self] action in
-            self?.chooseAction(action, snapshot: snapshot)
-        }, dismiss: { [weak self] in self?.dismissFloater() }))
+            self?.chooseAction(action, snapshot: snapshot, pageTarget: pageTarget)
+        }, dismiss: { [weak self] in self?.dismissFloater() }).pickleAppearance(settings))
         resultPanel?.orderOut(nil)
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         positionFloater(panel, on: screen, expanded: false)
         // Keep the source app focused and its selection intact until an action is clicked.
         panel.orderFrontRegardless(); actionPanel = panel
     }
-    private func chooseAction(_ action: ReadingAction, snapshot: SelectionSnapshot) {
+    private func chooseAction(_ action: ReadingAction, snapshot: SelectionSnapshot, pageTarget: ScreenContextTarget? = nil) {
         guard !settings.paused else { return }
-        if session.snapshot?.id != snapshot.id { coordinator.setSelection(snapshot) }
+        if session.snapshot?.id != snapshot.id { coordinator.setSelection(snapshot); coordinator.capturePage(pageTarget) }
         if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--preview-actions") { coordinator.isSample = true }
         guard let panel = actionPanel else { return }
+        positioning = true
+        defer { positioning = false }
         actionExpanded = true
         panel.acceptsKeyboard = true
+        panel.styleMask.insert(.resizable)
+        panel.minSize = NSSize(width: 420, height: 420)
         panel.title = "Pickle"
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: ReaderView(coordinator: coordinator, session: session, settings: settings, app: self, floating: true))
@@ -206,11 +298,14 @@ import PickleCore
     }
     private func positionFloater(_ panel: NSPanel, on screen: NSScreen?, expanded: Bool) {
         guard let frame = (screen ?? NSScreen.main)?.visibleFrame else { return }
-        let width = min(expanded ? 520 : 440, frame.width - 32)
-        let height = min(expanded ? 640 : 124, frame.height - 48)
+        positioning = true
+        defer { positioning = false }
+        let preferred = settings.expandedSize ?? NSSize(width: 520, height: 640)
+        let width = min(expanded ? max(420, preferred.width) : 440, frame.width - 32)
+        let height = min(expanded ? max(420, preferred.height) : 124, frame.height - 48)
         let desired = expanded
             ? NSPoint(x: panel.frame.midX - width / 2, y: panel.frame.minY)
-            : floatingOrigin ?? NSPoint(x: frame.midX - width / 2, y: frame.minY + 24)
+            : floatingOrigin ?? settings.floatingFrame?.origin ?? NSPoint(x: frame.midX - width / 2, y: frame.minY + 24)
         let x = max(frame.minX + 16, min(desired.x, frame.maxX - width - 16))
         let y = max(frame.minY + 16, min(desired.y, frame.maxY - height - 16))
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
@@ -231,10 +326,40 @@ import PickleCore
             panel.isOpaque = false; panel.backgroundColor = .clear
             panel.isReleasedWhenClosed = false
             panel.contentView = NSHostingView(rootView: ReaderView(coordinator: coordinator, session: session, settings: settings, app: self))
-            resultPanel = panel; panel.center()
+            resultPanel = panel
+            if let saved = settings.readerFrame { panel.setFrame(visibleFrame(saved), display: false) }
+            else { panel.center() }
         }
         if let snapshot { position(resultPanel!, snapshot: snapshot) }
         resultPanel?.makeKeyAndOrderFront(nil)
+    }
+    private func visibleFrame(_ saved: NSRect) -> NSRect {
+        let screen = NSScreen.screens.first { $0.visibleFrame.intersects(saved) } ?? NSScreen.main
+        guard let bounds = screen?.visibleFrame else { return saved }
+        let width = min(max(saved.width, 420), bounds.width - 32)
+        let height = min(max(saved.height, 420), bounds.height - 32)
+        return NSRect(x: max(bounds.minX + 16, min(saved.minX, bounds.maxX - width - 16)),
+                      y: max(bounds.minY + 16, min(saved.minY, bounds.maxY - height - 16)), width: width, height: height)
+    }
+    func windowDidMove(_ notification: Notification) { rememberWindow(notification) }
+    func windowDidResize(_ notification: Notification) { rememberWindow(notification) }
+    private func rememberWindow(_ notification: Notification) {
+        guard !positioning, let window = notification.object as? NSWindow else { return }
+        if window === actionPanel {
+            settings.floatingFrame = window.frame
+            floatingOrigin = window.frame.origin
+            if actionExpanded { settings.expandedSize = window.frame.size }
+        } else if window === resultPanel { settings.readerFrame = window.frame }
+    }
+    @objc func openSavedAnswers() {
+        if savedWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 700), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "Saved answers"; window.isReleasedWhenClosed = false
+            window.isOpaque = false; window.backgroundColor = .clear; window.minSize = NSSize(width: 500, height: 440)
+            window.contentView = NSHostingView(rootView: SavedAnswersView(store: bookmarks, settings: settings))
+            window.center(); savedWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true); savedWindow?.makeKeyAndOrderFront(nil)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { if sender === resultPanel { coordinator.cancel() }; return true }
     func closePanel() { coordinator.cancel(); resultPanel?.orderOut(nil); actionPanel?.orderOut(nil) }

@@ -6,6 +6,7 @@ struct SettingsView: View {
     @ObservedObject var coordinator: RequestCoordinator
     @State private var token = ""
     @State private var keyStatus = ""
+    @State private var screenPermission = ScreenContextService.permitted
     @State private var hasPermission = SelectionService.trusted
     @State private var tab = 0
     @Environment(\.scenePhase) private var scenePhase
@@ -23,12 +24,14 @@ struct SettingsView: View {
                 Text("Reading").tag(0)
                 Text("Privacy").tag(1)
                 Text("Connection").tag(2)
+                Text("Appearance").tag(3)
             }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 24)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if tab == 0 { reading }
                     if tab == 1 { privacy }
                     if tab == 2 { connection }
+                    if tab == 3 { appearance }
                 }.padding(.horizontal, 24).padding(.bottom, 24)
             }
             .buttonStyle(PickleActionStyle())
@@ -36,12 +39,31 @@ struct SettingsView: View {
             .toggleStyle(GlassToggleStyle())
             .font(.system(size: 13, design: .rounded))
         }.frame(minWidth: 540).background { PortalSurface() }.tint(pickleGreen)
-            .preferredColorScheme(.dark)
-            .onChange(of: scenePhase) { hasPermission = SelectionService.trusted }
+            .pickleAppearance(settings)
+            .onChange(of: scenePhase) { hasPermission = SelectionService.trusted; screenPermission = ScreenContextService.permitted }
+    }
+    private var appearance: some View {
+        VStack(spacing: 16) {
+            GlassSection("Reading comfort") {
+                HStack { Text("Text size"); Spacer(); Text("\(Int(settings.textSize)) pt").foregroundStyle(.secondary) }
+                Slider(value: $settings.textSize, in: 14...24, step: 1).accessibilityLabel("Reading text size")
+                Text("A little clarity, your way.").font(.system(size: settings.textSize, design: .rounded))
+            }
+            GlassSection("Glass and color") {
+                Text("Background opacity")
+                Slider(value: $settings.glassOpacity, in: 0...1).accessibilityLabel("Background opacity")
+                HStack { Text("More glass"); Spacer(); Text("More solid") }.font(.caption).foregroundStyle(.secondary)
+                Text("Pickle intensity")
+                Slider(value: $settings.themeIntensity, in: 0...1).accessibilityLabel("Theme intensity")
+                HStack { Text("Subtle"); Spacer(); Text("Neon") }.font(.caption).foregroundStyle(.secondary)
+                Button("Restore appearance defaults") { settings.textSize = 18; settings.glassOpacity = 0.12; settings.themeIntensity = 1 }
+            }
+        }
     }
     private var reading: some View {
         Group {
             GlassSection("Your explanations") {
+                Toggle("Show answers as they arrive", isOn: $settings.streaming)
                 Picker("Reading style", selection: $settings.level) {
                     ForEach(ReadingLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -68,7 +90,7 @@ struct SettingsView: View {
                 Text("Enable Pickle in macOS Accessibility settings. You can always paste a passage instead.").font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button("Open permissions") { SelectionService.requestPermission() }
-                    Button("Check again") { hasPermission = SelectionService.trusted }
+                    Button("Check again") { hasPermission = SelectionService.trusted; screenPermission = ScreenContextService.permitted }
                 }
             }
             GlassSection { Toggle("Pause Pickle", isOn: $settings.paused) }
@@ -82,10 +104,21 @@ struct SettingsView: View {
                 Toggle("Keep Pickle offline", isOn: $settings.localOnly)
                 Text("Offline mode includes a sample explanation. New explanations need an internet connection.").font(.caption).foregroundStyle(.secondary)
             }
+            GlassSection("Page context") {
+                Toggle("Include visible page context", isOn: $settings.screenContextEnabled)
+                Text("Capture the source window once per session and read its text on this Mac. Extracted text is sent with reading actions; images are sent only through Analyze visuals. Captures are kept in memory and cleared with the session.").font(.caption).foregroundStyle(.secondary)
+                Label(screenPermission ? "Screen Recording is allowed" : "Screen Recording permission is needed", systemImage: screenPermission ? "checkmark.circle" : "rectangle.dashed")
+                HStack {
+                    Button("Allow screen access") { ScreenContextService.requestPermission(); screenPermission = ScreenContextService.permitted }
+                    Button("Check again") { screenPermission = ScreenContextService.permitted }
+                }
+                Text("After granting permission, select your passage and invoke Pickle again. Excluded apps and protected selections are never captured.").font(.caption).foregroundStyle(.secondary)
+                Link("Set up the optional vision model", destination: URL(string: "https://developers.cloudflare.com/workers-ai/models/llama-3.2-11b-vision-instruct/")!)
+            }
             GlassSection("Your session") {
-                Text("Passages and answers stay in memory until you clear them or quit. Pickle does not save a reading history.").font(.callout).foregroundStyle(.secondary)
+                Text("Passages and answers stay in memory until you clear them or quit. Only answers you explicitly bookmark are saved on this Mac.").font(.callout).foregroundStyle(.secondary)
                 Button("Clear current passage and answers") { coordinator.clear() }
-                Button("Ask before sharing again") { settings.cloudConsent = false; settings.jevConsent = false }
+                Button("Ask before sharing again") { settings.cloudConsent = false; settings.jevConsent = false; settings.screenContextConsent = false }
             }
             GlassSection {
                 DisclosureGroup("Excluded apps") {

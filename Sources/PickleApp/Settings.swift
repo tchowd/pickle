@@ -19,9 +19,37 @@ import PickleCore
     @Published var cloudConsent: Bool { didSet { save("cloudConsentV2", cloudConsent) } }
     @Published var jevConsent: Bool { didSet { save("jevConsentV2", jevConsent) } }
     @Published var onboarded: Bool { didSet { save("onboarded", onboarded) } }
-    private let defaults: UserDefaults
+    @Published var textSize: Double { didSet { save("textSize", textSize) } }
+    @Published var glassOpacity: Double { didSet { save("glassOpacity", glassOpacity) } }
+    @Published var themeIntensity: Double { didSet { save("themeIntensity", themeIntensity) } }
+    @Published var screenContextEnabled: Bool { didSet { save("screenContextEnabled", screenContextEnabled) } }
+    @Published var screenContextConsent: Bool { didSet { save("screenContextConsent", screenContextConsent) } }
+    @Published var streaming: Bool { didSet { save("streaming", streaming) } }
+    let defaults: UserDefaults
+    var requestPolicy: [String] {
+        [String(paused), accountID, model, String(jevEnabled), String(localOnly), level.rawValue,
+         exclusions, String(cloudConsent), String(jevConsent), String(screenContextEnabled), String(screenContextConsent)]
+    }
+    var floatingFrame: NSRect? {
+        get { defaults.string(forKey: "floatingFrame").map(NSRectFromString) }
+        set { defaults.set(newValue.map(NSStringFromRect), forKey: "floatingFrame") }
+    }
+    var readerFrame: NSRect? {
+        get { defaults.string(forKey: "readerFrame").map(NSRectFromString) }
+        set { defaults.set(newValue.map(NSStringFromRect), forKey: "readerFrame") }
+    }
+    var expandedSize: NSSize? {
+        get { defaults.string(forKey: "expandedSize").map(NSSizeFromString) }
+        set { defaults.set(newValue.map(NSStringFromSize), forKey: "expandedSize") }
+    }
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        screenContextEnabled = defaults.object(forKey: "screenContextEnabled") as? Bool ?? true
+        screenContextConsent = defaults.bool(forKey: "screenContextConsent")
+        textSize = min(24, max(14, defaults.object(forKey: "textSize") as? Double ?? 18))
+        glassOpacity = min(1, max(0, defaults.object(forKey: "glassOpacity") as? Double ?? 0.12))
+        themeIntensity = min(1, max(0, defaults.object(forKey: "themeIntensity") as? Double ?? 1))
+        streaming = defaults.object(forKey: "streaming") as? Bool ?? true
         paused = defaults.bool(forKey: "paused")
         accountID = defaults.string(forKey: "accountID") ?? ""
         model = defaults.string(forKey: "model") ?? CloudflareProvider.defaultModel
