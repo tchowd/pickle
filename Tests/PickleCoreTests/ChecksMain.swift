@@ -2,6 +2,12 @@ import Foundation
 import PickleCore
 @main struct ChecksRunner {
     static func main() async {
+        if let index = CommandLine.arguments.firstIndex(of: "--local-cancel-benchmark"), CommandLine.arguments.count > index + 1 {
+            exit(await LocalBenchmark.cancellation(address: CommandLine.arguments[index + 1]))
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--local-benchmark"), CommandLine.arguments.count > index + 1 {
+            exit(await LocalBenchmark.run(address: CommandLine.arguments[index + 1]))
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--live-jev-pipeline"), CommandLine.arguments.count > index + 1 {
             let account = CommandLine.arguments[index + 1]
             let token = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -96,6 +102,12 @@ import PickleCore
         await run("testReferenceURLAndBudgets") { try WebReferenceTests().testReferenceURLAndBudgets() }
         await run("testReferenceExcerptsAndPageOnlyInput") { try WebReferenceTests().testReferenceExcerptsAndPageOnlyInput() }
         await run("testReferencesReachProseButNotChartEvidence") { try await WebReferenceTests().testReferencesReachProseButNotChartEvidence() }
+        await run("testLocalRoutingStreamingAndNoCloudChecks") { try await OllamaTests().testLocalRoutingStreamingAndNoCloudChecks() }
+        await run("testCloudAliasesAndMissingVisionFailClosed") { try await OllamaTests().testCloudAliasesAndMissingVisionFailClosed() }
+        await run("testLocalOfflineDistinction") { try await OllamaTests().testLocalOfflineDistinction() }
+        await run("testOllamaNDJSONCompletionAndErrors") { try await OllamaTests().testOllamaNDJSONCompletionAndErrors() }
+        await run("testLocalContextPreservesSelectionAndBounds") { try OllamaTests().testLocalContextPreservesSelectionAndBounds() }
+        await run("testLocalChartsUseSchemaAndKeepValidation") { try await OllamaTests().testLocalChartsUseSchemaAndKeepValidation() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)
     }

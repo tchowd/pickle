@@ -23,7 +23,7 @@ swift run PickleChecks
 ./scripts/test.sh
 ```
 
-The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 58 checks, plus native window, persistence, and reading-action smoke checks.
+The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 64 checks, plus native window, persistence, and reading-action smoke checks.
 
 ## Set up selection capture
 
@@ -94,7 +94,7 @@ Do not rerun it merely to confirm the known unpaid Jev state. Read [the actual s
 - **Cross-app compatibility:** Accessibility permission and selection testing in a browser and a native app are pending; see the [test matrix](docs/TESTING.md). No universal app support claim.
 - **Polish validation:** fast/reverse/multiline highlighting, keyboard-only VoiceOver audit, multiple monitors, full-screen spaces, permission revocation, and long-running network stress tests need real-device coverage.
 - **Distribution:** Developer ID signing, notarization, universal Intel build verification, app icon, installer, and auto-update are deferred. The current app is locally ad-hoc signed.
-- **Optional features:** local AI providers, automatic persistent history and arbitrary graph layouts are not included. Explicit local bookmarks and prose streaming are supported.
+- **Optional features:** automatic persistent history and arbitrary graph layouts are not included. Explicit local bookmarks and prose streaming are supported.
 - **Bar parsing:** intentionally conservative explicit currency/percentage and a small unit whitelist. Dates, unitless numbers, implicit units, conversions, locale-specific decimal formats, and illustrative quantities are not supported.
 
 [Architecture and policies](docs/ARCHITECTURE.md) · [Provider verification](docs/PROVIDERS.md) · [Testing and evaluation](docs/TESTING.md) · [Packaging](docs/DISTRIBUTION.md)
@@ -152,3 +152,11 @@ For loaded pages and captions, use **Connect browser extension** in the same set
 **Listen for 30 seconds** provides an explicit, local audio-transcription fallback when a source window is known. It needs macOS permissions and an available on-device speech recognizer. It records source-app audio from the moment you start, including other playing tabs in that app, and writes no audio file.
 
 Verification includes 58 core checks, caption/extension fixtures, native-host framing, isolated HTML parsing, source cleanup and late-result rejection, and a real authenticated loopback bridge test. A public HTTPS fetch of example.com and article extraction passed. Live browser-extension installation, site compatibility, caption extraction on real videos, and microphone-free source-audio capture remain unverified on-device. No private page, real audio, or live AI request was used for validation.
+
+## Local AI
+
+Local is the default. Change AI mode in **Settings → Connection → AI location**; the reader header shows the current location without a mode switch. The configured Local server runs `llama3.2:1b` on Ross through a private SSH connection over Tailscale. Online settings and credentials are preserved; your chosen mode is remembered. Local does not call Cloudflare, cloud chart models, or Jev and never silently falls back.
+
+Local supports streaming explanations, follow-ups, OCR/page/transcript context and locally validated charts. The current small model passed a bar-chart fixture but failed a flow fixture and made one prose meaning error. Strict offline remains a separate restriction; it blocks the Ross tunnel. No local vision model is configured.
+
+See [Local AI behavior, measured performance and limitations](docs/LOCAL-AI.md) and [deployment details](scripts/local-ai/README.md). The current connection was verified using the packaged app and Keychain configuration. Tailscale Serve itself is pending tailnet enablement; the SSH route works now.

@@ -1,0 +1,1 @@
+LOCAL_CANCELLATION: active_stream=true, cancelled=true, client_stop_seconds=0.0036699771881103516, next_request_seconds=0.32906901836395264, next_answer=I'm ready.

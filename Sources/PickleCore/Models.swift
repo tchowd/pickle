@@ -52,8 +52,9 @@ public struct ReadingResult: Identifiable, Sendable {
     public let action: ReadingAction, text: String, chart: ValidatedChart?, quality: QualityStatus
     public let model: String, evaluatorModel: String?, elapsed: Double, repairs: Int
     public let notes: [String]
-    public init(action: ReadingAction, text: String, chart: ValidatedChart? = nil, quality: QualityStatus, model: String, evaluatorModel: String? = nil, elapsed: Double = 0, repairs: Int = 0, notes: [String] = []) {
-        self.action = action; self.text = text; self.chart = chart; self.quality = quality; self.model = model; self.evaluatorModel = evaluatorModel; self.elapsed = elapsed; self.repairs = repairs; self.notes = notes
+    public let timing: LocalGenerationTiming?
+    public init(action: ReadingAction, text: String, chart: ValidatedChart? = nil, quality: QualityStatus, model: String, evaluatorModel: String? = nil, elapsed: Double = 0, repairs: Int = 0, notes: [String] = [], timing: LocalGenerationTiming? = nil) {
+        self.action = action; self.text = text; self.chart = chart; self.quality = quality; self.model = model; self.evaluatorModel = evaluatorModel; self.elapsed = elapsed; self.repairs = repairs; self.notes = notes; self.timing = timing
     }
 }
 public struct RequestInput: Sendable {
@@ -92,18 +93,23 @@ public struct Usage: Codable, Sendable {
 }
 public struct Generation: Sendable {
     public let text: String, model: String, usage: Usage?
-    public init(text: String, model: String, usage: Usage? = nil) { self.text = text; self.model = model; self.usage = usage }
+    public let timing: LocalGenerationTiming?
+    public init(text: String, model: String, usage: Usage? = nil, timing: LocalGenerationTiming? = nil) { self.text = text; self.model = model; self.usage = usage; self.timing = timing }
 }
 public struct GenerationPrompt: Sendable {
     public let system: String, user: String, structured: Bool
     public let schemaJSON: String?
-    public init(system: String, user: String, structured: Bool, schemaJSON: String? = nil) { self.system = system; self.user = user; self.structured = structured; self.schemaJSON = schemaJSON }
+    public let localInput: RequestInput?
+    public init(system: String, user: String, structured: Bool, schemaJSON: String? = nil, localInput: RequestInput? = nil) { self.system = system; self.user = user; self.structured = structured; self.schemaJSON = schemaJSON; self.localInput = localInput }
 }
 public protocol GenerativeProvider: Sendable {
     var isRemote: Bool { get }
+    var permitsCloudChecks: Bool { get }
     func generate(_ prompt: GenerationPrompt) async throws -> Generation
 }
 public enum MetricEvent: Sendable {
     case generation(Usage?), evaluation(Usage?), repair, cancelled, failure, route(ChartKind?), completed(Double)
 }
 public typealias MetricSink = @Sendable (MetricEvent) -> Void
+
+public extension GenerativeProvider { var permitsCloudChecks: Bool { true } }

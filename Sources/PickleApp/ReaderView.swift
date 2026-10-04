@@ -53,12 +53,15 @@ struct ReaderView: View {
                     if coordinator.needsDisclosure { disclosure }
                     if let flags = coordinator.needsContext { contextRequest(flags) }
                     if coordinator.needsChart { chartChoice }
+                    if let notice = coordinator.contextNotice { Text(notice).font(.caption).foregroundStyle(.secondary) }
                     if coordinator.progress != nil {
                         HStack(spacing: 12) { ProgressView().controlSize(.small); Text(answerStatus ?? "Finding the words…").font(.callout); Spacer(); Button("Cancel") { coordinator.cancel() } }
                             .padding(16).glassInset()
                             .accessibilityElement(children: .combine)
                     }
-                    if let error = coordinator.error { notice("Couldn’t complete this action", detail: error, icon: "exclamationmark.triangle"); Button("Retry") { coordinator.retry() } }
+                    if let error = coordinator.error { notice("Couldn’t complete this action", detail: error, icon: "exclamationmark.triangle"); Button("Retry") { coordinator.retry() }
+                        if settings.aiMode == .local { Button("Change AI in Settings") { app.openSettings() } }
+                    }
                     if let result = session.result, coordinator.draft.isEmpty || coordinator.pendingAction == .followUp { resultBody(result) }
                     ForEach(session.conversation) { turn in
                         VStack(alignment: .leading, spacing: 10) {
@@ -106,6 +109,11 @@ struct ReaderView: View {
         ZStack {
             DragGrip().padding(.horizontal, 48)
             HStack {
+                Text(settings.aiLocationLabel)
+                    .font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                    .lineLimit(1).frame(maxWidth: 160, alignment: .leading)
+                    .help(settings.aiLocationDescription + " Change AI in Settings → Connection.")
+                    .accessibilityLabel("AI location: " + settings.aiLocationLabel)
                 Spacer()
                 Button { app.openSavedAnswers() } label: { Image(systemName: "bookmark").frame(width: 28, height: 28) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Saved answers").accessibilityLabel("Open saved answers")
@@ -188,6 +196,10 @@ struct ReaderView: View {
     private var disclosure: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Before we begin", systemImage: "network").font(.headline)
+            if settings.aiMode == .local {
+                Text(settings.aiLocationDescription).font(.callout)
+                Text("Your passage, conversation, extracted page text and reference excerpts go to this Local server. Cloudflare and TypeSafe checks are not used. Website references may still contact the original website when enabled.").font(.callout)
+            } else {
             Text("Pickle sends your passage and conversation to Cloudflare to write an explanation. When answer checks are enabled, TypeSafe also receives the passage and answer.").font(.callout)
             if session.page != nil {
                 Text("Page context adds text read from the captured source window. This text and any visual summary are also sent with your request and answer checks. The screenshot itself is uploaded only when you choose Analyze visuals.").font(.callout)
@@ -195,10 +207,12 @@ struct ReaderView: View {
             if session.reference != nil {
                 Text("Your page reference or video transcript is also shared with Cloudflare and enabled answer checks.").font(.callout)
             }
+            }
             Text("Nothing is sent to AI providers until you choose an action. You can change this in Settings.").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Agree and continue") {
-                    settings.cloudConsent = true; if session.reference != nil { settings.webContextConsent = true }; if session.page != nil { settings.screenContextConsent = true }; if settings.jevEnabled { settings.jevConsent = true }
+                    if settings.aiMode == .local { settings.localConsentServer = settings.localConsentID }
+                    else { settings.cloudConsent = true; if session.reference != nil { settings.webContextConsent = true }; if session.page != nil { settings.screenContextConsent = true }; if settings.jevEnabled { settings.jevConsent = true } }
                     coordinator.needsDisclosure = false
                     // Allow settings observers to settle before starting an authorized request.
                     Task { @MainActor in await Task.yield(); coordinator.retry() }

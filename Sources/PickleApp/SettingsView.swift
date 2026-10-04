@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var coordinator: RequestCoordinator
     @State private var token = ""
+    @State private var localToken = ""
     @State private var keyStatus = ""
     @State private var screenPermission = ScreenContextService.permitted
     @State private var hasPermission = SelectionService.trusted
@@ -70,8 +71,8 @@ struct SettingsView: View {
                 Picker("Reading style", selection: $settings.level) {
                     ForEach(ReadingLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
-                Toggle("Check answers against the passage", isOn: $settings.jevEnabled).disabled(settings.localOnly)
-                Text("An extra check for meaning and missing context.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Check answers against the passage", isOn: $settings.jevEnabled).disabled(settings.localOnly || settings.aiMode == .local)
+                Text(settings.aiMode == .local ? "Cloud checks stay off in Local mode. Your Online preference is preserved." : "An extra check for meaning and missing context.").font(.caption).foregroundStyle(.secondary)
             }
             GlassSection("Open Pickle") {
                 Toggle("Use Control + Option", isOn: $settings.controlOption)
@@ -102,10 +103,10 @@ struct SettingsView: View {
     private var privacy: some View {
         Group {
             GlassSection("You choose what to share") {
-                Text("Highlighting alone sends nothing. When you choose an action, your passage and conversation go to Cloudflare. Answer checks also share the passage and answer with TypeSafe.")
+                Text(settings.aiMode == .local ? "Local sends your passage and context only to your configured model server. Cloud AI and TypeSafe checks stay off. Enabled webpage references still contact the original website." : "Highlighting alone sends nothing. When you choose an action, your passage and conversation go to Cloudflare. Answer checks also share the passage and answer with TypeSafe.")
                     .font(.callout).foregroundStyle(.secondary)
                 Toggle("Keep Pickle offline", isOn: $settings.localOnly)
-                Text("Offline mode includes a sample explanation. New explanations need an internet connection.").font(.caption).foregroundStyle(.secondary)
+                Text("Strict offline blocks webpage fetches and AI on other computers, including Tailscale. A configured model on this Mac can still work.").font(.caption).foregroundStyle(.secondary)
             }
             GlassSection("Page context") {
                 Toggle("Include visible page context", isOn: $settings.screenContextEnabled)
@@ -141,7 +142,7 @@ struct SettingsView: View {
             GlassSection("Your session") {
                 Text("Passages and answers stay in memory until you clear them or quit. Only answers you explicitly bookmark are saved on this Mac.").font(.callout).foregroundStyle(.secondary)
                 Button("Clear current passage and answers") { coordinator.clear() }
-                Button("Ask before sharing again") { settings.cloudConsent = false; settings.jevConsent = false; settings.screenContextConsent = false; settings.webContextConsent = false }
+                Button("Ask before sharing again") { settings.cloudConsent = false; settings.jevConsent = false; settings.screenContextConsent = false; settings.webContextConsent = false; settings.localConsentServer = "" }
             }
             GlassSection {
                 DisclosureGroup("Excluded apps") {
@@ -153,8 +154,40 @@ struct SettingsView: View {
     }
     private var connection: some View {
         Group {
+            GlassSection("AI location") {
+                Picker("Use", selection: $settings.aiMode) { ForEach([AIMode.local, .online], id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+                Text(settings.aiLocationDescription).font(.callout).foregroundStyle(.secondary)
+                Text("Local is the default. Your choice is remembered. Switching never starts an answer automatically.").font(.caption).foregroundStyle(.secondary)
+            }
+            if settings.aiMode == .local {
+                GlassSection("Your Local server") {
+                    TextField("Server address", text: $settings.localAddress)
+                    Toggle("This server runs on this Mac", isOn: $settings.localSameDevice)
+                    Text("Leave off for Ross or an SSH tunnel to another computer.").font(.caption).foregroundStyle(.secondary)
+                    TextField("Text model", text: $settings.localModel)
+                    if !coordinator.localModels.isEmpty {
+                        Menu("Choose an installed model") { ForEach(coordinator.localModels, id: \.self) { name in Button(name) { settings.localModel = name } } }
+                    }
+                    SecureField("Server access key (optional)", text: $localToken)
+                    Button("Save Local access key") {
+                        do { try CredentialStore.save(localToken, account: settings.localCredentialAccount); localToken = ""; coordinator.localConnectionStatus = "Access key saved in Keychain." }
+                        catch { coordinator.localConnectionStatus = error.localizedDescription }
+                    }.disabled(localToken.isEmpty)
+                    Button("Test connection", action: coordinator.testLocalConnection)
+                    if settings.usesRossTunnel {
+                        Button("Reconnect to Ross", action: coordinator.reconnectRoss)
+                    }
+                    Text(coordinator.localConnectionStatus).font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("Optional vision model") {
+                        TextField("Local vision model (leave blank to disable)", text: $settings.localVisionModel)
+                        Text("Llama 3.2 1B is text-only. Configure a separately installed vision model only if your server supports it. Pickle never downloads models or falls back to cloud vision.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("8K context, up to 1K output tokens, one request at a time and a two-minute keep-alive. Long selections are rejected; supplementary context uses relevant excerpts. Charts keep their evidence checks and may exceed this small model’s ability.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            DisclosureGroup("Online account") {
             GlassSection("Connect your account") {
-                Text("Pickle uses Cloudflare to create explanations. Connect once to start reading.").font(.callout).foregroundStyle(.secondary)
+                Text("Online uses Cloudflare to create explanations. These details stay saved when you use Local.").font(.callout).foregroundStyle(.secondary)
                 TextField("Cloudflare account ID", text: $settings.accountID)
                 SecureField("API token", text: $token)
                 HStack {
@@ -182,6 +215,7 @@ struct SettingsView: View {
                         catch { keyStatus = error.localizedDescription }
                     }
                 }
+            }
             }
         }
     }

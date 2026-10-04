@@ -29,6 +29,31 @@ import PickleCore
     private var floatingOrigin: NSPoint?
     @Published var pinned = false
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let index = CommandLine.arguments.firstIndex(of: "--import-local-server"), CommandLine.arguments.count > index + 1 {
+            let address = CommandLine.arguments[index + 1]
+            let token = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            do {
+                try LocalAIConfiguration(address: address).validate()
+                try CredentialStore.save(token, account: "local-server:" + address)
+                settings.localAddress = address; settings.localModel = "llama3.2:1b"; settings.localSameDevice = false
+                print("Local server saved; Online mode and credentials preserved."); exit(0)
+            } catch { print("Could not save Local server settings."); exit(1) }
+        }
+        if CommandLine.arguments.contains("--local-connection-check") {
+            Task {
+                do {
+                    try coordinator.localConfiguration().validate(offline: settings.localOnly)
+                    let token = try CredentialStore.read(account: settings.localCredentialAccount)
+                    let provider = OllamaProvider(configuration: coordinator.localConfiguration(token: token))
+                    let input = RequestInput(snapshot: .init(text: "The study suggests a possible benefit, but more evidence is needed.", appName: "Fixed Local fixture", bundleID: "fixture"), action: .simplify)
+                    let outcome = try await RequestPipeline(provider: provider, localOnly: settings.localOnly).run(input)
+                    guard case .result(let result) = outcome else { throw PickleError.message("No Local answer returned.") }
+                    print("PICKLE_LOCAL_CONNECTION_PASS: Keychain configuration, local generation, \(result.model), \(result.elapsed)s. Saved mode: \(settings.aiMode.rawValue)")
+                    exit(0)
+                } catch { print("PICKLE_LOCAL_CONNECTION_FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--import-cli-credential"), CommandLine.arguments.count > index + 1 {
             let token = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
             do { try CredentialStore.save(token); settings.accountID = CommandLine.arguments[index + 1]; print("Credential imported into Keychain. OAuth tokens expire."); exit(0) }
@@ -120,7 +145,8 @@ import PickleCore
                 let pageFeatures = await self.checkPageContextFeatures()
                 let webFeatures = await self.checkWebReferenceFeatures()
                 let bridgeFeatures = await self.checkBrowserBridge()
-                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures && webFeatures && bridgeFeatures
+                let localFeatures = self.checkLocalModePreferences()
+                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures && webFeatures && bridgeFeatures && localFeatures
                 print(ok ? "PICKLE_SMOKE_PASS: movable action bar, anchored expansion, screen-edge clamping, remembered position, reopen, fresh sessions, saved answers, appearance persistence, and reading actions" : "PICKLE_SMOKE_FAIL")
                 if !ok { exit(1) }
                 NSApp.terminate(nil)
@@ -128,6 +154,33 @@ import PickleCore
         } else if CommandLine.arguments.contains("--preview-actions") {
             showActions(.init(text: "The treatment may reduce symptoms in some patients, but the evidence remains limited.", appName: "Pickle sample", bundleID: "sample"), automatic: false)
         } else { presentReader() }
+    }
+    private func checkLocalModePreferences() -> Bool {
+        let suite = "com.pickle.local-mode-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "localOnly")
+        defaults.set("@cf/meta/llama-3.2-1b-instruct", forKey: "model")
+        defaults.set(true, forKey: "jevEnabled")
+        let preferences = SettingsStore(defaults: defaults)
+        let migrated = preferences.aiMode == .local && preferences.localOnly && preferences.localModel == "llama3.2:1b"
+        preferences.aiMode = .online
+        let coordinator = RequestCoordinator(session: SessionStore(), settings: preferences)
+        coordinator.setSelection(.init(text: "Selected passage", appName: "Fixture", bundleID: "fixture"))
+        coordinator.session.context = "Keep this context"
+        coordinator.progress = "Reviewing…"; coordinator.draft = "Old draft"
+        preferences.aiMode = .local; coordinator.policyChanged()
+        let cancelled = coordinator.progress == nil && coordinator.draft.isEmpty && coordinator.session.snapshot?.text == "Selected passage" && coordinator.session.context == "Keep this context" && coordinator.session.result == nil
+        coordinator.run(.simplify)
+        let blocked = coordinator.error?.contains("Offline") == true
+        preferences.aiMode = .online; coordinator.policyChanged()
+        let restored = SettingsStore(defaults: defaults)
+        let preserved = restored.localOnly && restored.jevEnabled && restored.model == "@cf/meta/llama-3.2-1b-instruct" && restored.aiMode == .online
+        preferences.aiMode = .local
+        let persisted = SettingsStore(defaults: defaults).aiMode == .local
+        let ok = migrated && cancelled && blocked && preserved && persisted
+        print(ok ? "PICKLE_LOCAL_MODE_PASS: migration, mode cancellation, retained context, offline tunnel gate, Online preference preservation" : "PICKLE_LOCAL_MODE_FAIL")
+        return ok
     }
     private func checkBrowserBridge() async -> Bool {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pickle-bridge-test-" + UUID().uuidString)
