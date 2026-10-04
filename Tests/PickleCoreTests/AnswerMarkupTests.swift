@@ -60,5 +60,7 @@ final class AnswerMarkupTests: CheckSuite {
         guard case .result(let result) = outcome else { return fail("Expected a result") }
         expectEqual(result.text, "The problem is to design an API.")
         let prompts = await writer.prompts; expectTrue(prompts[0].system.contains("Begin directly with the answer"))
+        // The writer's formatting instruction matches what the reader renders.
+        expectTrue(prompts[0].system.contains("Light Markdown is fine")); expectTrue(prompts[0].system.contains("No HTML, tables"))
     }
 }
