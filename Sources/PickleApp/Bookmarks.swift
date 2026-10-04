@@ -68,12 +68,12 @@ struct SavedAnswersView: View {
                     if matches.isEmpty { Text(store.items.isEmpty ? "Save an answer with the bookmark button while you read." : "No matching answers.").foregroundStyle(.secondary).padding(.vertical, 30) }
                     ForEach(matches) { item in
                         GlassSection(item.source) {
-                            Text(item.answer).font(.system(size: settings.textSize, design: .rounded)).textSelection(.enabled)
+                            SelectablePassage(text: item.answer, size: settings.textSize, markdown: true, accessibilityName: "Saved answer")
                             DisclosureGroup("Original passage") { Text(item.passage).textSelection(.enabled).padding(.top, 8) }
                             HStack {
                                 Text(item.savedAt, style: .date).font(.caption).foregroundStyle(.secondary)
                                 Spacer()
-                                Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.answer, forType: .string) }
+                                Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(AnswerMarkup.plainText(item.answer), forType: .string) }
                                 Button("Remove") { store.remove(item.id) }
                             }
                         }

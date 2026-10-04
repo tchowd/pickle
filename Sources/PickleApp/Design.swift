@@ -73,25 +73,49 @@ extension ReadingAction {
 
 struct PickleActionStyle: ButtonStyle {
     var selected = false
+    /// Smaller chips for secondary actions that sit beneath an answer.
+    var compact = false
     func makeBody(configuration: Configuration) -> some View {
-        ActionFace(configuration: configuration, selected: selected)
+        ActionFace(configuration: configuration, selected: selected, compact: compact)
     }
     private struct ActionFace: View {
         let configuration: ButtonStyleConfiguration
-        let selected: Bool
+        let selected: Bool, compact: Bool
         @Environment(\.isEnabled) private var enabled
         @State private var hovered = false
         @Environment(\.themeIntensity) private var intensity
         private var accent: Color { Color(red: 0.70, green: 0.80 + intensity * 0.16, blue: 0.65 - intensity * 0.40) }
         var body: some View {
-            configuration.label.font(.system(size: 13, weight: .semibold, design: .rounded))
-                .padding(.vertical, 12).padding(.horizontal, 10)
+            let shape = RoundedRectangle(cornerRadius: compact ? 8 : 10)
+            configuration.label.font(.system(size: compact ? 12 : 13, weight: .semibold, design: .rounded))
+                .padding(.vertical, compact ? 7 : 12).padding(.horizontal, compact ? 12 : 10)
                 .foregroundStyle(selected ? picklePaper : Color(red: 0.88, green: 0.94, blue: 0.85))
-                .background(selected ? accent : (hovered ? pickleGreen.opacity(0.18) : Color.white.opacity(0.07)), in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(pickleGreen.opacity(selected ? 0.8 : hovered ? 0.5 : 0.10)))
+                .background(selected ? accent : (hovered ? pickleGreen.opacity(0.18) : Color.white.opacity(0.07)), in: shape)
+                .overlay(shape.strokeBorder(pickleGreen.opacity(selected ? 0.8 : hovered ? 0.5 : 0.10)))
                 .shadow(color: selected ? pickleGreen.opacity(0.12) : .clear, radius: 8, y: 2)
                 .opacity(!enabled ? 0.4 : configuration.isPressed ? 0.7 : 1)
                 .onHover { hovered = $0 }
+        }
+    }
+}
+
+/// Answer-check status beside an answer. Hidden when checks are turned off; warnings stay visible.
+struct QualityCaption: View {
+    let quality: QualityStatus
+    var body: some View {
+        if let label = quality.visibleLabel {
+            Label(label, systemImage: icon).font(.caption)
+                .foregroundStyle(warning ? Color(red: 0.98, green: 0.78, blue: 0.36) : .secondary)
+                .help(quality.details)
+                .accessibilityLabel("Answer check: " + label)
+        }
+    }
+    private var warning: Bool { switch quality { case .concerns, .uncertain: return true; default: return false } }
+    private var icon: String {
+        switch quality {
+        case .checked, .chartValidated: return "checkmark.seal"
+        case .concerns, .uncertain: return "exclamationmark.triangle"
+        case .notChecked: return "minus.circle"
         }
     }
 }

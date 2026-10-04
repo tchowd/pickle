@@ -18,9 +18,12 @@ import PickleCore
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, ObservableObject {
     let settings = SettingsStore(defaults: CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--preview-actions") ? UserDefaults(suiteName: "com.pickle.smoke." + UUID().uuidString)! : .standard), session = SessionStore()
     lazy var bookmarks = BookmarkStore(defaults: settings.defaults)
-    private var savedWindow: NSWindow?
+    // Native checks and previews use a throwaway file, like their throwaway preferences domain.
+    lazy var knowledge = KnowledgeBase(file: CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--preview-actions")
+        ? FileManager.default.temporaryDirectory.appendingPathComponent("pickle-smoke-" + UUID().uuidString + "/entries.json") : KnowledgeBase.defaultFile)
+    private var savedWindow: NSWindow?, knowledgeWindow: NSWindow?
     private var positioning = false
-    lazy var coordinator = RequestCoordinator(session: session, settings: settings)
+    lazy var coordinator = RequestCoordinator(session: session, settings: settings, knowledge: knowledge)
     private var statusItem: NSStatusItem!, resultPanel: ReaderPanel?, actionPanel: ActionPanel?, settingsWindow: NSWindow?
     private var browserBridge: BrowserBridge?
     private var invocation: InvocationController?
@@ -29,6 +32,31 @@ import PickleCore
     private var floatingOrigin: NSPoint?
     @Published var pinned = false
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let index = CommandLine.arguments.firstIndex(of: "--import-local-server"), CommandLine.arguments.count > index + 1 {
+            let address = CommandLine.arguments[index + 1]
+            let token = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            do {
+                try LocalAIConfiguration(address: address).validate()
+                try CredentialStore.save(token, account: "local-server:" + address)
+                settings.localAddress = address; settings.localModel = "llama3.2:1b"; settings.localSameDevice = false
+                print("Local server saved; Online mode and credentials preserved."); exit(0)
+            } catch { print("Could not save Local server settings."); exit(1) }
+        }
+        if CommandLine.arguments.contains("--local-connection-check") {
+            Task {
+                do {
+                    try coordinator.localConfiguration().validate(offline: settings.localOnly)
+                    let token = try CredentialStore.read(account: settings.localCredentialAccount)
+                    let provider = OllamaProvider(configuration: coordinator.localConfiguration(token: token))
+                    let input = RequestInput(snapshot: .init(text: "The study suggests a possible benefit, but more evidence is needed.", appName: "Fixed Local fixture", bundleID: "fixture"), action: .simplify)
+                    let outcome = try await RequestPipeline(provider: provider, localOnly: settings.localOnly).run(input)
+                    guard case .result(let result) = outcome else { throw PickleError.message("No Local answer returned.") }
+                    print("PICKLE_LOCAL_CONNECTION_PASS: Keychain configuration, local generation, \(result.model), \(result.elapsed)s. Saved mode: \(settings.aiMode.rawValue)")
+                    exit(0)
+                } catch { print("PICKLE_LOCAL_CONNECTION_FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--import-cli-credential"), CommandLine.arguments.count > index + 1 {
             let token = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
             do { try CredentialStore.save(token); settings.accountID = CommandLine.arguments[index + 1]; print("Credential imported into Keychain. OAuth tokens expire."); exit(0) }
@@ -120,7 +148,10 @@ import PickleCore
                 let pageFeatures = await self.checkPageContextFeatures()
                 let webFeatures = await self.checkWebReferenceFeatures()
                 let bridgeFeatures = await self.checkBrowserBridge()
-                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures && webFeatures && bridgeFeatures
+                let localFeatures = self.checkLocalModePreferences()
+                let knowledgeFeatures = await self.checkKnowledgeBase()
+                let draftFeatures = await self.checkStreamingDrafts()
+                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures && webFeatures && bridgeFeatures && localFeatures && knowledgeFeatures && draftFeatures
                 print(ok ? "PICKLE_SMOKE_PASS: movable action bar, anchored expansion, screen-edge clamping, remembered position, reopen, fresh sessions, saved answers, appearance persistence, and reading actions" : "PICKLE_SMOKE_FAIL")
                 if !ok { exit(1) }
                 NSApp.terminate(nil)
@@ -128,6 +159,142 @@ import PickleCore
         } else if CommandLine.arguments.contains("--preview-actions") {
             showActions(.init(text: "The treatment may reduce symptoms in some patients, but the evidence remains limited.", appName: "Pickle sample", bundleID: "sample"), automatic: false)
         } else { presentReader() }
+    }
+    /// Exercises the real commit site with a fixture writer; no network, Keychain item, or user file is touched.
+    private func checkKnowledgeBase() async -> Bool {
+        let suite = "com.pickle.knowledge-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pickle-knowledge-check-" + UUID().uuidString)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("entries.json")
+        let preferences = SettingsStore(defaults: defaults)
+        preferences.aiMode = .local; preferences.localAddress = "http://127.0.0.1:11999"; preferences.localSameDevice = true
+        preferences.localConsentServer = preferences.localConsentID; preferences.webContextEnabled = true
+        let store = KnowledgeBase(file: file), writer = KnowledgeCheckWriter(), session = SessionStore()
+        let coordinator = RequestCoordinator(session: session, settings: preferences, knowledge: store, writer: writer,
+                                             referenceFetcher: { _, _ in throw PickleError.message("Fixture makes no network requests") })
+        func settle() async { try? await Task.sleep(for: .milliseconds(200)) }
+        func until(_ condition: () -> Bool) async -> Bool {
+            for _ in 0..<60 { if condition() { return true }; try? await Task.sleep(for: .milliseconds(50)) }
+            return condition()
+        }
+        func select() {
+            // No source URL, so no reference fetch starts; the attached reference is set directly.
+            coordinator.setSelection(.init(text: "Cells release energy.", appName: "Fixture browser", bundleID: "fixture.browser"))
+            session.reference = WebReference(url: "https://example.com/cells", title: "Cell energy", text: "REFERENCE BODY TEXT")
+            session.page = CapturedPage(jpeg: Data("JPEG PIXELS".utf8), text: "OCR PAGE TEXT", capturedAt: Date(), truncated: false)
+            session.visualSummary = "VISUAL SUMMARY TEXT"
+        }
+        select(); coordinator.run(.simplify); await settle()
+        let offByDefault = !preferences.knowledgeBaseEnabled && session.result != nil && store.entries.isEmpty && !FileManager.default.fileExists(atPath: file.path)
+        preferences.knowledgeBaseEnabled = true
+        coordinator.run(.simplify); _ = await until { store.entries.count == 1 }
+        let first = store.entries.first
+        let recorded = store.entries.count == 1 && first?.action == .simplify && first?.question == nil && first?.passage == "Cells release energy."
+            && first?.answer == session.result?.text && first?.reference == .init(url: "https://example.com/cells", title: "Cell energy", kind: "article")
+        coordinator.run(.followUp, followUp: "Why does it matter?"); _ = await until { store.entries.count == 2 }
+        coordinator.explainTerm("energy"); _ = await until { store.entries.count == 3 }
+        let explainHeading = session.conversation.last?.label == "Explain ‘energy’"
+        coordinator.adjust("Rewrite the current explanation more briefly.", label: "Shorter"); _ = await until { store.entries.count == 4 }
+        let separate = store.entries.map(\.action) == [.adjustment, .explain, .followUp, .simplify]
+            && store.entries.map(\.question) == ["Shorter", "energy", "Why does it matter?", nil]
+        let headings = explainHeading && session.conversation.last?.label == "Shorter" && session.conversation.first?.label == nil
+        // Retrying a failed explain, and an adjustment queued behind page reading, keep what the user asked.
+        await writer.failNextCall()
+        coordinator.explainTerm("cells"); _ = await until { coordinator.error != nil }
+        coordinator.retry(); _ = await until { store.entries.count == 5 }
+        coordinator.pageLoading = true
+        coordinator.adjust("Give a short example.", label: "Give an example")
+        let queued = coordinator.progress != nil && store.entries.count == 5
+        coordinator.skipPage(); _ = await until { store.entries.count == 6 }
+        let carried = queued && store.entries.prefix(2).map(\.action) == [.adjustment, .explain]
+            && store.entries.prefix(2).map(\.question) == ["Give an example", "cells"]
+        let raw = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        let excluded = !raw.isEmpty && !["REFERENCE BODY TEXT", "OCR PAGE TEXT", "VISUAL SUMMARY TEXT", "JPEG PIXELS", Data("JPEG PIXELS".utf8).base64EncodedString(),
+                                          "Rewrite the current", "Explain the meaning", "fixture-model"].contains { raw.contains($0) }
+        let count = store.entries.count
+        // Cancelled, cleared and replaced sessions never append, even when the writer ignores cancellation.
+        coordinator.run(.expand); coordinator.cancel(); await settle()
+        coordinator.run(.expand); coordinator.clear(); await settle()
+        select(); coordinator.run(.expand); select(); await settle()
+        let staleIgnored = store.entries.count == count && session.result == nil
+        // Turning the switch off stops new writes, including for a request already in flight.
+        coordinator.run(.expand); preferences.knowledgeBaseEnabled = false; await settle()
+        coordinator.run(.expand); await settle()
+        let switchedOff = store.entries.count == count && session.result != nil
+        preferences.knowledgeBaseEnabled = true
+        coordinator.sample(); _ = await until { session.result != nil }; await settle()
+        let sampleSkipped = store.entries.count == count && session.result != nil
+        // Clearing keeps the log, and the log never enters a later request.
+        coordinator.clear()
+        let kept = KnowledgeBase(file: file).entries.count == count
+        coordinator.setSelection(.init(text: "A new passage.", appName: "Fixture", bundleID: "fixture"))
+        coordinator.run(.simplify); _ = await until { session.result != nil }
+        let earlier = store.entries.filter { $0.passage == "Cells release energy." }.map(\.answer)
+        let notInjected = await writer.prompts.last.map { prompt in !earlier.contains { prompt.system.contains($0) || prompt.user.contains($0) } } ?? false
+        let checks = [offByDefault, recorded, separate, headings, carried, excluded, staleIgnored, switchedOff, sampleSkipped, kept, notInjected]
+        let ok = !checks.contains(false)
+        print(ok ? "PICKLE_KNOWLEDGE_BASE_PASS: off by default, one record per answer, follow-up/explain/adjustment records and headings, retry and queued actions, pointer-only references, stale/cancelled/sample skipped, switch off, kept after clear, not injected"
+                 : "PICKLE_KNOWLEDGE_BASE_FAIL: \(checks)")
+        return ok
+    }
+    /// Streamed drafts are coalesced, the latest wins, and nothing appears after cancellation or completion.
+    private func checkStreamingDrafts() async -> Bool {
+        let suite = "com.pickle.draft-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = SettingsStore(defaults: defaults)
+        preferences.aiMode = .local; preferences.localAddress = "http://127.0.0.1:11999"; preferences.localSameDevice = true
+        preferences.localConsentServer = preferences.localConsentID
+        let session = SessionStore()
+        let coordinator = RequestCoordinator(session: session, settings: preferences, writer: DraftCheckWriter())
+        var shown: [String] = []
+        let watcher = coordinator.$draft.sink { if !$0.isEmpty { shown.append($0) } }
+        defer { watcher.cancel() }
+        coordinator.setSelection(.init(text: "Cells release energy.", appName: "Fixture", bundleID: "fixture"))
+        coordinator.run(.simplify)
+        try? await Task.sleep(for: .milliseconds(150))
+        let midStream = coordinator.draft.hasPrefix("Word") && session.result == nil
+        for _ in 0..<40 where session.result == nil { try? await Task.sleep(for: .milliseconds(50)) }
+        try? await Task.sleep(for: .milliseconds(150))
+        let completed = session.result?.text == "Final answer." && coordinator.draft.isEmpty
+        let coalesced = !shown.isEmpty && shown.count < DraftCheckWriter.drafts / 2
+        shown = []
+        coordinator.run(.expand)
+        try? await Task.sleep(for: .milliseconds(60)); coordinator.cancel()
+        let shownAtCancel = shown.count
+        try? await Task.sleep(for: .milliseconds(400))
+        let quietAfterCancel = coordinator.draft.isEmpty && shown.count == shownAtCancel && session.result?.action == .simplify
+        let ok = midStream && completed && coalesced && quietAfterCancel
+        print(ok ? "PICKLE_DRAFT_PASS: coalesced drafts, latest shown, nothing after completion or cancellation" : "PICKLE_DRAFT_FAIL: \([midStream, completed, coalesced, quietAfterCancel])")
+        return ok
+    }
+    private func checkLocalModePreferences() -> Bool {
+        let suite = "com.pickle.local-mode-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "localOnly")
+        defaults.set("@cf/meta/llama-3.2-1b-instruct", forKey: "model")
+        defaults.set(true, forKey: "jevEnabled")
+        let preferences = SettingsStore(defaults: defaults)
+        let migrated = preferences.aiMode == .local && preferences.localOnly && preferences.localModel == "llama3.2:1b"
+        preferences.aiMode = .online
+        let coordinator = RequestCoordinator(session: SessionStore(), settings: preferences)
+        coordinator.setSelection(.init(text: "Selected passage", appName: "Fixture", bundleID: "fixture"))
+        coordinator.session.context = "Keep this context"
+        coordinator.progress = "Reviewing…"; coordinator.draft = "Old draft"
+        preferences.aiMode = .local; coordinator.policyChanged()
+        let cancelled = coordinator.progress == nil && coordinator.draft.isEmpty && coordinator.session.snapshot?.text == "Selected passage" && coordinator.session.context == "Keep this context" && coordinator.session.result == nil
+        coordinator.run(.simplify)
+        let blocked = coordinator.error?.contains("Offline") == true
+        preferences.aiMode = .online; coordinator.policyChanged()
+        let restored = SettingsStore(defaults: defaults)
+        let preserved = restored.localOnly && restored.jevEnabled && restored.model == "@cf/meta/llama-3.2-1b-instruct" && restored.aiMode == .online
+        preferences.aiMode = .local
+        let persisted = SettingsStore(defaults: defaults).aiMode == .local
+        let ok = migrated && cancelled && blocked && preserved && persisted
+        print(ok ? "PICKLE_LOCAL_MODE_PASS: migration, mode cancellation, retained context, offline tunnel gate, Online preference preservation" : "PICKLE_LOCAL_MODE_FAIL")
+        return ok
     }
     private func checkBrowserBridge() async -> Bool {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pickle-bridge-test-" + UUID().uuidString)
@@ -260,7 +427,7 @@ import PickleCore
         let testCoordinator = RequestCoordinator(session: testSession, settings: preferences)
         testCoordinator.sample()
         try? await Task.sleep(for: .milliseconds(100))
-        testCoordinator.adjust("Make this shorter.")
+        testCoordinator.adjust("Make this shorter.", label: "Shorter")
         try? await Task.sleep(for: .milliseconds(100))
         let adjusted = testSession.conversation.last?.question == "Make this shorter."
         testCoordinator.explainTerm("evidence")
@@ -305,6 +472,7 @@ import PickleCore
         add("Try an example", #selector(sample))
         menu.addItem(.separator())
         add("Saved answers…", #selector(openSavedAnswers))
+        add("Knowledge base…", #selector(openKnowledgeBase))
         add("Settings…", #selector(openSettings), key: ",")
         add("Clear session", #selector(clearSession))
         add("Quit Pickle", #selector(quit), key: "q")
@@ -447,6 +615,16 @@ import PickleCore
         }
         NSApp.activate(ignoringOtherApps: true); savedWindow?.makeKeyAndOrderFront(nil)
     }
+    @objc func openKnowledgeBase() {
+        if knowledgeWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 720), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "Knowledge base"; window.isReleasedWhenClosed = false
+            window.isOpaque = false; window.backgroundColor = .clear; window.minSize = NSSize(width: 520, height: 440)
+            window.contentView = NSHostingView(rootView: KnowledgeBaseView(store: knowledge, settings: settings))
+            window.center(); knowledgeWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true); knowledgeWindow?.makeKeyAndOrderFront(nil)
+    }
     func windowShouldClose(_ sender: NSWindow) -> Bool { if sender === resultPanel { coordinator.cancel() }; return true }
     func closePanel() { coordinator.cancel(); resultPanel?.orderOut(nil); actionPanel?.orderOut(nil) }
     func togglePin() { pinned.toggle(); resultPanel?.level = pinned ? .floating : .normal; actionPanel?.level = pinned ? .floating : .normal }
@@ -474,5 +652,32 @@ import PickleCore
             window.center(); settingsWindow = window
         }
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+}
+/// Deterministic writer for the knowledge-base check. It ignores cancellation to reproduce late responses.
+private actor KnowledgeCheckWriter: GenerativeProvider {
+    nonisolated let isRemote = false
+    private(set) var prompts: [GenerationPrompt] = []
+    private var failNext = false
+    func failNextCall() { failNext = true }
+    func generate(_ prompt: GenerationPrompt) async throws -> Generation {
+        prompts.append(prompt)
+        if failNext { failNext = false; throw PickleError.message("Fixture failure") }
+        await withCheckedContinuation { continuation in DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { continuation.resume() } }
+        return Generation(text: "Answer \(prompts.count).", model: "fixture-model")
+    }
+}
+/// Streams many small drafts quickly, like a fast cloud model.
+private struct DraftCheckWriter: StreamingGenerativeProvider {
+    static let drafts = 60
+    let isRemote = false
+    func generate(_ prompt: GenerationPrompt) async throws -> Generation { Generation(text: "Final answer.", model: "fixture-model") }
+    func generate(_ prompt: GenerationPrompt, draft: @escaping DraftSink) async throws -> Generation {
+        var text = ""
+        for index in 0..<Self.drafts {
+            text += "Word\(index) "; await draft(text)
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        return Generation(text: "Final answer.", model: "fixture-model")
     }
 }

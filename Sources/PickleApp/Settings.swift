@@ -4,6 +4,29 @@ import LocalAuthentication
 import PickleCore
 
 @MainActor final class SettingsStore: ObservableObject {
+    @Published var aiMode: AIMode { didSet { aiModeRevision = UUID(); save("aiMode", aiMode.rawValue) } }
+    private(set) var aiModeRevision = UUID()
+    @Published var localAddress: String { didSet { save("localAddress", localAddress) } }
+    @Published var localModel: String { didSet { save("localModel", localModel) } }
+    @Published var localVisionModel: String { didSet { save("localVisionModel", localVisionModel) } }
+    @Published var localSameDevice: Bool { didSet { save("localSameDevice", localSameDevice) } }
+    @Published var localConsentServer: String { didSet { save("localConsentServer", localConsentServer) } }
+    var localCredentialAccount: String { "local-server:" + localAddress.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var localConsentID: String { localAddress + "|" + String(localSameDevice) }
+    var usesRossTunnel: Bool { localAddress.trimmingCharacters(in: .whitespacesAndNewlines) == "http://127.0.0.1:11436" && !localSameDevice }
+    var localComputerName: String {
+        if localSameDevice { return "this Mac" }
+        let host = URLComponents(string: localAddress.trimmingCharacters(in: .whitespacesAndNewlines))?.host ?? ""
+        if usesRossTunnel { return "Ross" }
+        return LocalAIConfiguration.loopback(host) || host.isEmpty ? "your other computer" : host
+    }
+    var aiLocationLabel: String { aiMode == .local ? "Local · " + localComputerName : "Online" }
+    var aiLocationDescription: String {
+        if aiMode == .online { return "Runs on Cloudflare. Your Local connection stays saved." }
+        if usesRossTunnel { return "Runs on Ross, your other laptop, through Tailscale. This Mac handles text capture; Ross creates the answers." }
+        return "Runs on \(localComputerName). Cloud AI stays off in Local mode."
+    }
+
     @Published var paused: Bool { didSet { save("paused", paused) } }
     @Published var accountID: String { didSet { save("accountID", accountID) } }
     @Published var model: String { didSet { save("model", model) } }
@@ -27,9 +50,11 @@ import PickleCore
     @Published var webContextEnabled: Bool { didSet { save("webContextEnabled", webContextEnabled) } }
     @Published var webContextConsent: Bool { didSet { save("webContextConsent", webContextConsent) } }
     @Published var streaming: Bool { didSet { save("streaming", streaming) } }
+    /// Off by default. Not part of requestPolicy: toggling it never cancels a request; the commit site checks it.
+    @Published var knowledgeBaseEnabled: Bool { didSet { save("knowledgeBaseEnabled", knowledgeBaseEnabled) } }
     let defaults: UserDefaults
     var requestPolicy: [String] {
-        [String(paused), accountID, model, String(jevEnabled), String(localOnly), level.rawValue,
+        [aiMode.rawValue, aiModeRevision.uuidString, localAddress, localModel, localVisionModel, String(localSameDevice), localConsentServer, String(paused), accountID, model, String(jevEnabled), String(localOnly), level.rawValue,
          exclusions, String(cloudConsent), String(jevConsent), String(screenContextEnabled), String(screenContextConsent), String(webContextEnabled), String(webContextConsent)]
     }
     var floatingFrame: NSRect? {
@@ -46,6 +71,12 @@ import PickleCore
     }
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        aiMode = AIMode(rawValue: defaults.string(forKey: "aiMode") ?? "") ?? .local
+        localAddress = defaults.string(forKey: "localAddress") ?? "http://127.0.0.1:11434"
+        localModel = defaults.string(forKey: "localModel") ?? "llama3.2:1b"
+        localVisionModel = defaults.string(forKey: "localVisionModel") ?? ""
+        localSameDevice = defaults.bool(forKey: "localSameDevice")
+        localConsentServer = defaults.string(forKey: "localConsentServer") ?? ""
         webContextEnabled = defaults.bool(forKey: "webContextEnabled")
         webContextConsent = defaults.bool(forKey: "webContextConsent")
         screenContextEnabled = defaults.object(forKey: "screenContextEnabled") as? Bool ?? true
@@ -54,6 +85,7 @@ import PickleCore
         glassOpacity = min(1, max(0, defaults.object(forKey: "glassOpacity") as? Double ?? 0.12))
         themeIntensity = min(1, max(0, defaults.object(forKey: "themeIntensity") as? Double ?? 1))
         streaming = defaults.object(forKey: "streaming") as? Bool ?? true
+        knowledgeBaseEnabled = defaults.bool(forKey: "knowledgeBaseEnabled")
         paused = defaults.bool(forKey: "paused")
         accountID = defaults.string(forKey: "accountID") ?? ""
         model = defaults.string(forKey: "model") ?? CloudflareProvider.defaultModel
@@ -72,9 +104,9 @@ import PickleCore
 }
 struct CredentialStore {
     static let service = "com.pickle.reader.credentials"
-    static func read(interactive: Bool = false) throws -> String {
+    static func read(interactive: Bool = false, account: String = "cloudflare") throws -> String {
         let authentication = LAContext(); authentication.interactionNotAllowed = !interactive
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "cloudflare", kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne, kSecUseAuthenticationContext as String: authentication]
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne, kSecUseAuthenticationContext as String: authentication]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return "" }
@@ -82,8 +114,8 @@ struct CredentialStore {
         guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else { throw PickleError.message("Keychain could not read the Cloudflare credential (\(status)).") }
         return token
     }
-    static func save(_ token: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "cloudflare"]
+    static func save(_ token: String, account: String = "cloudflare") throws {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
         if token.isEmpty { let status = SecItemDelete(query as CFDictionary); guard status == errSecSuccess || status == errSecItemNotFound else { throw PickleError.message("Could not remove the credential (\(status)).") }; return }
         let value = [kSecValueData as String: Data(token.utf8)]
         var status = SecItemUpdate(query as CFDictionary, value as CFDictionary)

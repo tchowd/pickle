@@ -24,10 +24,12 @@ struct PageContextView: View {
                     if !session.visualSummary.isEmpty {
                         DisclosureGroup("Visual context ready") { Text(session.visualSummary).font(.caption).textSelection(.enabled) }
                         Text("This AI summary is reused for follow-ups. It may misread visual details.").font(.caption).foregroundStyle(.secondary)
+                    } else if settings.aiMode == .local && settings.localVisionModel.isEmpty {
+                        Text("Visual analysis is unavailable in Local mode until you configure a local vision model. Text extraction still works.").font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text("For charts or diagrams, Analyze visuals sends this screenshot and selection to Cloudflare once. It may incur a model charge. Your account must have the vision model enabled.").font(.caption).foregroundStyle(.secondary)
-                        Button(coordinator.visualBusy ? "Analyzing visuals…" : "Analyze visuals with Cloudflare", action: coordinator.analyzeVisuals)
-                            .disabled(coordinator.visualBusy || coordinator.progress != nil || settings.localOnly || settings.paused)
+                        Text(settings.aiMode == .local ? "Analyze visuals sends this image once to your configured Local vision model. It does not use Cloudflare." : "For charts or diagrams, Analyze visuals sends this screenshot and selection to Cloudflare once. It may incur a model charge. Your account must have the vision model enabled.").font(.caption).foregroundStyle(.secondary)
+                        Button(coordinator.visualBusy ? "Analyzing visuals…" : (settings.aiMode == .local ? "Analyze visuals locally" : "Analyze visuals with Cloudflare"), action: coordinator.analyzeVisuals)
+                            .disabled(coordinator.visualBusy || coordinator.progress != nil || (settings.localOnly && (settings.aiMode == .online || !settings.localSameDevice)) || settings.paused)
                     }
                     HStack {
                         Text(page.capturedAt, style: .time).font(.caption).foregroundStyle(.secondary)

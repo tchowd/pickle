@@ -13,8 +13,27 @@ import PickleCore
     func clear() { reference = nil; captureTarget = nil; snapshot = nil; result = nil; conversation = []; context = ""; page = nil; visualSummary = "" }
 }
 @MainActor final class RequestCoordinator: ObservableObject {
+    /// What the user asked for, as the knowledge base records it. Pickle's own instructions are never stored.
+    struct Ask {
+        let action: KnowledgeEntry.Action, question: String?
+        /// The follow-up heading the reader shows instead of Pickle's instruction text.
+        var heading: String? {
+            switch action {
+            case .adjustment: return question
+            case .explain: return question.map { "Explain ‘\($0)’" }
+            default: return nil
+            }
+        }
+    }
+    @Published var localConnectionStatus = "Not tested"
+    @Published var localModels: [String] = []
+    private var localCheckTask: Task<Void, Never>?
+    @Published var contextNotice: String?
+    private var lastMode: AIMode?
     @Published var progress: String?
     @Published var draft = ""
+    private var pendingDraft: String?
+    private var draftFlush: Task<Void, Never>?
     @Published var listening = false
     private var audioTask: Task<Void, Never>?
     private var audioService: AudioContextService?
@@ -49,12 +68,17 @@ import PickleCore
     let metrics = ContentFreeMetrics()
     private var lastQuestion = "", lastLimited = false
     private var lastChart: ChartKind?
+    private var lastAsk: Ask?
     private var credential: String?
-    init(session: SessionStore, settings: SettingsStore, referenceFetcher: @escaping @MainActor (String, String) async throws -> WebReference = { try await WebReferenceService.fetch($0, selection: $1) }) {
-        self.session = session; self.settings = settings; self.referenceFetcher = referenceFetcher
+    let knowledge: KnowledgeBase?
+    /// Test seam for native checks; production builds its provider per request.
+    private let writer: (any GenerativeProvider)?
+    init(session: SessionStore, settings: SettingsStore, knowledge: KnowledgeBase? = nil, writer: (any GenerativeProvider)? = nil, referenceFetcher: @escaping @MainActor (String, String) async throws -> WebReference = { try await WebReferenceService.fetch($0, selection: $1) }) {
+        self.session = session; self.settings = settings; self.lastMode = settings.aiMode; self.referenceFetcher = referenceFetcher
+        self.knowledge = knowledge; self.writer = writer
     }
-    func cancel() { stopListening(); queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; draft = ""; credential = nil }
-    func clear() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil; pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; pendingAction = .simplify }
+    func cancel() { stopListening(); queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; dropPendingDraft(); draft = ""; credential = nil }
+    func clear() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil; pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; lastAsk = nil; pendingAction = .simplify }
     func setSelection(_ snapshot: SelectionSnapshot) { clear(); session.snapshot = snapshot; captureReference() }
     func capturePage(_ target: ScreenContextTarget?) {
         session.captureTarget = target
@@ -100,24 +124,32 @@ import PickleCore
         pageLoading = false; pageStatus = nil; session.page = nil; session.visualSummary = ""
     }
     func analyzeVisuals() {
-        guard !settings.paused, !settings.localOnly, settings.screenContextEnabled,
+        guard !settings.paused, settings.screenContextEnabled,
               progress == nil, !visualBusy, let snapshot = session.snapshot, !settings.isExcluded(snapshot.bundleID),
               let page = session.page, session.visualSummary.isEmpty else { return }
-        // The upload is explicit in the preview button; no image is sent by ordinary actions.
+        let local = settings.aiMode == .local
+        if local {
+            guard !settings.localVisionModel.isEmpty else { error = "Local visual analysis is not configured. Screenshot text is still available."; return }
+            do { try localConfiguration(vision: true).validate(offline: settings.localOnly) } catch { self.error = error.localizedDescription; return }
+        } else if settings.localOnly { error = "Offline mode blocks cloud visual analysis."; return }
+        // Explicit image upload; ordinary reading actions use only text.
         let token: String
-        do { token = try CredentialStore.read() } catch { self.error = error.localizedDescription; return }
-        guard !token.isEmpty else { error = "Connect your account in Settings first."; return }
+        do { token = try CredentialStore.read(account: local ? settings.localCredentialAccount : "cloudflare") } catch { self.error = error.localizedDescription; return }
+        guard local || !token.isEmpty else { error = "Connect your account in Settings first."; return }
+        let localConfig = localConfiguration(token: token, vision: true)
         visualGeneration = UUID(); let generation = visualGeneration
         visualBusy = true; error = nil
         visualTask = Task { [weak self] in
             do {
-                let summary = try await VisualContextClient(accountID: self?.settings.accountID ?? "", token: token).summarize(jpeg: page.jpeg, selection: snapshot.text)
+                let summary: String
+                if local { summary = try await OllamaProvider(configuration: localConfig).summarize(jpeg: page.jpeg, selection: snapshot.text) }
+                else { summary = try await VisualContextClient(accountID: self?.settings.accountID ?? "", token: token).summarize(jpeg: page.jpeg, selection: snapshot.text) }
                 guard let self, !Task.isCancelled, self.visualGeneration == generation, self.session.page?.id == page.id, self.session.snapshot?.id == snapshot.id else { return }
                 self.session.visualSummary = summary; self.visualBusy = false
             } catch {
                 guard let self, !Task.isCancelled, self.visualGeneration == generation else { return }
                 self.visualBusy = false
-                self.error = "Couldn’t analyze the image. Check that the vision model is enabled in your Cloudflare account. Page text remains available."
+                self.error = local ? ((error as? PickleError)?.localizedDescription ?? "Local visual analysis failed. Page text remains available.") : "Couldn’t analyze the image. Check that the vision model is enabled in your Cloudflare account. Page text remains available."
             }
         }
     }
@@ -208,69 +240,91 @@ import PickleCore
     func sample() {
         setSelection(.init(text: "The treatment may reduce symptoms in some patients, but the evidence remains limited.", appName: "Pickle sample", bundleID: "sample", method: "Bundled sample")); isSample = true; run(.simplify)
     }
-    func adjust(_ instruction: String) {
-        run(.followUp, followUp: instruction)
+    func adjust(_ instruction: String, label: String) {
+        run(.followUp, followUp: instruction, ask: Ask(action: .adjustment, question: label))
     }
     func explainTerm(_ term: String) {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty, term.count <= 150 else { error = "Choose a word or short phrase to explain."; return }
         guard let snapshot = session.snapshot else { return }
-        let available = snapshot.text + "\n" + (session.result?.text ?? "") + "\n" + session.conversation.map(\.answer).joined(separator: "\n")
-        guard available.localizedCaseInsensitiveContains(term) else { error = "Choose a word or phrase from the passage or answer."; return }
-        run(.followUp, followUp: "Explain the meaning of ‘\(term)’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings.")
+        // Answers display without Markdown syntax, so match their rendered words with whitespace folded.
+        let answers = [session.result?.text ?? ""] + session.conversation.map(\.answer)
+        let available = ([snapshot.text] + answers + answers.map(AnswerMarkup.plainText)).joined(separator: "\n")
+        func folded(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        guard folded(available).localizedCaseInsensitiveContains(folded(term)) else { error = "Choose a word or phrase from the passage or answer."; return }
+        run(.followUp, followUp: "Explain the meaning of ‘\(term)’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings.", ask: Ask(action: .explain, question: term))
     }
-    func retry() { run(pendingAction, limited: lastLimited, chart: lastChart, followUp: lastQuestion) }
-    func run(_ action: ReadingAction, limited: Bool = false, chart: ChartKind? = nil, followUp: String = "") {
+    func retry() { run(pendingAction, limited: lastLimited, chart: lastChart, followUp: lastQuestion, ask: lastAsk) }
+    func continueLimited() { run(pendingAction, limited: true, chart: lastChart, followUp: lastQuestion, ask: lastAsk) }
+    func run(_ action: ReadingAction, limited: Bool = false, chart: ChartKind? = nil, followUp: String = "", ask: Ask? = nil) {
         guard !listening else { error = "Finish listening or cancel the recording first."; return }
         guard !visualBusy else { error = "Wait for visual context, or remove it to continue."; return }
-        cancel(); error = nil; needsContext = nil; needsChart = false
+        cancel(); error = nil; contextNotice = nil; needsContext = nil; needsChart = false
         guard !settings.paused else { error = "Pickle is paused. Resume from the menu bar."; return }
         guard let snapshot = session.snapshot else { error = "Select or paste a passage first."; return }
         guard !settings.isExcluded(snapshot.bundleID) else { error = "This source application is excluded."; return }
         if action == .followUp && session.conversation.count >= Limits.turns { error = "This conversation has reached six follow-ups. Clear follow-ups to keep reading with the same selection."; return }
-        pendingAction = action; lastLimited = limited; lastChart = chart; lastQuestion = followUp
+        let ask = ask ?? Self.ask(for: action, question: followUp)
+        pendingAction = action; lastLimited = limited; lastChart = chart; lastQuestion = followUp; lastAsk = ask
         if pageLoading || referenceLoading {
             progress = "Reading page…"
             let id = snapshot.id
             queuedPageAction = { [weak self] in
                 guard let self, self.session.snapshot?.id == id else { return }
-                self.run(action, limited: limited, chart: chart, followUp: followUp)
+                self.run(action, limited: limited, chart: chart, followUp: followUp, ask: ask)
             }
             return
         }
+        let isLocal = settings.aiMode == .local && !isSample
         if !isSample {
-            guard !settings.localOnly else { error = "Online explanations are turned off. Try an example, or enable them in Settings."; return }
-            guard settings.cloudConsent, !settings.jevEnabled || settings.jevConsent, session.page == nil || settings.screenContextConsent, session.reference == nil || settings.webContextConsent else { needsDisclosure = true; return }
+            if isLocal {
+                do { try localConfiguration().validate(offline: settings.localOnly) } catch { self.error = error.localizedDescription; return }
+                guard settings.localConsentServer == settings.localConsentID else { needsDisclosure = true; return }
+            } else {
+                guard !settings.localOnly else { error = "Offline mode blocks Online AI. Choose Local on this Mac, or turn off offline mode."; return }
+                guard settings.cloudConsent, !settings.jevEnabled || settings.jevConsent, session.page == nil || settings.screenContextConsent, session.reference == nil || settings.webContextConsent else { needsDisclosure = true; return }
+            }
         }
         let token: String
-        do { token = isSample ? "" : try CredentialStore.read(); credential = token }
+        do { token = isSample ? "" : try CredentialStore.read(account: isLocal ? settings.localCredentialAccount : "cloudflare"); credential = token }
         catch { self.error = error.localizedDescription; return }
-        guard isSample || !token.isEmpty else { error = "Add your Cloudflare API token in Settings."; return }
+        guard isSample || isLocal || !token.isEmpty else { error = "Add your Cloudflare API token in Settings."; return }
         let input = RequestInput(snapshot: snapshot, action: action, context: session.context, level: settings.level, limited: limited, chartChoice: chart, question: followUp, previousResult: action == .followUp ? (session.conversation.last?.answer ?? session.result?.text ?? "") : "", conversation: action == .followUp ? session.conversation : [], pageContext: settings.screenContextEnabled ? session.page?.text ?? "" : "", visualContext: settings.screenContextEnabled ? session.visualSummary : "", reference: session.reference)
         do { try input.validate() } catch { self.error = error.localizedDescription; return }
-        let provider: any GenerativeProvider = isSample ? SampleProvider() : CloudflareProvider(accountID: settings.accountID, token: token, model: settings.model)
-        let evaluator: (any DecisionClient)? = settings.jevEnabled && !isSample ? JevClient(accountID: settings.accountID, token: token) : nil
+        let provider: any GenerativeProvider
+        if isSample { provider = SampleProvider() }
+        else if let writer { provider = writer }
+        else if isLocal { provider = OllamaProvider(configuration: localConfiguration(token: token)) }
+        else { provider = CloudflareProvider(accountID: settings.accountID, token: token, model: settings.model) }
+        contextNotice = isLocal ? "Local uses your selection and relevant context excerpts." : nil
+        let evaluator: (any DecisionClient)? = settings.jevEnabled && !isSample && !isLocal ? JevClient(accountID: settings.accountID, token: token) : nil
         let metrics = self.metrics
         let pipeline = RequestPipeline(provider: provider, evaluator: evaluator, localOnly: settings.localOnly || isSample, metrics: { event in Task { await metrics.record(event) } })
         progress = "Preparing…"
+        let policyAtStart = settings.requestPolicy
+        let recordAtStart = knowledge != nil && settings.knowledgeBaseEnabled && !isSample
         let draftHandler: (@MainActor (String) -> Void)?
-        if settings.streaming { draftHandler = { [weak self] text in self?.draft = text } }
+        if settings.streaming { draftHandler = { [weak self] text in guard let self, self.settings.requestPolicy == policyAtStart else { return }; self.showDraft(text) } }
         else { draftHandler = nil }
-        runner.start(pipeline: pipeline, input: input, draft: draftHandler, progress: { [weak self] message in self?.progress = message }) { [weak self] outcome in
-            guard let self else { return }
-            self.progress = nil; self.draft = ""; self.credential = nil
+        runner.start(pipeline: pipeline, input: input, draft: draftHandler, progress: { [weak self] message in guard let self, self.settings.requestPolicy == policyAtStart else { return }; self.progress = message }) { [weak self] outcome in
+            guard let self, self.settings.requestPolicy == policyAtStart else { return }
+            self.progress = nil; self.dropPendingDraft(); self.draft = ""; self.credential = nil
             switch outcome {
             case .success(let outcome):
                 switch outcome {
                 case .needsContext(let flags): self.needsContext = flags
                 case .chooseChart: self.needsChart = true
                 case .result(let result):
+                    if let timing = result.timing {
+                        self.localConnectionStatus = String(format: "Ready · model load %.2fs · generation %.2fs", timing.loadSeconds, timing.generationSeconds)
+                    }
                     if action == .followUp {
-                        self.session.conversation.append(.init(question: followUp, answer: result.text, quality: result.quality)); self.question = ""
+                        self.session.conversation.append(.init(question: followUp, answer: result.text, quality: result.quality, label: ask.heading)); self.question = ""
                         while self.session.conversation.reduce(0, { $0 + $1.question.utf8.count + $1.answer.utf8.count }) > Limits.conversationBytes {
                             self.session.conversation.removeFirst()
                         }
                     } else { self.session.result = result; self.session.conversation = [] }
+                    if recordAtStart { self.record(result, input: input, ask: ask) }
                     if let model = result.evaluatorModel { self.jevStatus = "Last response: \(model) via Cloudflare" }
                 }
             case .failure(let error):
@@ -279,7 +333,71 @@ import PickleCore
             }
         }
     }
+    /// The single knowledge-base write, after the stale-result gates. Drafts, failures, cancelled and stale
+    /// results, and samples never reach it. The log is never read back into a request.
+    private func record(_ result: ReadingResult, input: RequestInput, ask: Ask) {
+        // A chart action without a chart is Pickle's fixed refusal, not an answer.
+        guard let knowledge, settings.knowledgeBaseEnabled, !isSample, result.action != .chart || result.chart != nil else { return }
+        knowledge.append(KnowledgeEntry(input: input, result: result, action: ask.action, question: ask.question))
+    }
+    private static func ask(for action: ReadingAction, question: String) -> Ask {
+        switch action {
+        case .simplify: return Ask(action: .simplify, question: nil)
+        case .expand: return Ask(action: .expand, question: nil)
+        case .chart: return Ask(action: .chart, question: nil)
+        case .followUp: return Ask(action: .followUp, question: question)
+        }
+    }
+    /// Drafts arrive per token, and re-rendering a long formatted answer that often stalls the main thread.
+    /// Show at most one draft per interval; the latest always wins, and cancel or completion drops it.
+    private func showDraft(_ text: String) {
+        pendingDraft = text
+        guard draftFlush == nil else { return }
+        draftFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let self, !Task.isCancelled else { return }
+            self.draftFlush = nil
+            if let text = self.pendingDraft { self.pendingDraft = nil; self.draft = text }
+        }
+    }
+    private func dropPendingDraft() { draftFlush?.cancel(); draftFlush = nil; pendingDraft = nil }
+    func localConfiguration(token: String = "", vision: Bool = false) -> LocalAIConfiguration {
+        LocalAIConfiguration(address: settings.localAddress.trimmingCharacters(in: .whitespacesAndNewlines), model: vision ? settings.localVisionModel : settings.localModel, token: token, sameDevice: settings.localSameDevice)
+    }
+    func reconnectRoss() {
+        // Explicit user action; the tunnel does not retry a sleeping server indefinitely.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["kickstart", "-k", "gui/\(getuid())/com.pickle.ross-tunnel"]
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        do { try process.run(); localConnectionStatus = "Reconnecting to Ross. Test the connection in a moment." }
+        catch { localConnectionStatus = "Couldn’t start the Ross connection. Check the tunnel setup." }
+    }
+    func testLocalConnection() {
+        localCheckTask?.cancel(); localConnectionStatus = "Connecting…"
+        let identity = settings.localConsentID + settings.localModel
+        localCheckTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try self.localConfiguration().validate(offline: self.settings.localOnly)
+                let token = try CredentialStore.read(account: self.settings.localCredentialAccount)
+                let provider = OllamaProvider(configuration: self.localConfiguration(token: token))
+                let models = try await provider.installedModels()
+                try await provider.verifyModel()
+                guard !Task.isCancelled, identity == self.settings.localConsentID + self.settings.localModel else { return }
+                self.localModels = models; self.localConnectionStatus = "Connected · " + self.settings.localModel
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.localConnectionStatus = (error as? PickleError)?.localizedDescription ?? "Can’t reach the Local server. Check the address and connection."
+            }
+        }
+    }
     func policyChanged() {
+        localCheckTask?.cancel()
+        if lastMode != settings.aiMode {
+            cancel(); needsDisclosure = false; needsContext = nil; needsChart = false; error = nil; contextNotice = nil
+            lastMode = settings.aiMode
+        }
         // Any settings edit invalidates an in-flight request; no stale consent or provider configuration.
         if progress != nil { cancel(); error = "Settings changed. Run the action again with your updated preferences." }
         if visualBusy || listening { cancel() }

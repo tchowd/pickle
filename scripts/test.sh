@@ -4,5 +4,6 @@ cd "$(dirname "$0")/.."
 swift run PickleChecks
 node Tests/BrowserExtensionTests/extract.test.js
 python3 Tests/BrowserExtensionTests/host_test.py
+python3 scripts/local-ai/test_gateway.py
 ./scripts/build-app.sh
 ./dist/Pickle.app/Contents/MacOS/Pickle --smoke-test

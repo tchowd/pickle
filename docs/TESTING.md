@@ -7,7 +7,11 @@ Environment: macOS 26.6 (25G72), Apple Silicon, Swift 6.3 Command Line Tools. Pi
 | Check | Result | Evidence / limit |
 |---|---|---|
 | Native app compilation and ad-hoc bundle | Passed | `scripts/build-app.sh` |
-| Deterministic automated checks | 46 passed, zero failures | `swift run PickleChecks` |
+| Deterministic automated checks | 75 passed, zero failures | `swift run PickleChecks`; [latest run](evidence/deterministic-checks.txt) |
+| Knowledge base commit site (native) | Passed with a fixture writer | Off by default; one record per answer, follow-up, explain and adjustment; pointer-only references; stale, cancelled, replaced and sample runs skipped; switch off mid-request; kept after clear; never added to later prompts; retried and queued actions keep what the user asked |
+| Knowledge base store | Passed | Round trip, owner-only file, duplicates, search, capacity, failed writes, two running copies, damaged file preserved and recovered |
+| Streamed draft coalescing (native) | Passed with a fast streaming fixture | At most one render per 80 ms; nothing appears after completion or cancellation |
+| Answer formatting, layout and knowledge base window | Offscreen render reviewed | Markdown typography, text/adjustment-row spacing under SwiftUI's trial widths, window filled and damaged states, check captions; not yet reviewed in the running app |
 | Native offline app smoke and reopen | Passed | Generates a sample, hides the panel, invokes reopen, and verifies the same session is visible |
 | SwiftUI/AppKit UI inspection | Passed for sample, manual paste, disclosure, settings | Real native Accessibility tree and screenshot inspected |
 | Native Cloudflare Simplify | Passed | Public treatment sample, resolved model `@cf/meta/llama-3.3-70b-instruct-sd`, 1.5s observed; uncertainty/scope retained |

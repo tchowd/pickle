@@ -23,7 +23,7 @@ swift run PickleChecks
 ./scripts/test.sh
 ```
 
-The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 58 checks, plus native window, persistence, and reading-action smoke checks.
+The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 75 checks, plus native window, persistence, reading-action, knowledge-base, and streamed-draft smoke checks.
 
 ## Set up selection capture
 
@@ -94,7 +94,7 @@ Do not rerun it merely to confirm the known unpaid Jev state. Read [the actual s
 - **Cross-app compatibility:** Accessibility permission and selection testing in a browser and a native app are pending; see the [test matrix](docs/TESTING.md). No universal app support claim.
 - **Polish validation:** fast/reverse/multiline highlighting, keyboard-only VoiceOver audit, multiple monitors, full-screen spaces, permission revocation, and long-running network stress tests need real-device coverage.
 - **Distribution:** Developer ID signing, notarization, universal Intel build verification, app icon, installer, and auto-update are deferred. The current app is locally ad-hoc signed.
-- **Optional features:** local AI providers, automatic persistent history and arbitrary graph layouts are not included. Explicit local bookmarks and prose streaming are supported.
+- **Optional features:** arbitrary graph layouts are not included. Explicit local bookmarks, an opt-in local knowledge base, and prose streaming are supported.
 - **Bar parsing:** intentionally conservative explicit currency/percentage and a small unit whitelist. Dates, unitless numbers, implicit units, conversions, locale-specific decimal formats, and illustrative quantities are not supported.
 
 [Architecture and policies](docs/ARCHITECTURE.md) · [Provider verification](docs/PROVIDERS.md) · [Testing and evaluation](docs/TESTING.md) · [Packaging](docs/DISTRIBUTION.md)
@@ -128,6 +128,7 @@ On September 18, the user funded AI Gateway and browser review confirmed $10.00 
 - **Explain a word:** Select a word or short phrase in the original passage or an answer, right-click, and choose **Explain selection in context**. The **Explain a word** button provides an alternative for keyboard use. Pickle uses the supplied passage, conversation, and available page context.
 - **Resize:** Drag the lower-right corner of the expanded panel. Size and placement persist across launches. Compact actions stay compact; expansion uses the remembered reading size and stays within the screen.
 - **Save:** The bookmark beside an answer saves that answer and its passage on this Mac. Open the header bookmark or **Saved answers…** in the menu bar to search, copy, or remove entries. Saving is explicit; Control + Option still clears the working session. The local library holds up to 200 answers and is separate from cloud credentials.
+- **Knowledge base:** Off by default. **Settings → Privacy → Knowledge base** records each completed answer (including every follow-up, adjustment, and explained word) with its passage, your question, the source app, the answer-check label shown with it, and, when a page or video reference was attached, only its URL, title, and type. Screenshots, page text, visual summaries, audio, reference bodies, prompts, and credentials are never written. Open **Knowledge base…** from the menu bar to search, copy, or delete entries; browsing never reloads the reader or sends a request, and entries are never added to later prompts. The file is `~/Library/Application Support/Pickle/KnowledgeBase/entries.json`, readable only by you, capped at 1,000 entries, and included in Time Machine backups like other Application Support data. While it is on, the reader footer shows **Knowledge base on**. Turning the switch off stops recording and keeps existing entries; clearing a session does not delete them. If the file is damaged, Pickle leaves it untouched and records nothing; **Show file in Finder** lets you move it aside, then **Try again**.
 - **Appearance:** Settings → Appearance controls reading text size (14–24 pt), background opacity, and pickle-theme intensity. Changes preview immediately without cancelling a reading request.
 - **Streaming:** Prose arrives incrementally using Cloudflare's SSE responses. Settings → Reading → Show answers as they arrive can disable streaming for models without support. Charts stay buffered until validated; drafts are temporary and may be revised by answer checks. Interrupted or oversized streams fail instead of becoming completed answers. See [Cloudflare's streaming API description](https://blog.cloudflare.com/workers-ai-streaming/).
 
@@ -151,4 +152,12 @@ For loaded pages and captions, use **Connect browser extension** in the same set
 
 **Listen for 30 seconds** provides an explicit, local audio-transcription fallback when a source window is known. It needs macOS permissions and an available on-device speech recognizer. It records source-app audio from the moment you start, including other playing tabs in that app, and writes no audio file.
 
-Verification includes 58 core checks, caption/extension fixtures, native-host framing, isolated HTML parsing, source cleanup and late-result rejection, and a real authenticated loopback bridge test. A public HTTPS fetch of example.com and article extraction passed. Live browser-extension installation, site compatibility, caption extraction on real videos, and microphone-free source-audio capture remain unverified on-device. No private page, real audio, or live AI request was used for validation.
+Verification includes the core checks, caption/extension fixtures, native-host framing, isolated HTML parsing, source cleanup and late-result rejection, and a real authenticated loopback bridge test. A public HTTPS fetch of example.com and article extraction passed. Live browser-extension installation, site compatibility, caption extraction on real videos, and microphone-free source-audio capture remain unverified on-device. No private page, real audio, or live AI request was used for validation.
+
+## Local AI
+
+Local is the default. Change AI mode in **Settings → Connection → AI location**; the reader header shows the current location without a mode switch. The configured Local server runs `llama3.2:1b` on Ross through a private SSH connection over Tailscale. Online settings and credentials are preserved; your chosen mode is remembered. Local does not call Cloudflare, cloud chart models, or Jev and never silently falls back.
+
+Local supports streaming explanations, follow-ups, OCR/page/transcript context and locally validated charts. The current small model passed a bar-chart fixture but failed a flow fixture and made one prose meaning error. Strict offline remains a separate restriction; it blocks the Ross tunnel. No local vision model is configured.
+
+See [Local AI behavior, measured performance and limitations](docs/LOCAL-AI.md) and [deployment details](scripts/local-ai/README.md). The current connection was verified using the packaged app and Keychain configuration. Tailscale Serve itself is pending tailnet enablement; the SSH route works now.

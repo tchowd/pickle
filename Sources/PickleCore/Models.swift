@@ -27,7 +27,9 @@ public struct SelectionSnapshot: Identifiable, Codable, Sendable, Equatable {
 public struct ConversationTurn: Identifiable, Sendable {
     public let id = UUID()
     public let question: String, answer: String, quality: QualityStatus
-    public init(question: String, answer: String, quality: QualityStatus) { self.question = question; self.answer = answer; self.quality = quality }
+    /// The reader's heading when the question is Pickle's own instruction; prompts always use `question`.
+    public let label: String?
+    public init(question: String, answer: String, quality: QualityStatus, label: String? = nil) { self.question = question; self.answer = answer; self.quality = quality; self.label = label }
 }
 public enum QualityStatus: Equatable, Sendable {
     case checked, concerns([String]), uncertain, notChecked(String), chartValidated
@@ -39,6 +41,13 @@ public enum QualityStatus: Equatable, Sendable {
         case .notChecked(let reason): return "Semantic checks not performed · \(reason)"
         case .chartValidated: return "Chart structure and source evidence checked"
         }
+    }
+    /// Reasons meaning checks were deliberately off, rather than expected and unavailable.
+    public static let checksOff = "Jev disabled", offline = "local-only mode"
+    /// The label shown with an answer: whenever checks ran or were expected, and never when they are turned off.
+    public var visibleLabel: String? {
+        if case .notChecked(let reason) = self, reason == Self.checksOff || reason == Self.offline { return nil }
+        return label
     }
     public var details: String {
         switch self {
@@ -52,8 +61,9 @@ public struct ReadingResult: Identifiable, Sendable {
     public let action: ReadingAction, text: String, chart: ValidatedChart?, quality: QualityStatus
     public let model: String, evaluatorModel: String?, elapsed: Double, repairs: Int
     public let notes: [String]
-    public init(action: ReadingAction, text: String, chart: ValidatedChart? = nil, quality: QualityStatus, model: String, evaluatorModel: String? = nil, elapsed: Double = 0, repairs: Int = 0, notes: [String] = []) {
-        self.action = action; self.text = text; self.chart = chart; self.quality = quality; self.model = model; self.evaluatorModel = evaluatorModel; self.elapsed = elapsed; self.repairs = repairs; self.notes = notes
+    public let timing: LocalGenerationTiming?
+    public init(action: ReadingAction, text: String, chart: ValidatedChart? = nil, quality: QualityStatus, model: String, evaluatorModel: String? = nil, elapsed: Double = 0, repairs: Int = 0, notes: [String] = [], timing: LocalGenerationTiming? = nil) {
+        self.action = action; self.text = text; self.chart = chart; self.quality = quality; self.model = model; self.evaluatorModel = evaluatorModel; self.elapsed = elapsed; self.repairs = repairs; self.notes = notes; self.timing = timing
     }
 }
 public struct RequestInput: Sendable {
@@ -92,18 +102,23 @@ public struct Usage: Codable, Sendable {
 }
 public struct Generation: Sendable {
     public let text: String, model: String, usage: Usage?
-    public init(text: String, model: String, usage: Usage? = nil) { self.text = text; self.model = model; self.usage = usage }
+    public let timing: LocalGenerationTiming?
+    public init(text: String, model: String, usage: Usage? = nil, timing: LocalGenerationTiming? = nil) { self.text = text; self.model = model; self.usage = usage; self.timing = timing }
 }
 public struct GenerationPrompt: Sendable {
     public let system: String, user: String, structured: Bool
     public let schemaJSON: String?
-    public init(system: String, user: String, structured: Bool, schemaJSON: String? = nil) { self.system = system; self.user = user; self.structured = structured; self.schemaJSON = schemaJSON }
+    public let localInput: RequestInput?
+    public init(system: String, user: String, structured: Bool, schemaJSON: String? = nil, localInput: RequestInput? = nil) { self.system = system; self.user = user; self.structured = structured; self.schemaJSON = schemaJSON; self.localInput = localInput }
 }
 public protocol GenerativeProvider: Sendable {
     var isRemote: Bool { get }
+    var permitsCloudChecks: Bool { get }
     func generate(_ prompt: GenerationPrompt) async throws -> Generation
 }
 public enum MetricEvent: Sendable {
     case generation(Usage?), evaluation(Usage?), repair, cancelled, failure, route(ChartKind?), completed(Double)
 }
 public typealias MetricSink = @Sendable (MetricEvent) -> Void
+
+public extension GenerativeProvider { var permitsCloudChecks: Bool { true } }
