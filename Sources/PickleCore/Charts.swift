@@ -25,6 +25,18 @@ public enum ResultValidator {
     public static func prose(_ text: String) throws {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= Limits.output else { throw PickleError.message("The generated result was empty or too long. Try a shorter passage.") }
     }
+    /// Drops an opening line that only announces the answer, such as "Here is a simplified explanation of the passage:".
+    /// Lead-ins that carry content ("Here are the three causes:") and single-line answers are kept.
+    public static func withoutPreamble(_ text: String) -> String {
+        let body = text.drop { $0.isWhitespace }
+        guard let end = body.firstIndex(where: \.isNewline) else { return text }
+        let line = body[..<end].trimmingCharacters(in: CharacterSet(charactersIn: "*_#> \t"))
+        let rest = body[end...].drop { $0.isWhitespace }
+        let announcement = #"^(?:(?:sure|certainly|of course|okay|ok|absolutely)[,.!]?\s+)?(?:here(?:'s|’s|\s+is|\s+are)|below\s+is|the\s+following\s+is)\b.*\b(?:explanation|version|summary|simplification|breakdown|rewrite|overview|answer|response|example)s?\b"#
+        guard !rest.isEmpty, line.count <= 200, line.hasSuffix(":"),
+              line.range(of: announcement, options: [.regularExpression, .caseInsensitive]) != nil else { return text }
+        return String(rest)
+    }
     /// Conservative explicit-unit parser. Bare numbers, dates, conversions, and illustrative values are not accepted.
     public static func numericEvidence(in source: String) -> [NumericEvidence] {
         let pattern = #"(?<![\w.,])([$€£])?(-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:[ \t]+(thousand|million|billion))?[ \t]*(%|percent\b|USD\b|EUR\b|GBP\b|kg\b|km\b|ms\b|seconds\b|minutes\b|hours\b|users\b|requests\b|items\b)?(?![\w]|[.,]\d)"#

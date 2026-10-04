@@ -111,6 +111,7 @@ import PickleCore
         await run("testListsAndStrongTextRenderWithoutSyntax") { AnswerMarkupTests().testListsAndStrongTextRenderWithoutSyntax() }
         await run("testBlockStructure") { AnswerMarkupTests().testBlockStructure() }
         await run("testInlineSyntaxStaysInert") { AnswerMarkupTests().testInlineSyntaxStaysInert() }
+        await run("testAnnouncementPreambleIsRemoved") { try await AnswerMarkupTests().testAnnouncementPreambleIsRemoved() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)
     }

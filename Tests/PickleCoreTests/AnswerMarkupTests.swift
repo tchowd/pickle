@@ -45,4 +45,20 @@ final class AnswerMarkupTests: CheckSuite {
         expectEqual(AnswerMarkup.blocks("-5 degrees, #hashtag, 2024. A year\n2 * 3 = 6").map(\.kind), [.paragraph])
         expectEqual(AnswerMarkup.plainText(""), "")
     }
+    func testAnnouncementPreambleIsRemoved() async throws {
+        let answer = "Here is a simplified explanation of the problem statement:\n\nThe problem is to design an API."
+        expectEqual(ResultValidator.withoutPreamble(answer), "The problem is to design an API.")
+        for lead in ["Sure! Here's a simpler version:", "**Here is a brief summary of the passage:**", "Certainly, here are some examples:", "Below is an overview:"] {
+            expectEqual(ResultValidator.withoutPreamble(lead + "\r\n- First point"), "- First point")
+        }
+        // Lead-ins that carry content, inline announcements and lone lines stay intact.
+        for kept in ["Here are the three causes:\n1. Heat", "Here is a simplified explanation: it batches requests.\nMore.", "Here is a simplified explanation:", "The explanation has two parts:\nFirst."] {
+            expectEqual(ResultValidator.withoutPreamble(kept), kept)
+        }
+        let writer = MockWriter([answer])
+        let outcome = try await RequestPipeline(provider: writer).run(.init(snapshot: .init(text: "Design an API.", appName: "Test", bundleID: "test"), action: .simplify))
+        guard case .result(let result) = outcome else { return fail("Expected a result") }
+        expectEqual(result.text, "The problem is to design an API.")
+        let prompts = await writer.prompts; expectTrue(prompts[0].system.contains("Begin directly with the answer"))
+    }
 }

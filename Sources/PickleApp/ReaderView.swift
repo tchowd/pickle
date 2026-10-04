@@ -73,7 +73,7 @@ struct ReaderView: View {
                     if !coordinator.draft.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(answerStatus.map { "Draft · " + $0 } ?? "Writing…").font(.caption).foregroundStyle(.secondary)
-                            SelectablePassage(text: coordinator.draft, size: settings.textSize, markdown: true)
+                            SelectablePassage(text: ResultValidator.withoutPreamble(coordinator.draft), size: settings.textSize, markdown: true)
                         }.frame(maxWidth: .infinity, alignment: .leading).id("draft")
                     }
                     Color.clear.frame(height: 1).id("end")
@@ -258,7 +258,8 @@ struct ReaderView: View {
                 Button("Shorter") { coordinator.adjust("Rewrite the current explanation more briefly, preserving its meaning and qualifications.") }
                 Button("More detail") { coordinator.adjust("Explain the current answer in more detail, staying grounded in the passage.") }
                 Button("Give an example") { coordinator.adjust("Give a short example to clarify the passage. Clearly label invented examples as hypothetical.") }
-            }.disabled(coordinator.progress != nil || settings.paused)
+            }.buttonStyle(PickleActionStyle(compact: true)).padding(.top, 4)
+                .disabled(coordinator.progress != nil || settings.paused)
             if let error = app.bookmarks.error { Text(error).font(.caption).foregroundStyle(.secondary) }
 
         }

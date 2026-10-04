@@ -28,18 +28,30 @@ struct SelectablePassage: NSViewRepresentable {
         view.source = source
         let typography = AnswerTypography(size: size)
         view.textStorage?.setAttributedString(markdown ? typography.render(text) : typography.literal(text))
+        view.heights = [:]
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: PassageTextView, context: Context) -> CGSize? {
         let width = max(1, proposal.width ?? 440)
-        nsView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        guard let layout = nsView.layoutManager, let container = nsView.textContainer else { return nil }
-        layout.ensureLayout(for: container)
-        return CGSize(width: width, height: ceil(layout.usedRect(for: container).height) + 2)
+        return CGSize(width: width, height: nsView.height(for: width))
     }
     final class PassageTextView: NSTextView {
         struct Source: Equatable { let text: String, size: CGFloat, markdown: Bool }
         var source: Source?
+        var heights: [CGFloat: CGFloat] = [:]
         var explain: ((String) -> Void)?
+        /// SwiftUI also probes zero, unlimited and ideal widths. Measure with a scratch layout so those
+        /// probes never resize the visible container and leave text wrapped narrower than its frame.
+        func height(for width: CGFloat) -> CGFloat {
+            if let height = heights[width] { return height }
+            let storage = NSTextStorage(attributedString: attributedString())
+            let layout = NSLayoutManager(), container = NSTextContainer(size: NSSize(width: min(width, .greatestFiniteMagnitude), height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = textContainer?.lineFragmentPadding ?? 0
+            layout.addTextContainer(container); storage.addLayoutManager(layout)
+            layout.ensureLayout(for: container)
+            let height = ceil(layout.usedRect(for: container).height) + 2
+            heights[width] = height
+            return height
+        }
         override func menu(for event: NSEvent) -> NSMenu? {
             let menu = super.menu(for: event) ?? NSMenu()
             let selected = (string as NSString).substring(with: selectedRange()).trimmingCharacters(in: .whitespacesAndNewlines)
