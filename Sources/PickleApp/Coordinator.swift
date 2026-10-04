@@ -228,8 +228,11 @@ import PickleCore
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty, term.count <= 150 else { error = "Choose a word or short phrase to explain."; return }
         guard let snapshot = session.snapshot else { return }
-        let available = snapshot.text + "\n" + (session.result?.text ?? "") + "\n" + session.conversation.map(\.answer).joined(separator: "\n")
-        guard available.localizedCaseInsensitiveContains(term) else { error = "Choose a word or phrase from the passage or answer."; return }
+        // Answers display without Markdown syntax, so match their rendered words with whitespace folded.
+        let answers = [session.result?.text ?? ""] + session.conversation.map(\.answer)
+        let available = ([snapshot.text] + answers + answers.map(AnswerMarkup.plainText)).joined(separator: "\n")
+        func folded(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        guard folded(available).localizedCaseInsensitiveContains(folded(term)) else { error = "Choose a word or phrase from the passage or answer."; return }
         run(.followUp, followUp: "Explain the meaning of ‘\(term)’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings.")
     }
     func retry() { run(pendingAction, limited: lastLimited, chart: lastChart, followUp: lastQuestion) }

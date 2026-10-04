@@ -108,6 +108,9 @@ import PickleCore
         await run("testOllamaNDJSONCompletionAndErrors") { try await OllamaTests().testOllamaNDJSONCompletionAndErrors() }
         await run("testLocalContextPreservesSelectionAndBounds") { try OllamaTests().testLocalContextPreservesSelectionAndBounds() }
         await run("testLocalChartsUseSchemaAndKeepValidation") { try await OllamaTests().testLocalChartsUseSchemaAndKeepValidation() }
+        await run("testListsAndStrongTextRenderWithoutSyntax") { AnswerMarkupTests().testListsAndStrongTextRenderWithoutSyntax() }
+        await run("testBlockStructure") { AnswerMarkupTests().testBlockStructure() }
+        await run("testInlineSyntaxStaysInert") { AnswerMarkupTests().testInlineSyntaxStaysInert() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)
     }

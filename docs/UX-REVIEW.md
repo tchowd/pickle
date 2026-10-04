@@ -42,3 +42,7 @@ A compact disclosure shows whether page context is available, with a source-wind
 ## Web and video references
 
 A compact page/video disclosure exposes the source title, timestamp, plain text excerpt, open-source link and removal. Page references default off until enabled in Privacy settings. A dedicated browser setup disclosure keeps extension details outside the reading flow. Page-only invocation is supported; automatic mouse-selection UI still requires selected text. Video captions use the current moment or an explicitly bounded transcript. Audio fallback has a visible recording state, source-app scope explanation and Cancel. Reading actions wait for bounded context and never restart when a late reference arrives.
+
+## Answer formatting
+
+Writers often return light Markdown even when asked for plain text, so answers showed literal `**` markers and numbered items whose wrapped lines ran back under the number. Answers, follow-ups, streaming drafts and saved answers now render bold, italic, inline code, headings, bulleted and numbered lists (with hanging indents and acid-green markers), quotes and code blocks. Paragraphs and list items have their own spacing rhythm. Links show only their label and are never clickable; inline HTML stays literal text. The original passage is always shown exactly as captured. Copy places readable text without Markdown syntax on the clipboard, and Explain selection accepts words chosen from the formatted answer. All 67 core checks and native smoke checks passed.

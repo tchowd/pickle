@@ -66,14 +66,14 @@ struct ReaderView: View {
                     ForEach(session.conversation) { turn in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(turn.question).font(.headline)
-                            SelectablePassage(text: turn.answer, size: settings.textSize, explain: coordinator.explainTerm)
+                            SelectablePassage(text: turn.answer, size: settings.textSize, markdown: true, explain: coordinator.explainTerm)
                             HStack { Spacer(); BookmarkButton(store: app.bookmarks, passage: session.snapshot?.text ?? "", answer: turn.answer, source: session.snapshot?.appName ?? "Passage") }
                         }.padding(16).glassInset()
                     }
                     if !coordinator.draft.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(answerStatus.map { "Draft · " + $0 } ?? "Writing…").font(.caption).foregroundStyle(.secondary)
-                            Text(coordinator.draft).font(.system(size: settings.textSize, design: .rounded)).lineSpacing(7)
+                            SelectablePassage(text: coordinator.draft, size: settings.textSize, markdown: true)
                         }.frame(maxWidth: .infinity, alignment: .leading).id("draft")
                     }
                     Color.clear.frame(height: 1).id("end")
@@ -245,7 +245,7 @@ struct ReaderView: View {
                 Spacer()
                 BookmarkButton(store: app.bookmarks, passage: session.snapshot?.text ?? "", answer: result.text, source: session.snapshot?.appName ?? "Passage")
                 Button {
-                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(result.text, forType: .string)
+                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(AnswerMarkup.plainText(result.text), forType: .string)
                     copied = true
                 } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc") }
                     .buttonStyle(.plain).help(copied ? "Copied" : "Copy answer").accessibilityLabel(copied ? "Copied" : "Copy answer")
@@ -253,7 +253,7 @@ struct ReaderView: View {
                     .buttonStyle(.plain).help("Try again").accessibilityLabel("Try again").disabled(coordinator.progress != nil)
             }
             if let chart = result.chart { ResultRenderer(chart: chart) }
-            else { SelectablePassage(text: result.text, size: settings.textSize, explain: coordinator.explainTerm) }
+            else { SelectablePassage(text: result.text, size: settings.textSize, markdown: true, explain: coordinator.explainTerm) }
             HStack(spacing: 8) {
                 Button("Shorter") { coordinator.adjust("Rewrite the current explanation more briefly, preserving its meaning and qualifications.") }
                 Button("More detail") { coordinator.adjust("Explain the current answer in more detail, staying grounded in the passage.") }
