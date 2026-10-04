@@ -65,15 +65,15 @@ struct ReaderView: View {
                     if let result = session.result, coordinator.draft.isEmpty || coordinator.pendingAction == .followUp { resultBody(result) }
                     ForEach(session.conversation) { turn in
                         VStack(alignment: .leading, spacing: 10) {
-                            Text(turn.question).font(.headline)
-                            SelectablePassage(text: turn.answer, size: settings.textSize, markdown: true, explain: coordinator.explainTerm)
+                            Text(turn.label ?? turn.question).font(.headline)
+                            SelectablePassage(text: turn.answer, size: settings.textSize, markdown: true, explain: coordinator.explainTerm, accessibilityName: "Follow-up answer")
                             HStack { QualityCaption(quality: turn.quality); Spacer(); BookmarkButton(store: app.bookmarks, passage: session.snapshot?.text ?? "", answer: turn.answer, source: session.snapshot?.appName ?? "Passage") }
                         }.padding(16).glassInset()
                     }
                     if !coordinator.draft.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(answerStatus.map { "Draft · " + $0 } ?? "Writing…").font(.caption).foregroundStyle(.secondary)
-                            SelectablePassage(text: ResultValidator.withoutPreamble(coordinator.draft), size: settings.textSize, markdown: true)
+                            SelectablePassage(text: ResultValidator.withoutPreamble(coordinator.draft), size: settings.textSize, markdown: true, accessibilityName: "Answer in progress")
                         }.frame(maxWidth: .infinity, alignment: .leading).id("draft")
                     }
                     Color.clear.frame(height: 1).id("end")
@@ -86,6 +86,10 @@ struct ReaderView: View {
             HStack {
                 Text(session.result == nil ? "Small pickle. Big ideas." : "Stay curious. Get out of a pickle.").font(.caption)
                 Spacer()
+                if settings.knowledgeBaseEnabled {
+                    Button { app.openKnowledgeBase() } label: { Label("Knowledge base on", systemImage: "books.vertical") }
+                        .buttonStyle(.plain).font(.caption).help("Completed answers are saved on this Mac. Turn this off in Settings → Privacy.")
+                }
                 if session.snapshot != nil { Button("New passage") { coordinator.clear() }.buttonStyle(.plain).font(.caption) }
             }.foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 12)
         }
@@ -253,7 +257,7 @@ struct ReaderView: View {
                     .buttonStyle(.plain).help("Try again").accessibilityLabel("Try again").disabled(coordinator.progress != nil)
             }
             if let chart = result.chart { ResultRenderer(chart: chart) }
-            else { SelectablePassage(text: result.text, size: settings.textSize, markdown: true, explain: coordinator.explainTerm) }
+            else { SelectablePassage(text: result.text, size: settings.textSize, markdown: true, explain: coordinator.explainTerm, accessibilityName: "Answer") }
             QualityCaption(quality: result.quality)
             HStack(spacing: 8) {
                 adjustment("Shorter", "Rewrite the current explanation more briefly, preserving its meaning and qualifications.")

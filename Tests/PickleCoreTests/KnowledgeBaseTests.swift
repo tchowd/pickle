@@ -67,6 +67,38 @@ final class KnowledgeBaseTests: CheckSuite {
         expectNil(KnowledgeEntry(input: input, result: quiet, action: .simplify, question: nil).quality)
         expectEqual(KnowledgeEntry(input: input, result: outage, action: .simplify, question: nil).quality, outage.quality.label)
     }
+    @MainActor func testCapacityAndFailedWritesKeepEntries() throws {
+        let file = scratch(), directory = file.deletingLastPathComponent()
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path); try? FileManager.default.removeItem(at: directory) }
+        let store = KnowledgeBase(file: file, capacity: 2)
+        for answer in ["One.", "Two.", "Three."] { store.append(KnowledgeEntry(input: input(), result: result(answer), action: .simplify, question: nil)) }
+        expectEqual(KnowledgeBase(file: file).entries.map(\.answer), ["Two.", "One."]); expectTrue(store.error?.contains("full") == true)
+        store.remove(store.entries[0].id)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        store.append(KnowledgeEntry(input: input(), result: result("Blocked."), action: .simplify, question: nil))
+        expectEqual(store.entries.map(\.answer), ["One."]); expectTrue(store.error != nil)
+    }
+    @MainActor func testTwoCopiesNeverOverwriteEachOther() {
+        let file = scratch(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let first = KnowledgeBase(file: file), second = KnowledgeBase(file: file)
+        first.append(KnowledgeEntry(input: input(), result: result("From the first copy."), action: .simplify, question: nil))
+        second.append(KnowledgeEntry(input: input(), result: result("From the second copy."), action: .expand, question: nil))
+        expectEqual(KnowledgeBase(file: file).entries.count, 2)
+        first.remove(first.entries.first { $0.answer == "From the first copy." }!.id)
+        expectEqual(KnowledgeBase(file: file).entries.map(\.answer), ["From the second copy."])
+    }
+    @MainActor func testDamagedFileRecoversAfterItIsMovedAside() throws {
+        let file = scratch(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{damaged".utf8).write(to: file)
+        let store = KnowledgeBase(file: file)
+        expectTrue(store.isUnreadable)
+        try FileManager.default.moveItem(at: file, to: file.appendingPathExtension("damaged"))
+        store.append(KnowledgeEntry(input: input(), result: result("After recovery."), action: .simplify, question: nil))
+        expectTrue(!store.isUnreadable); expectEqual(KnowledgeBase(file: file).entries.map(\.answer), ["After recovery."])
+        let movedAside = try Data(contentsOf: file.appendingPathExtension("damaged"))
+        expectEqual(movedAside, Data("{damaged".utf8))
+    }
     @MainActor func testCorruptFileIsPreservedAndBlocksWrites() throws {
         let file = scratch(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)

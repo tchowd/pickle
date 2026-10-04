@@ -14,7 +14,17 @@ import PickleCore
 }
 @MainActor final class RequestCoordinator: ObservableObject {
     /// What the user asked for, as the knowledge base records it. Pickle's own instructions are never stored.
-    struct Ask { let action: KnowledgeEntry.Action, question: String? }
+    struct Ask {
+        let action: KnowledgeEntry.Action, question: String?
+        /// The follow-up heading the reader shows instead of Pickle's instruction text.
+        var heading: String? {
+            switch action {
+            case .adjustment: return question
+            case .explain: return question.map { "Explain ‘\($0)’" }
+            default: return nil
+            }
+        }
+    }
     @Published var localConnectionStatus = "Not tested"
     @Published var localModels: [String] = []
     private var localCheckTask: Task<Void, Never>?
@@ -307,7 +317,7 @@ import PickleCore
                         self.localConnectionStatus = String(format: "Ready · model load %.2fs · generation %.2fs", timing.loadSeconds, timing.generationSeconds)
                     }
                     if action == .followUp {
-                        self.session.conversation.append(.init(question: followUp, answer: result.text, quality: result.quality)); self.question = ""
+                        self.session.conversation.append(.init(question: followUp, answer: result.text, quality: result.quality, label: ask.heading)); self.question = ""
                         while self.session.conversation.reduce(0, { $0 + $1.question.utf8.count + $1.answer.utf8.count }) > Limits.conversationBytes {
                             self.session.conversation.removeFirst()
                         }

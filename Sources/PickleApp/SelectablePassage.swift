@@ -9,6 +9,7 @@ struct SelectablePassage: NSViewRepresentable {
     let size: CGFloat
     var markdown = false
     var explain: ((String) -> Void)?
+    var accessibilityName = "Passage"
     func makeNSView(context: Context) -> PassageTextView {
         // TextKit 1 supports the code block backgrounds and the sizing below.
         let view = PassageTextView(usingTextLayoutManager: false)
@@ -18,11 +19,11 @@ struct SelectablePassage: NSViewRepresentable {
         view.isHorizontallyResizable = false
         view.isVerticallyResizable = true
         view.textContainer?.widthTracksTextView = true
-        view.setAccessibilityLabel("Passage. Select a word and use Explain selection from the context menu.")
         return view
     }
     func updateNSView(_ view: PassageTextView, context: Context) {
         view.explain = explain
+        view.setAccessibilityLabel(accessibilityName + (explain == nil ? "" : ". Select a word and use Explain selection in context from the context menu."))
         let source = PassageTextView.Source(text: text, size: size, markdown: markdown)
         guard view.source != source else { return }
         view.source = source

@@ -43,41 +43,61 @@ public struct KnowledgeEntry: Codable, Identifiable, Sendable, Equatable {
 /// Opt-in, on-this-Mac log of completed answers. It is never read back into a request.
 @MainActor public final class KnowledgeBase: ObservableObject {
     /// Five times the bookmark library: one reading session can produce several entries.
-    public static let capacity = 1_000
+    nonisolated public static let defaultCapacity = 1_000
     nonisolated public static var defaultFile: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Pickle/KnowledgeBase/entries.json")
     }
     @Published public private(set) var entries: [KnowledgeEntry] = []
     @Published public var error: String?
-    public let file: URL
-    private var unreadable = false
+    @Published public private(set) var isUnreadable = false
+    public let file: URL, capacity: Int
+    /// The file's state when last read or written, to notice writes by another running copy of Pickle.
+    private var synced: Stamp?
+    private struct Stamp: Equatable { let modified: Date?, size: Int?, inode: Int? }
     private struct Archive: Codable { var version = 1; var entries: [KnowledgeEntry] }
-    private static let unreadableMessage = "The knowledge base could not be opened. Its file has not been changed, and nothing new is recorded."
+    private static let unreadableMessage = "The knowledge base could not be opened. Its file has not been changed, and nothing new is recorded. Open Knowledge base… to find the file."
 
-    public init(file: URL = KnowledgeBase.defaultFile) {
-        self.file = file
+    public init(file: URL = KnowledgeBase.defaultFile, capacity: Int = KnowledgeBase.defaultCapacity) {
+        self.file = file; self.capacity = capacity
+        reload()
+    }
+    /// Reads the file again, for example after the user moved a damaged file aside.
+    public func reload() {
+        entries = []; isUnreadable = false; error = nil
+        synced = stamp()
         guard FileManager.default.fileExists(atPath: file.path) else { return }
         do {
             let archive = try Self.decoder.decode(Archive.self, from: Data(contentsOf: file))
             guard archive.version == 1 else { throw PickleError.message("Unsupported version") }
             entries = archive.entries
-        } catch { unreadable = true; self.error = Self.unreadableMessage }
+        } catch { isUnreadable = true; self.error = Self.unreadableMessage }
     }
 
     public func append(_ entry: KnowledgeEntry) {
-        guard !unreadable else { error = Self.unreadableMessage; return }
+        guard refresh() else { return }
         guard !entries.contains(where: entry.duplicates) else { return }
-        guard entries.count < Self.capacity else { error = "Your knowledge base is full (\(Self.capacity.formatted()) entries). Delete entries to keep recording."; return }
+        guard entries.count < capacity else { error = "Your knowledge base is full (\(capacity.formatted()) entries). Delete entries to keep recording."; return }
         persist([entry] + entries)
     }
     public func remove(_ id: UUID) {
-        guard !unreadable else { error = Self.unreadableMessage; return }
+        guard refresh() else { return }
         persist(entries.filter { $0.id != id })
     }
     public func removeAll() {
-        guard !unreadable else { error = Self.unreadableMessage; return }
+        guard refresh() else { return }
         persist([])
+    }
+    /// Every change starts from the file's current contents, so another copy's entries are never overwritten.
+    private func refresh() -> Bool {
+        if stamp() != synced { reload() }
+        guard !isUnreadable else { error = Self.unreadableMessage; return false }
+        return true
+    }
+    private func stamp() -> Stamp? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path) else { return nil }
+        return Stamp(modified: attributes[.modificationDate] as? Date, size: (attributes[.size] as? NSNumber)?.intValue,
+                     inode: (attributes[.systemFileNumber] as? NSNumber)?.intValue)
     }
     public func search(_ query: String) -> [KnowledgeEntry] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,7 +114,7 @@ public struct KnowledgeEntry: Codable, Identifiable, Sendable, Equatable {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try Self.encoder.encode(Archive(entries: updated)).write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-            entries = updated; error = nil
+            entries = updated; error = nil; synced = stamp()
         } catch { self.error = "Couldn’t update the knowledge base. Please try again." }
     }
     private static var encoder: JSONEncoder {

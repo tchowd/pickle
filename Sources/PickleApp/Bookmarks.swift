@@ -68,7 +68,7 @@ struct SavedAnswersView: View {
                     if matches.isEmpty { Text(store.items.isEmpty ? "Save an answer with the bookmark button while you read." : "No matching answers.").foregroundStyle(.secondary).padding(.vertical, 30) }
                     ForEach(matches) { item in
                         GlassSection(item.source) {
-                            SelectablePassage(text: item.answer, size: settings.textSize, markdown: true)
+                            SelectablePassage(text: item.answer, size: settings.textSize, markdown: true, accessibilityName: "Saved answer")
                             DisclosureGroup("Original passage") { Text(item.passage).textSelection(.enabled).padding(.top, 8) }
                             HStack {
                                 Text(item.savedAt, style: .date).font(.caption).foregroundStyle(.secondary)

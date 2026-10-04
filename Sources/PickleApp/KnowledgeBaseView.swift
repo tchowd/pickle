@@ -26,6 +26,13 @@ struct KnowledgeBaseView: View {
                 Button("Delete all") { confirmDeleteAll = true }.disabled(store.entries.isEmpty)
             }
             if let error = store.error { Text(error).foregroundStyle(.secondary) }
+            if store.isUnreadable {
+                // Writes stay blocked; the user can move the damaged file aside, then reload.
+                HStack(spacing: 10) {
+                    Button("Show file in Finder") { NSWorkspace.shared.activateFileViewerSelecting([store.file]) }
+                    Button("Try again") { store.reload() }
+                }
+            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     let matches = store.search(search)
@@ -33,7 +40,7 @@ struct KnowledgeBaseView: View {
                     ForEach(matches) { entry in
                         GlassSection(entry.appName + " · " + entry.action.title + (entry.chart.map { $0 == .bar ? " · Bar chart" : " · Flow diagram" } ?? "")) {
                             if let question = entry.question { Text(question).font(.headline).textSelection(.enabled) }
-                            SelectablePassage(text: entry.answer, size: settings.textSize, markdown: true)
+                            SelectablePassage(text: entry.answer, size: settings.textSize, markdown: true, accessibilityName: "Recorded answer")
                             if !entry.passage.isEmpty {
                                 DisclosureGroup("Original passage") { Text(entry.passage).textSelection(.enabled).padding(.top, 8) }
                             }

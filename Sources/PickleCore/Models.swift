@@ -27,7 +27,9 @@ public struct SelectionSnapshot: Identifiable, Codable, Sendable, Equatable {
 public struct ConversationTurn: Identifiable, Sendable {
     public let id = UUID()
     public let question: String, answer: String, quality: QualityStatus
-    public init(question: String, answer: String, quality: QualityStatus) { self.question = question; self.answer = answer; self.quality = quality }
+    /// The reader's heading when the question is Pickle's own instruction; prompts always use `question`.
+    public let label: String?
+    public init(question: String, answer: String, quality: QualityStatus, label: String? = nil) { self.question = question; self.answer = answer; self.quality = quality; self.label = label }
 }
 public enum QualityStatus: Equatable, Sendable {
     case checked, concerns([String]), uncertain, notChecked(String), chartValidated

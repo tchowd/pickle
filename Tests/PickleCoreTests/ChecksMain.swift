@@ -115,6 +115,9 @@ import PickleCore
         await run("testCompletedAnswerRecordsPointerNotContext") { try KnowledgeBaseTests().testCompletedAnswerRecordsPointerNotContext() }
         await run("testEachAnswerGetsOneRecordAndSearchFindsIt") { KnowledgeBaseTests().testEachAnswerGetsOneRecordAndSearchFindsIt() }
         await run("testCheckLabelsShowOnlyWhenChecksRanOrWereExpected") { try await KnowledgeBaseTests().testCheckLabelsShowOnlyWhenChecksRanOrWereExpected() }
+        await run("testCapacityAndFailedWritesKeepEntries") { try KnowledgeBaseTests().testCapacityAndFailedWritesKeepEntries() }
+        await run("testTwoCopiesNeverOverwriteEachOther") { KnowledgeBaseTests().testTwoCopiesNeverOverwriteEachOther() }
+        await run("testDamagedFileRecoversAfterItIsMovedAside") { try KnowledgeBaseTests().testDamagedFileRecoversAfterItIsMovedAside() }
         await run("testCorruptFileIsPreservedAndBlocksWrites") { try KnowledgeBaseTests().testCorruptFileIsPreservedAndBlocksWrites() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)

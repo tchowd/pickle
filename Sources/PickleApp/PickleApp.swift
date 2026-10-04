@@ -173,6 +173,10 @@ import PickleCore
         let coordinator = RequestCoordinator(session: session, settings: preferences, knowledge: store, writer: writer,
                                              referenceFetcher: { _, _ in throw PickleError.message("Fixture makes no network requests") })
         func settle() async { try? await Task.sleep(for: .milliseconds(200)) }
+        func until(_ condition: () -> Bool) async -> Bool {
+            for _ in 0..<60 { if condition() { return true }; try? await Task.sleep(for: .milliseconds(50)) }
+            return condition()
+        }
         func select() {
             // No source URL, so no reference fetch starts; the attached reference is set directly.
             coordinator.setSelection(.init(text: "Cells release energy.", appName: "Fixture browser", bundleID: "fixture.browser"))
@@ -183,15 +187,27 @@ import PickleCore
         select(); coordinator.run(.simplify); await settle()
         let offByDefault = !preferences.knowledgeBaseEnabled && session.result != nil && store.entries.isEmpty && !FileManager.default.fileExists(atPath: file.path)
         preferences.knowledgeBaseEnabled = true
-        coordinator.run(.simplify); await settle()
+        coordinator.run(.simplify); _ = await until { store.entries.count == 1 }
         let first = store.entries.first
         let recorded = store.entries.count == 1 && first?.action == .simplify && first?.question == nil && first?.passage == "Cells release energy."
             && first?.answer == session.result?.text && first?.reference == .init(url: "https://example.com/cells", title: "Cell energy", kind: "article")
-        coordinator.run(.followUp, followUp: "Why does it matter?"); await settle()
-        coordinator.explainTerm("energy"); await settle()
-        coordinator.adjust("Rewrite the current explanation more briefly.", label: "Shorter"); await settle()
+        coordinator.run(.followUp, followUp: "Why does it matter?"); _ = await until { store.entries.count == 2 }
+        coordinator.explainTerm("energy"); _ = await until { store.entries.count == 3 }
+        let explainHeading = session.conversation.last?.label == "Explain ‘energy’"
+        coordinator.adjust("Rewrite the current explanation more briefly.", label: "Shorter"); _ = await until { store.entries.count == 4 }
         let separate = store.entries.map(\.action) == [.adjustment, .explain, .followUp, .simplify]
             && store.entries.map(\.question) == ["Shorter", "energy", "Why does it matter?", nil]
+        let headings = explainHeading && session.conversation.last?.label == "Shorter" && session.conversation.first?.label == nil
+        // Retrying a failed explain, and an adjustment queued behind page reading, keep what the user asked.
+        await writer.failNextCall()
+        coordinator.explainTerm("cells"); _ = await until { coordinator.error != nil }
+        coordinator.retry(); _ = await until { store.entries.count == 5 }
+        coordinator.pageLoading = true
+        coordinator.adjust("Give a short example.", label: "Give an example")
+        let queued = coordinator.progress != nil && store.entries.count == 5
+        coordinator.skipPage(); _ = await until { store.entries.count == 6 }
+        let carried = queued && store.entries.prefix(2).map(\.action) == [.adjustment, .explain]
+            && store.entries.prefix(2).map(\.question) == ["Give an example", "cells"]
         let raw = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
         let excluded = !raw.isEmpty && !["REFERENCE BODY TEXT", "OCR PAGE TEXT", "VISUAL SUMMARY TEXT", "JPEG PIXELS", Data("JPEG PIXELS".utf8).base64EncodedString(),
                                           "Rewrite the current", "Explain the meaning", "fixture-model"].contains { raw.contains($0) }
@@ -206,18 +222,18 @@ import PickleCore
         coordinator.run(.expand); await settle()
         let switchedOff = store.entries.count == count && session.result != nil
         preferences.knowledgeBaseEnabled = true
-        coordinator.sample(); await settle()
+        coordinator.sample(); _ = await until { session.result != nil }; await settle()
         let sampleSkipped = store.entries.count == count && session.result != nil
         // Clearing keeps the log, and the log never enters a later request.
         coordinator.clear()
         let kept = KnowledgeBase(file: file).entries.count == count
         coordinator.setSelection(.init(text: "A new passage.", appName: "Fixture", bundleID: "fixture"))
-        coordinator.run(.simplify); await settle()
+        coordinator.run(.simplify); _ = await until { session.result != nil }
         let earlier = store.entries.filter { $0.passage == "Cells release energy." }.map(\.answer)
         let notInjected = await writer.prompts.last.map { prompt in !earlier.contains { prompt.system.contains($0) || prompt.user.contains($0) } } ?? false
-        let checks = [offByDefault, recorded, separate, excluded, staleIgnored, switchedOff, sampleSkipped, kept, notInjected]
+        let checks = [offByDefault, recorded, separate, headings, carried, excluded, staleIgnored, switchedOff, sampleSkipped, kept, notInjected]
         let ok = !checks.contains(false)
-        print(ok ? "PICKLE_KNOWLEDGE_BASE_PASS: off by default, one record per answer, follow-up/explain/adjustment records, pointer-only references, stale/cancelled/sample skipped, switch off, kept after clear, not injected"
+        print(ok ? "PICKLE_KNOWLEDGE_BASE_PASS: off by default, one record per answer, follow-up/explain/adjustment records and headings, retry and queued actions, pointer-only references, stale/cancelled/sample skipped, switch off, kept after clear, not injected"
                  : "PICKLE_KNOWLEDGE_BASE_FAIL: \(checks)")
         return ok
     }
@@ -610,8 +626,11 @@ import PickleCore
 private actor KnowledgeCheckWriter: GenerativeProvider {
     nonisolated let isRemote = false
     private(set) var prompts: [GenerationPrompt] = []
+    private var failNext = false
+    func failNextCall() { failNext = true }
     func generate(_ prompt: GenerationPrompt) async throws -> Generation {
         prompts.append(prompt)
+        if failNext { failNext = false; throw PickleError.message("Fixture failure") }
         await withCheckedContinuation { continuation in DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { continuation.resume() } }
         return Generation(text: "Answer \(prompts.count).", model: "fixture-model")
     }
