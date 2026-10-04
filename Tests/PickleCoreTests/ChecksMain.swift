@@ -112,6 +112,9 @@ import PickleCore
         await run("testBlockStructure") { AnswerMarkupTests().testBlockStructure() }
         await run("testInlineSyntaxStaysInert") { AnswerMarkupTests().testInlineSyntaxStaysInert() }
         await run("testAnnouncementPreambleIsRemoved") { try await AnswerMarkupTests().testAnnouncementPreambleIsRemoved() }
+        await run("testCompletedAnswerRecordsPointerNotContext") { try KnowledgeBaseTests().testCompletedAnswerRecordsPointerNotContext() }
+        await run("testEachAnswerGetsOneRecordAndSearchFindsIt") { KnowledgeBaseTests().testEachAnswerGetsOneRecordAndSearchFindsIt() }
+        await run("testCorruptFileIsPreservedAndBlocksWrites") { try KnowledgeBaseTests().testCorruptFileIsPreservedAndBlocksWrites() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)
     }

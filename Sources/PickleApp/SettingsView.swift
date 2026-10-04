@@ -139,8 +139,13 @@ struct SettingsView: View {
                 }
                 Text("Video context uses captions first. Listen for 30 seconds records source-app audio only when you choose it; local speech recognition must be available.").font(.caption).foregroundStyle(.secondary)
             }
+            GlassSection("Knowledge base") {
+                Toggle("Keep a searchable log of my reading", isOn: $settings.knowledgeBaseEnabled)
+                Text("When on, Pickle stores your passages, questions, and answers on this Mac.").font(.caption).foregroundStyle(.secondary)
+                if let store = coordinator.knowledge { KnowledgeBaseNotice(store: store) }
+            }
             GlassSection("Your session") {
-                Text("Passages and answers stay in memory until you clear them or quit. Only answers you explicitly bookmark are saved on this Mac.").font(.callout).foregroundStyle(.secondary)
+                Text("Passages and answers stay in memory until you clear them or quit. Bookmarked answers, and the knowledge base when it’s on, are saved on this Mac; clearing the session doesn’t delete them.").font(.callout).foregroundStyle(.secondary)
                 Button("Clear current passage and answers") { coordinator.clear() }
                 Button("Ask before sharing again") { settings.cloudConsent = false; settings.jevConsent = false; settings.screenContextConsent = false; settings.webContextConsent = false; settings.localConsentServer = "" }
             }

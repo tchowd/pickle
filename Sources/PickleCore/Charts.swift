@@ -12,6 +12,7 @@ public struct ChartSpec: Codable, Sendable {
 }
 public enum ValidatedChart: Sendable {
     case bar([NumericEvidence]), flow([ChartSpec.Node], [ChartSpec.Edge])
+    public var kind: ChartKind { if case .bar = self { return .bar }; return .flow }
     public var alternative: String {
         switch self {
         case .bar(let bars): return "Quantities in your selection\n" + bars.map { "\($0.excerpt): \($0.value.formatted()) \($0.unit)" }.joined(separator: "\n")

@@ -50,6 +50,8 @@ import PickleCore
     @Published var webContextEnabled: Bool { didSet { save("webContextEnabled", webContextEnabled) } }
     @Published var webContextConsent: Bool { didSet { save("webContextConsent", webContextConsent) } }
     @Published var streaming: Bool { didSet { save("streaming", streaming) } }
+    /// Off by default. Not part of requestPolicy: toggling it never cancels a request; the commit site checks it.
+    @Published var knowledgeBaseEnabled: Bool { didSet { save("knowledgeBaseEnabled", knowledgeBaseEnabled) } }
     let defaults: UserDefaults
     var requestPolicy: [String] {
         [aiMode.rawValue, aiModeRevision.uuidString, localAddress, localModel, localVisionModel, String(localSameDevice), localConsentServer, String(paused), accountID, model, String(jevEnabled), String(localOnly), level.rawValue,
@@ -83,6 +85,7 @@ import PickleCore
         glassOpacity = min(1, max(0, defaults.object(forKey: "glassOpacity") as? Double ?? 0.12))
         themeIntensity = min(1, max(0, defaults.object(forKey: "themeIntensity") as? Double ?? 1))
         streaming = defaults.object(forKey: "streaming") as? Bool ?? true
+        knowledgeBaseEnabled = defaults.bool(forKey: "knowledgeBaseEnabled")
         paused = defaults.bool(forKey: "paused")
         accountID = defaults.string(forKey: "accountID") ?? ""
         model = defaults.string(forKey: "model") ?? CloudflareProvider.defaultModel

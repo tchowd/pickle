@@ -13,6 +13,8 @@ import PickleCore
     func clear() { reference = nil; captureTarget = nil; snapshot = nil; result = nil; conversation = []; context = ""; page = nil; visualSummary = "" }
 }
 @MainActor final class RequestCoordinator: ObservableObject {
+    /// What the user asked for, as the knowledge base records it. Pickle's own instructions are never stored.
+    struct Ask { let action: KnowledgeEntry.Action, question: String? }
     @Published var localConnectionStatus = "Not tested"
     @Published var localModels: [String] = []
     private var localCheckTask: Task<Void, Never>?
@@ -54,12 +56,17 @@ import PickleCore
     let metrics = ContentFreeMetrics()
     private var lastQuestion = "", lastLimited = false
     private var lastChart: ChartKind?
+    private var lastAsk: Ask?
     private var credential: String?
-    init(session: SessionStore, settings: SettingsStore, referenceFetcher: @escaping @MainActor (String, String) async throws -> WebReference = { try await WebReferenceService.fetch($0, selection: $1) }) {
+    let knowledge: KnowledgeBase?
+    /// Test seam for native checks; production builds its provider per request.
+    private let writer: (any GenerativeProvider)?
+    init(session: SessionStore, settings: SettingsStore, knowledge: KnowledgeBase? = nil, writer: (any GenerativeProvider)? = nil, referenceFetcher: @escaping @MainActor (String, String) async throws -> WebReference = { try await WebReferenceService.fetch($0, selection: $1) }) {
         self.session = session; self.settings = settings; self.lastMode = settings.aiMode; self.referenceFetcher = referenceFetcher
+        self.knowledge = knowledge; self.writer = writer
     }
     func cancel() { stopListening(); queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; draft = ""; credential = nil }
-    func clear() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil; pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; pendingAction = .simplify }
+    func clear() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil; pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; lastAsk = nil; pendingAction = .simplify }
     func setSelection(_ snapshot: SelectionSnapshot) { clear(); session.snapshot = snapshot; captureReference() }
     func capturePage(_ target: ScreenContextTarget?) {
         session.captureTarget = target
@@ -221,8 +228,8 @@ import PickleCore
     func sample() {
         setSelection(.init(text: "The treatment may reduce symptoms in some patients, but the evidence remains limited.", appName: "Pickle sample", bundleID: "sample", method: "Bundled sample")); isSample = true; run(.simplify)
     }
-    func adjust(_ instruction: String) {
-        run(.followUp, followUp: instruction)
+    func adjust(_ instruction: String, label: String) {
+        run(.followUp, followUp: instruction, ask: Ask(action: .adjustment, question: label))
     }
     func explainTerm(_ term: String) {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -233,10 +240,11 @@ import PickleCore
         let available = ([snapshot.text] + answers + answers.map(AnswerMarkup.plainText)).joined(separator: "\n")
         func folded(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
         guard folded(available).localizedCaseInsensitiveContains(folded(term)) else { error = "Choose a word or phrase from the passage or answer."; return }
-        run(.followUp, followUp: "Explain the meaning of ‘\(term)’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings.")
+        run(.followUp, followUp: "Explain the meaning of ‘\(term)’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings.", ask: Ask(action: .explain, question: term))
     }
-    func retry() { run(pendingAction, limited: lastLimited, chart: lastChart, followUp: lastQuestion) }
-    func run(_ action: ReadingAction, limited: Bool = false, chart: ChartKind? = nil, followUp: String = "") {
+    func retry() { run(pendingAction, limited: lastLimited, chart: lastChart, followUp: lastQuestion, ask: lastAsk) }
+    func continueLimited() { run(pendingAction, limited: true, chart: lastChart, followUp: lastQuestion, ask: lastAsk) }
+    func run(_ action: ReadingAction, limited: Bool = false, chart: ChartKind? = nil, followUp: String = "", ask: Ask? = nil) {
         guard !listening else { error = "Finish listening or cancel the recording first."; return }
         guard !visualBusy else { error = "Wait for visual context, or remove it to continue."; return }
         cancel(); error = nil; contextNotice = nil; needsContext = nil; needsChart = false
@@ -244,13 +252,14 @@ import PickleCore
         guard let snapshot = session.snapshot else { error = "Select or paste a passage first."; return }
         guard !settings.isExcluded(snapshot.bundleID) else { error = "This source application is excluded."; return }
         if action == .followUp && session.conversation.count >= Limits.turns { error = "This conversation has reached six follow-ups. Clear follow-ups to keep reading with the same selection."; return }
-        pendingAction = action; lastLimited = limited; lastChart = chart; lastQuestion = followUp
+        let ask = ask ?? Self.ask(for: action, question: followUp)
+        pendingAction = action; lastLimited = limited; lastChart = chart; lastQuestion = followUp; lastAsk = ask
         if pageLoading || referenceLoading {
             progress = "Reading page…"
             let id = snapshot.id
             queuedPageAction = { [weak self] in
                 guard let self, self.session.snapshot?.id == id else { return }
-                self.run(action, limited: limited, chart: chart, followUp: followUp)
+                self.run(action, limited: limited, chart: chart, followUp: followUp, ask: ask)
             }
             return
         }
@@ -272,6 +281,7 @@ import PickleCore
         do { try input.validate() } catch { self.error = error.localizedDescription; return }
         let provider: any GenerativeProvider
         if isSample { provider = SampleProvider() }
+        else if let writer { provider = writer }
         else if isLocal { provider = OllamaProvider(configuration: localConfiguration(token: token)) }
         else { provider = CloudflareProvider(accountID: settings.accountID, token: token, model: settings.model) }
         contextNotice = isLocal ? "Local uses your selection and relevant context excerpts." : nil
@@ -280,6 +290,7 @@ import PickleCore
         let pipeline = RequestPipeline(provider: provider, evaluator: evaluator, localOnly: settings.localOnly || isSample, metrics: { event in Task { await metrics.record(event) } })
         progress = "Preparing…"
         let policyAtStart = settings.requestPolicy
+        let recordAtStart = knowledge != nil && settings.knowledgeBaseEnabled && !isSample
         let draftHandler: (@MainActor (String) -> Void)?
         if settings.streaming { draftHandler = { [weak self] text in guard let self, self.settings.requestPolicy == policyAtStart else { return }; self.draft = text } }
         else { draftHandler = nil }
@@ -301,12 +312,28 @@ import PickleCore
                             self.session.conversation.removeFirst()
                         }
                     } else { self.session.result = result; self.session.conversation = [] }
+                    if recordAtStart { self.record(result, input: input, ask: ask) }
                     if let model = result.evaluatorModel { self.jevStatus = "Last response: \(model) via Cloudflare" }
                 }
             case .failure(let error):
                 self.error = (error as? PickleError)?.localizedDescription ?? "The request could not complete. Check your connection and retry."
                 Task { await metrics.record(.failure) }
             }
+        }
+    }
+    /// The single knowledge-base write, after the stale-result gates. Drafts, failures, cancelled and stale
+    /// results, and samples never reach it. The log is never read back into a request.
+    private func record(_ result: ReadingResult, input: RequestInput, ask: Ask) {
+        // A chart action without a chart is Pickle's fixed refusal, not an answer.
+        guard let knowledge, settings.knowledgeBaseEnabled, !isSample, result.action != .chart || result.chart != nil else { return }
+        knowledge.append(KnowledgeEntry(input: input, result: result, action: ask.action, question: ask.question))
+    }
+    private static func ask(for action: ReadingAction, question: String) -> Ask {
+        switch action {
+        case .simplify: return Ask(action: .simplify, question: nil)
+        case .expand: return Ask(action: .expand, question: nil)
+        case .chart: return Ask(action: .chart, question: nil)
+        case .followUp: return Ask(action: .followUp, question: question)
         }
     }
     func localConfiguration(token: String = "", vision: Bool = false) -> LocalAIConfiguration {

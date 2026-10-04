@@ -225,7 +225,7 @@ struct ReaderView: View {
         VStack(alignment: .leading, spacing: 12) {
             notice("A little more context would help", detail: "Add a few surrounding sentences above, or continue with just this passage.", icon: "text.bubble")
             Button("Use added context and retry") { coordinator.retry() }
-            Button("Continue with a limited explanation") { coordinator.run(coordinator.pendingAction, limited: true, followUp: coordinator.question) }
+            Button("Continue with a limited explanation") { coordinator.continueLimited() }
         }
     }
     private var chartChoice: some View {
@@ -255,14 +255,18 @@ struct ReaderView: View {
             if let chart = result.chart { ResultRenderer(chart: chart) }
             else { SelectablePassage(text: result.text, size: settings.textSize, markdown: true, explain: coordinator.explainTerm) }
             HStack(spacing: 8) {
-                Button("Shorter") { coordinator.adjust("Rewrite the current explanation more briefly, preserving its meaning and qualifications.") }
-                Button("More detail") { coordinator.adjust("Explain the current answer in more detail, staying grounded in the passage.") }
-                Button("Give an example") { coordinator.adjust("Give a short example to clarify the passage. Clearly label invented examples as hypothetical.") }
+                adjustment("Shorter", "Rewrite the current explanation more briefly, preserving its meaning and qualifications.")
+                adjustment("More detail", "Explain the current answer in more detail, staying grounded in the passage.")
+                adjustment("Give an example", "Give a short example to clarify the passage. Clearly label invented examples as hypothetical.")
             }.buttonStyle(PickleActionStyle(compact: true)).padding(.top, 4)
                 .disabled(coordinator.progress != nil || settings.paused)
             if let error = app.bookmarks.error { Text(error).font(.caption).foregroundStyle(.secondary) }
+            if settings.knowledgeBaseEnabled { KnowledgeBaseNotice(store: app.knowledge) }
 
         }
+    }
+    private func adjustment(_ title: String, _ instruction: String) -> some View {
+        Button(title) { coordinator.adjust(instruction, label: title) }
     }
     private var followUp: some View {
         VStack(spacing: 8) {
