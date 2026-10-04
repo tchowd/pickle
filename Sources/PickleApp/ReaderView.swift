@@ -67,7 +67,7 @@ struct ReaderView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text(turn.question).font(.headline)
                             SelectablePassage(text: turn.answer, size: settings.textSize, markdown: true, explain: coordinator.explainTerm)
-                            HStack { Spacer(); BookmarkButton(store: app.bookmarks, passage: session.snapshot?.text ?? "", answer: turn.answer, source: session.snapshot?.appName ?? "Passage") }
+                            HStack { QualityCaption(quality: turn.quality); Spacer(); BookmarkButton(store: app.bookmarks, passage: session.snapshot?.text ?? "", answer: turn.answer, source: session.snapshot?.appName ?? "Passage") }
                         }.padding(16).glassInset()
                     }
                     if !coordinator.draft.isEmpty {
@@ -254,6 +254,7 @@ struct ReaderView: View {
             }
             if let chart = result.chart { ResultRenderer(chart: chart) }
             else { SelectablePassage(text: result.text, size: settings.textSize, markdown: true, explain: coordinator.explainTerm) }
+            QualityCaption(quality: result.quality)
             HStack(spacing: 8) {
                 adjustment("Shorter", "Rewrite the current explanation more briefly, preserving its meaning and qualifications.")
                 adjustment("More detail", "Explain the current answer in more detail, staying grounded in the passage.")

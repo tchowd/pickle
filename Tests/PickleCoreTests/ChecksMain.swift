@@ -114,6 +114,7 @@ import PickleCore
         await run("testAnnouncementPreambleIsRemoved") { try await AnswerMarkupTests().testAnnouncementPreambleIsRemoved() }
         await run("testCompletedAnswerRecordsPointerNotContext") { try KnowledgeBaseTests().testCompletedAnswerRecordsPointerNotContext() }
         await run("testEachAnswerGetsOneRecordAndSearchFindsIt") { KnowledgeBaseTests().testEachAnswerGetsOneRecordAndSearchFindsIt() }
+        await run("testCheckLabelsShowOnlyWhenChecksRanOrWereExpected") { try await KnowledgeBaseTests().testCheckLabelsShowOnlyWhenChecksRanOrWereExpected() }
         await run("testCorruptFileIsPreservedAndBlocksWrites") { try KnowledgeBaseTests().testCorruptFileIsPreservedAndBlocksWrites() }
         print("\(Checks.tests) checks; \(Checks.failures) failures")
         exit(Checks.failures == 0 ? 0 : 1)

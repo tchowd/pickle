@@ -20,6 +20,8 @@ public struct KnowledgeEntry: Codable, Identifiable, Sendable, Equatable {
     public let passage: String, answer: String
     public let chart: ChartKind?
     public let reference: Reference?
+    /// The answer-check label the reader showed with this answer, if any.
+    public let quality: String?
 
     public init(input: RequestInput, result: ReadingResult, action: Action, question: String?, recordedAt: Date = Date()) {
         self.recordedAt = recordedAt
@@ -31,6 +33,7 @@ public struct KnowledgeEntry: Codable, Identifiable, Sendable, Equatable {
         answer = result.text
         chart = result.chart?.kind
         reference = input.reference.map { Reference(url: $0.url, title: $0.title, kind: $0.kind) }
+        quality = result.quality.visibleLabel
     }
     func duplicates(_ other: KnowledgeEntry) -> Bool {
         passage == other.passage && action == other.action && question == other.question && answer == other.answer

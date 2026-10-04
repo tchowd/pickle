@@ -24,7 +24,8 @@ final class KnowledgeBaseTests: CheckSuite {
         expectEqual(entry.appName, "Safari"); expectEqual(entry.bundleID, "com.apple.Safari")
         expectEqual(entry.reference, KnowledgeEntry.Reference(url: "https://example.com/cells", title: "Cell energy", kind: "article"))
         let raw = String(decoding: try Data(contentsOf: file), as: UTF8.self)
-        for absent in ["OCR PAGE TEXT", "VISUAL SUMMARY TEXT", "REFERENCE BODY TEXT", "secret-model-name", "Checked against"] { expectTrue(!raw.contains(absent)) }
+        expectEqual(entry.quality, "Checked against your selection")
+        for absent in ["OCR PAGE TEXT", "VISUAL SUMMARY TEXT", "REFERENCE BODY TEXT", "secret-model-name"] { expectTrue(!raw.contains(absent)) }
         let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
         expectEqual(permissions, 0o600)
         // Charts keep their text alternative and kind.
@@ -49,6 +50,22 @@ final class KnowledgeBaseTests: CheckSuite {
         expectEqual(store.search("Shorter").map(\.action), [.adjustment]); expectTrue(store.search("not recorded").isEmpty)
         store.remove(store.entries[0].id); expectEqual(KnowledgeBase(file: file).entries.count, 2)
         store.removeAll(); expectTrue(KnowledgeBase(file: file).entries.isEmpty)
+    }
+    func testCheckLabelsShowOnlyWhenChecksRanOrWereExpected() async throws {
+        expectNil(QualityStatus.notChecked(QualityStatus.checksOff).visibleLabel)
+        expectNil(QualityStatus.notChecked(QualityStatus.offline).visibleLabel)
+        for shown in [QualityStatus.checked, .concerns(["missing_qualifier"]), .uncertain, .chartValidated, .notChecked("Jev unavailable"), .notChecked("Jev check or repair failed")] {
+            expectEqual(shown.visibleLabel, shown.label)
+        }
+        // The pipeline's own reasons line up with the rule: disabled checks stay quiet, outages are shown.
+        let snapshot = SelectionSnapshot(text: "The drug may help some patients.", appName: "Test", bundleID: "test")
+        guard case .result(let quiet) = try await RequestPipeline(provider: MockWriter()).run(.init(snapshot: snapshot, action: .simplify)),
+              case .result(let offline) = try await RequestPipeline(provider: MockWriter(), localOnly: true).run(.init(snapshot: snapshot, action: .simplify)),
+              case .result(let outage) = try await RequestPipeline(provider: MockWriter(), evaluator: MockJev(fail: true)).run(.init(snapshot: snapshot, action: .simplify)) else { return fail("Expected results") }
+        expectNil(quiet.quality.visibleLabel); expectNil(offline.quality.visibleLabel); expectTrue(outage.quality.visibleLabel != nil)
+        let input = RequestInput(snapshot: snapshot, action: .simplify)
+        expectNil(KnowledgeEntry(input: input, result: quiet, action: .simplify, question: nil).quality)
+        expectEqual(KnowledgeEntry(input: input, result: outage, action: .simplify, question: nil).quality, outage.quality.label)
     }
     @MainActor func testCorruptFileIsPreservedAndBlocksWrites() throws {
         let file = scratch(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }

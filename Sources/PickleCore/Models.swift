@@ -40,6 +40,13 @@ public enum QualityStatus: Equatable, Sendable {
         case .chartValidated: return "Chart structure and source evidence checked"
         }
     }
+    /// Reasons meaning checks were deliberately off, rather than expected and unavailable.
+    public static let checksOff = "Jev disabled", offline = "local-only mode"
+    /// The label shown with an answer: whenever checks ran or were expected, and never when they are turned off.
+    public var visibleLabel: String? {
+        if case .notChecked(let reason) = self, reason == Self.checksOff || reason == Self.offline { return nil }
+        return label
+    }
     public var details: String {
         switch self {
         case .concerns(let flags): return flags.joined(separator: ", ").replacingOccurrences(of: "_", with: " ")

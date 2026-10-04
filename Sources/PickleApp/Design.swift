@@ -99,6 +99,27 @@ struct PickleActionStyle: ButtonStyle {
     }
 }
 
+/// Answer-check status beside an answer. Hidden when checks are turned off; warnings stay visible.
+struct QualityCaption: View {
+    let quality: QualityStatus
+    var body: some View {
+        if let label = quality.visibleLabel {
+            Label(label, systemImage: icon).font(.caption)
+                .foregroundStyle(warning ? Color(red: 0.98, green: 0.78, blue: 0.36) : .secondary)
+                .help(quality.details)
+                .accessibilityLabel("Answer check: " + label)
+        }
+    }
+    private var warning: Bool { switch quality { case .concerns, .uncertain: return true; default: return false } }
+    private var icon: String {
+        switch quality {
+        case .checked, .chartValidated: return "checkmark.seal"
+        case .concerns, .uncertain: return "exclamationmark.triangle"
+        case .notChecked: return "minus.circle"
+        }
+    }
+}
+
 // A dedicated native drag surface keeps text selection, scrolling and buttons intact.
 struct WindowDragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { DragView() }

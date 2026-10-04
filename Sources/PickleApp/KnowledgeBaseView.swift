@@ -43,6 +43,7 @@ struct KnowledgeBaseView: View {
                                     Text(reference.url).foregroundStyle(.secondary)
                                 }.font(.caption).textSelection(.enabled)
                             }
+                            if let quality = entry.quality { Text(quality).font(.caption).foregroundStyle(.secondary) }
                             HStack {
                                 Text(entry.recordedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
                                 Spacer()

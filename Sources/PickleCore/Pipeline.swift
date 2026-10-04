@@ -13,7 +13,7 @@ public struct RequestPipeline: Sendable {
         guard !localOnly || !provider.isRemote else { throw PickleError.message("Local-only mode blocks cloud generation. Use the offline sample or disable local-only mode.") }
         let started = Date()
         let checker = localOnly || !provider.permitsCloudChecks ? nil : evaluator
-        var unavailable = checker == nil ? (localOnly ? "local-only mode" : "Jev disabled") : "Jev unavailable"
+        var unavailable = checker == nil ? (localOnly ? QualityStatus.offline : QualityStatus.checksOff) : "Jev unavailable"
         var notes: [String] = [], difficulty: String?, evaluatorModel: String?
         var activeChecker = checker
         if input.limited { notes.append("Limited explanation: missing context may affect this answer.") }
