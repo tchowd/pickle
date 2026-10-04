@@ -23,7 +23,7 @@ swift run PickleChecks
 ./scripts/test.sh
 ```
 
-The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 68 checks, plus native window, persistence, and reading-action smoke checks.
+The [recorded test results](docs/evidence/deterministic-checks.txt) contain the latest run. The dependency-free test runner works with Command Line Tools. On the development machine, XCTest was unavailable with CLT and full Xcode required license acceptance; the project does not change that system setting. Every check prints PASS/FAIL and exits nonzero on failure. There are currently 75 checks, plus native window, persistence, reading-action, knowledge-base, and streamed-draft smoke checks.
 
 ## Set up selection capture
 
@@ -152,7 +152,7 @@ For loaded pages and captions, use **Connect browser extension** in the same set
 
 **Listen for 30 seconds** provides an explicit, local audio-transcription fallback when a source window is known. It needs macOS permissions and an available on-device speech recognizer. It records source-app audio from the moment you start, including other playing tabs in that app, and writes no audio file.
 
-Verification includes 58 core checks, caption/extension fixtures, native-host framing, isolated HTML parsing, source cleanup and late-result rejection, and a real authenticated loopback bridge test. A public HTTPS fetch of example.com and article extraction passed. Live browser-extension installation, site compatibility, caption extraction on real videos, and microphone-free source-audio capture remain unverified on-device. No private page, real audio, or live AI request was used for validation.
+Verification includes the core checks, caption/extension fixtures, native-host framing, isolated HTML parsing, source cleanup and late-result rejection, and a real authenticated loopback bridge test. A public HTTPS fetch of example.com and article extraction passed. Live browser-extension installation, site compatibility, caption extraction on real videos, and microphone-free source-audio capture remain unverified on-device. No private page, real audio, or live AI request was used for validation.
 
 ## Local AI
 
