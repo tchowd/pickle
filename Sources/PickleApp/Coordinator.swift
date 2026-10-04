@@ -32,6 +32,8 @@ import PickleCore
     private var lastMode: AIMode?
     @Published var progress: String?
     @Published var draft = ""
+    private var pendingDraft: String?
+    private var draftFlush: Task<Void, Never>?
     @Published var listening = false
     private var audioTask: Task<Void, Never>?
     private var audioService: AudioContextService?
@@ -75,7 +77,7 @@ import PickleCore
         self.session = session; self.settings = settings; self.lastMode = settings.aiMode; self.referenceFetcher = referenceFetcher
         self.knowledge = knowledge; self.writer = writer
     }
-    func cancel() { stopListening(); queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; draft = ""; credential = nil }
+    func cancel() { stopListening(); queuedPageAction = nil; visualGeneration = UUID(); visualTask?.cancel(); visualTask = nil; visualBusy = false; if progress != nil { Task { await metrics.record(.cancelled) } }; runner.cancel(); progress = nil; dropPendingDraft(); draft = ""; credential = nil }
     func clear() { cancel(); cancelReference(); session.reference = nil; referenceStatus = nil; pageGeneration = UUID(); pageTask?.cancel(); pageTask = nil; pageTimeout?.cancel(); pageTimeout = nil; pageLoading = false; pageStatus = nil; session.clear(); manualText = ""; question = ""; captureMessage = nil; error = nil; needsContext = nil; needsChart = false; needsDisclosure = false; isSample = false; credential = nil; lastQuestion = ""; lastLimited = false; lastChart = nil; lastAsk = nil; pendingAction = .simplify }
     func setSelection(_ snapshot: SelectionSnapshot) { clear(); session.snapshot = snapshot; captureReference() }
     func capturePage(_ target: ScreenContextTarget?) {
@@ -302,11 +304,11 @@ import PickleCore
         let policyAtStart = settings.requestPolicy
         let recordAtStart = knowledge != nil && settings.knowledgeBaseEnabled && !isSample
         let draftHandler: (@MainActor (String) -> Void)?
-        if settings.streaming { draftHandler = { [weak self] text in guard let self, self.settings.requestPolicy == policyAtStart else { return }; self.draft = text } }
+        if settings.streaming { draftHandler = { [weak self] text in guard let self, self.settings.requestPolicy == policyAtStart else { return }; self.showDraft(text) } }
         else { draftHandler = nil }
         runner.start(pipeline: pipeline, input: input, draft: draftHandler, progress: { [weak self] message in guard let self, self.settings.requestPolicy == policyAtStart else { return }; self.progress = message }) { [weak self] outcome in
             guard let self, self.settings.requestPolicy == policyAtStart else { return }
-            self.progress = nil; self.draft = ""; self.credential = nil
+            self.progress = nil; self.dropPendingDraft(); self.draft = ""; self.credential = nil
             switch outcome {
             case .success(let outcome):
                 switch outcome {
@@ -346,6 +348,19 @@ import PickleCore
         case .followUp: return Ask(action: .followUp, question: question)
         }
     }
+    /// Drafts arrive per token, and re-rendering a long formatted answer that often stalls the main thread.
+    /// Show at most one draft per interval; the latest always wins, and cancel or completion drops it.
+    private func showDraft(_ text: String) {
+        pendingDraft = text
+        guard draftFlush == nil else { return }
+        draftFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let self, !Task.isCancelled else { return }
+            self.draftFlush = nil
+            if let text = self.pendingDraft { self.pendingDraft = nil; self.draft = text }
+        }
+    }
+    private func dropPendingDraft() { draftFlush?.cancel(); draftFlush = nil; pendingDraft = nil }
     func localConfiguration(token: String = "", vision: Bool = false) -> LocalAIConfiguration {
         LocalAIConfiguration(address: settings.localAddress.trimmingCharacters(in: .whitespacesAndNewlines), model: vision ? settings.localVisionModel : settings.localModel, token: token, sameDevice: settings.localSameDevice)
     }

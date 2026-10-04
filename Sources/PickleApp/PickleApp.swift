@@ -150,7 +150,8 @@ import PickleCore
                 let bridgeFeatures = await self.checkBrowserBridge()
                 let localFeatures = self.checkLocalModePreferences()
                 let knowledgeFeatures = await self.checkKnowledgeBase()
-                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures && webFeatures && bridgeFeatures && localFeatures && knowledgeFeatures
+                let draftFeatures = await self.checkStreamingDrafts()
+                let ok = generated && hidden && reopened && chooser && chosen && anchored && stillVisible && inlineReopened && clamped && remembered && freshSelection && freshEmpty && features && pageFeatures && webFeatures && bridgeFeatures && localFeatures && knowledgeFeatures && draftFeatures
                 print(ok ? "PICKLE_SMOKE_PASS: movable action bar, anchored expansion, screen-edge clamping, remembered position, reopen, fresh sessions, saved answers, appearance persistence, and reading actions" : "PICKLE_SMOKE_FAIL")
                 if !ok { exit(1) }
                 NSApp.terminate(nil)
@@ -235,6 +236,37 @@ import PickleCore
         let ok = !checks.contains(false)
         print(ok ? "PICKLE_KNOWLEDGE_BASE_PASS: off by default, one record per answer, follow-up/explain/adjustment records and headings, retry and queued actions, pointer-only references, stale/cancelled/sample skipped, switch off, kept after clear, not injected"
                  : "PICKLE_KNOWLEDGE_BASE_FAIL: \(checks)")
+        return ok
+    }
+    /// Streamed drafts are coalesced, the latest wins, and nothing appears after cancellation or completion.
+    private func checkStreamingDrafts() async -> Bool {
+        let suite = "com.pickle.draft-check." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = SettingsStore(defaults: defaults)
+        preferences.aiMode = .local; preferences.localAddress = "http://127.0.0.1:11999"; preferences.localSameDevice = true
+        preferences.localConsentServer = preferences.localConsentID
+        let session = SessionStore()
+        let coordinator = RequestCoordinator(session: session, settings: preferences, writer: DraftCheckWriter())
+        var shown: [String] = []
+        let watcher = coordinator.$draft.sink { if !$0.isEmpty { shown.append($0) } }
+        defer { watcher.cancel() }
+        coordinator.setSelection(.init(text: "Cells release energy.", appName: "Fixture", bundleID: "fixture"))
+        coordinator.run(.simplify)
+        try? await Task.sleep(for: .milliseconds(150))
+        let midStream = coordinator.draft.hasPrefix("Word") && session.result == nil
+        for _ in 0..<40 where session.result == nil { try? await Task.sleep(for: .milliseconds(50)) }
+        try? await Task.sleep(for: .milliseconds(150))
+        let completed = session.result?.text == "Final answer." && coordinator.draft.isEmpty
+        let coalesced = !shown.isEmpty && shown.count < DraftCheckWriter.drafts / 2
+        shown = []
+        coordinator.run(.expand)
+        try? await Task.sleep(for: .milliseconds(60)); coordinator.cancel()
+        let shownAtCancel = shown.count
+        try? await Task.sleep(for: .milliseconds(400))
+        let quietAfterCancel = coordinator.draft.isEmpty && shown.count == shownAtCancel && session.result?.action == .simplify
+        let ok = midStream && completed && coalesced && quietAfterCancel
+        print(ok ? "PICKLE_DRAFT_PASS: coalesced drafts, latest shown, nothing after completion or cancellation" : "PICKLE_DRAFT_FAIL: \([midStream, completed, coalesced, quietAfterCancel])")
         return ok
     }
     private func checkLocalModePreferences() -> Bool {
@@ -633,5 +665,19 @@ private actor KnowledgeCheckWriter: GenerativeProvider {
         if failNext { failNext = false; throw PickleError.message("Fixture failure") }
         await withCheckedContinuation { continuation in DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { continuation.resume() } }
         return Generation(text: "Answer \(prompts.count).", model: "fixture-model")
+    }
+}
+/// Streams many small drafts quickly, like a fast cloud model.
+private struct DraftCheckWriter: StreamingGenerativeProvider {
+    static let drafts = 60
+    let isRemote = false
+    func generate(_ prompt: GenerationPrompt) async throws -> Generation { Generation(text: "Final answer.", model: "fixture-model") }
+    func generate(_ prompt: GenerationPrompt, draft: @escaping DraftSink) async throws -> Generation {
+        var text = ""
+        for index in 0..<Self.drafts {
+            text += "Word\(index) "; await draft(text)
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        return Generation(text: "Final answer.", model: "fixture-model")
     }
 }
