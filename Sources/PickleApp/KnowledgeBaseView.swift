@@ -36,7 +36,7 @@ struct KnowledgeBaseView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     let matches = store.search(search)
-                    if matches.isEmpty { Text(store.entries.isEmpty ? "Answers appear here after you read with the knowledge base turned on." : "No matching entries.").foregroundStyle(.secondary).padding(.vertical, 30) }
+                    if matches.isEmpty && !store.isUnreadable { Text(store.entries.isEmpty ? "Answers appear here after you read with the knowledge base turned on." : "No matching entries.").foregroundStyle(.secondary).padding(.vertical, 30) }
                     ForEach(matches) { entry in
                         GlassSection(entry.appName + " · " + entry.action.title + (entry.chart.map { $0 == .bar ? " · Bar chart" : " · Flow diagram" } ?? "")) {
                             if let question = entry.question { Text(question).font(.headline).textSelection(.enabled) }
@@ -50,7 +50,10 @@ struct KnowledgeBaseView: View {
                                     Text(reference.url).foregroundStyle(.secondary)
                                 }.font(.caption).textSelection(.enabled)
                             }
-                            if let quality = entry.quality { Text(quality).font(.caption).foregroundStyle(.secondary) }
+                            if let quality = entry.quality {
+                                let warning = quality == QualityStatus.concerns([]).label || quality == QualityStatus.uncertain.label
+                                Text(quality).font(.caption).foregroundStyle(warning ? Color(red: 0.98, green: 0.78, blue: 0.36) : .secondary)
+                            }
                             HStack {
                                 Text(entry.recordedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
                                 Spacer()
