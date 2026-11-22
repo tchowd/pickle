@@ -19,6 +19,20 @@ fn payload() -> BrowserPayload {
 }
 
 #[test]
+fn legacy_registration_remains_readable_and_invalid_package_cannot_fall_back_to_path() {
+    let registration: HostRegistration = serde_json::from_value(json!({"browser":"Chrome","allowed_origin":"chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/","bridge_directory":"bridge","application":"app"})).unwrap();
+    assert!(registration.application_aumid.is_none());
+    let mut registration = registration;
+    registration.application_aumid = Some("malformed!Pickle --argument".into());
+    assert!(
+        launch_app(&registration)
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid packaged")
+    );
+}
+
+#[test]
 fn native_framing_preserves_unicode_and_bounds_allocations() {
     let expected = json!({"text":"日本語 café"});
     let mut output = vec![];
@@ -138,6 +152,7 @@ async fn native_host_relay_overwrites_page_supplied_browser_identity() {
         allowed_origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".into(),
         bridge_directory: directory.path().to_path_buf(),
         application: directory.path().join("unused-app"),
+        application_aumid: None,
     };
     let task = tokio::task::spawn_blocking(move || relay_native_message(value, &registration));
     let received = rx.recv().await.unwrap();

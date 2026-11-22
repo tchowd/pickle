@@ -8,7 +8,7 @@ rust-version.workspace = true
 pickle-core.workspace = true
 pickle-providers.workspace = true
 pickle-platform.workspace = true
-rune.workspace = true
+rune = { workspace = true, features = ["native-file-dialog"] }
 rune-kit.workspace = true
 serde.workspace = true
 serde_json.workspace = true

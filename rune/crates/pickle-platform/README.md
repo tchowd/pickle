@@ -149,6 +149,24 @@ continues to work. This combined API does not silently return an image-only refe
 when OCR cannot run. An MSIX or another supported identity-bearing release and real
 language-pack/device verification remain shipping gates for Windows page references.
 
+`verify_ocr_runtime()` is a content-free installed-package probe, exposed by the
+application's `--verify-windows-ocr` maintenance option. It requires actual package
+identity, creates a named MTA worker, draws the fixed word `PICKLE` in Segoe UI into
+an owned 768×180 memory bitmap, and runs the same Windows OCR recognition helper as
+page references. It checks for the exact known word and returns only success or a
+bounded static failure. Recognition has a five-second deadline; the whole probe
+waits at most eight seconds. It never obtains a screen/window DC, captures user
+content, installs OCR languages, requests permissions, writes images, or accesses
+the network. A missing recognizer reports that a supported installed OCR language
+matching the user's preferences is required. Non-Windows calls explicitly fail.
+
+The fixture test checks rendering on Windows; portable tests check known-word
+matching. Passing those tests or cross-checking the code does not prove installed
+Windows recognition. Record the explicit CLI probe result after installing the
+identity-bearing package on the Windows runner/device, then test real source-window
+capture separately; a controlled bitmap does not exercise WGC, focus, GPU mapping,
+window exclusions, or protected-source handling.
+
 ## Configured Windows transcription
 
 Windows source audio requires an explicit `LocalTranscriberConfig`:

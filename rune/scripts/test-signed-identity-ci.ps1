@@ -1,0 +1,91 @@
+# This changes trust only inside a disposable hosted Windows CI runner.
+# The production builders never create certificates or modify trust stores.
+$ErrorActionPreference = 'Stop'
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
+  throw 'This test is restricted to disposable GitHub-hosted Windows runners.'
+}
+# Appx and the deployment helper's WinRT projection use the inbox Windows PowerShell runtime.
+# Modern pwsh/.NET removed built-in WinRT activation; keep the entire cleanup in the same shell.
+if ($PSEdition -eq 'Core') {
+  & "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath
+  if ($LASTEXITCODE -ne 0) { throw "Signed identity CI failed in Windows PowerShell with status $LASTEXITCODE." }
+  return
+}
+Set-Location (Join-Path $PSScriptRoot '..')
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PickleRune'
+if (Test-Path -LiteralPath $uninstallKey) { throw 'The hosted runner already contains an installed Pickle. Refusing to change it.' }
+$id = [guid]::NewGuid().ToString('N')
+$name = 'Pickle.Rune.CI.' + $id.Substring(0,16)
+$subject = 'CN=Pickle CI ' + $id
+$work = Join-Path ([IO.Path]::GetTempPath()) ('pickle-identity-ci-' + $id)
+$install = Join-Path $work 'installation'
+New-Item -ItemType Directory -Path $work | Out-Null
+$certificate = $null
+$stage = $null
+$baseline = @{}
+foreach ($file in @('PickleRune-setup.exe','PickleRune-windows.zip')) {
+  $path = Join-Path $PWD ('artifacts/' + $file)
+  if (Test-Path -LiteralPath $path) {
+    $copy = Join-Path $work $file
+    Copy-Item -LiteralPath $path -Destination $copy
+    $baseline[$file] = $copy
+  }
+}
+try {
+  $certificate = New-SelfSignedCertificate -Type Custom -KeyUsage DigitalSignature `
+    -CertStoreLocation 'Cert:\CurrentUser\My' -Subject $subject -FriendlyName 'Disposable Pickle CI signing test' `
+    -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3','2.5.29.19={text}') `
+    -HashAlgorithm SHA256 -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy NonExportable -NotAfter (Get-Date).AddDays(1)
+  $publicCertificate = Join-Path $work 'public-test-certificate.cer'
+  Export-Certificate -Cert $certificate -FilePath $publicCertificate | Out-Null
+  Import-Certificate -FilePath $publicCertificate -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople' | Out-Null
+  & ./scripts/build-identity.ps1 -Configuration debug -PackageName $name -Publisher $certificate.Subject `
+    -PublisherDisplayName 'Pickle CI test only' -Version '0.1.0.0' -CertificateThumbprint $certificate.Thumbprint -Installer
+  $stage = Get-ChildItem artifacts/windows-* -Directory | Where-Object {
+    $metadata = Join-Path $_.FullName 'PickleIdentity.json'
+    (Test-Path -LiteralPath $metadata) -and (Get-Content -Raw -LiteralPath $metadata | ConvertFrom-Json).name -ceq $name
+  } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if (!$stage) { throw 'The signed build did not produce this test identity payload.' }
+  Copy-Item -LiteralPath artifacts/PickleRune-setup.exe -Destination artifacts/PickleRune-identity-ci-test-setup.exe
+  Copy-Item -LiteralPath artifacts/PickleRune-windows.zip -Destination artifacts/PickleRune-identity-ci-test-windows.zip
+  & ./scripts/test-windows-package.ps1 -InstallerPath artifacts/PickleRune-identity-ci-test-setup.exe -InstallDirectory $install
+}
+finally {
+  try {
+    # Retry only this test's uninstaller, and only when it owns the installed-app entry.
+    $uninstaller = Join-Path $install 'Uninstall.exe'
+    if ((Test-Path -LiteralPath $uninstaller) -and (Test-Path -LiteralPath $uninstallKey) -and
+        (Get-ItemProperty -LiteralPath $uninstallKey).InstallLocation -eq $install) {
+      $cleanup = Start-Process -FilePath $uninstaller -ArgumentList @('/S', "_?=$install") -Wait -PassThru
+      if ($cleanup.ExitCode -ne 0) { Write-Warning 'The test uninstaller failed; attempting exact identity cleanup below.' }
+    }
+    if ($stage -and (Test-Path -LiteralPath $install)) {
+      . ./packaging/windows/identity-registration.ps1
+      Invoke-PickleIdentity Unregister $install (Join-Path $stage.FullName 'PickleIdentity.json')
+    }
+    if ($certificate -and @(Get-AppxPackage -Name $name | Where-Object { $_.Name -ceq $name -and $_.Publisher -ceq $certificate.Subject }).Count) {
+      throw 'The exact CI identity is still registered after cleanup.'
+    }
+  }
+  finally {
+    $cleanupErrors = @()
+    if ($certificate) {
+      foreach ($store in @('Cert:\CurrentUser\TrustedPeople','Cert:\CurrentUser\My')) {
+        $path = Join-Path $store $certificate.Thumbprint
+        try {
+          if (Test-Path -LiteralPath $path) {
+            if ($store -eq 'Cert:\CurrentUser\My') { Remove-Item -Path $path -DeleteKey -ErrorAction Stop }
+            else { Remove-Item -Path $path -ErrorAction Stop }
+          }
+        } catch { $cleanupErrors += "Could not remove this test certificate from $store`: $_" }
+      }
+    }
+    # Keep test-signed installers clearly named; retain the ordinary development artifacts.
+    foreach ($file in $baseline.Keys) {
+      try { Copy-Item -LiteralPath $baseline[$file] -Destination (Join-Path $PWD ('artifacts/' + $file)) -Force -ErrorAction Stop }
+      catch { $cleanupErrors += "Could not restore ordinary artifact $file`: $_" }
+    }
+    if ($cleanupErrors.Count) { throw ($cleanupErrors -join [Environment]::NewLine) }
+  }
+}
+Write-Host 'PASS: hosted-runner test signing, installed external identity, real fixed-fixture OCR, repair, uninstall, and exact certificate/private-key cleanup.'

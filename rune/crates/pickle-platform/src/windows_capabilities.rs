@@ -5,9 +5,29 @@ pub(crate) fn identity_probe_succeeded(status: u32, length: u32) -> bool {
     status == 122 && length > 1 && length <= 65_536
 }
 
+pub(crate) fn ocr_fixture_matches(text: &str) -> bool {
+    text.split(|character: char| !character.is_ascii_alphabetic())
+        .any(|word| word.eq_ignore_ascii_case("PICKLE"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ocr_probe_requires_the_exact_known_fixture_word() {
+        assert!(ocr_fixture_matches("PICKLE\n"));
+        assert!(ocr_fixture_matches("  Pickle. "));
+        for text in [
+            "",
+            "unrelated",
+            "PICKLES",
+            "PICKL E",
+            "P1CKLE",
+            "PREFIXPICKLE",
+        ] {
+            assert!(!ocr_fixture_matches(text));
+        }
+    }
     #[test]
     fn unpackaged_and_invalid_identity_probes_do_not_enable_ocr() {
         assert!(identity_probe_succeeded(122, 100));

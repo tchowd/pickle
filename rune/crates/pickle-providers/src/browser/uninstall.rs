@@ -146,6 +146,7 @@ fn unchanged(path: &Path, expected: &Option<Vec<u8>>) -> Result<(), PickleError>
     Ok(())
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn remove_files(removal: Removal) -> Result<(), PickleError> {
     remove_files_with_registry(removal, |_| Ok(()))
 }
@@ -228,7 +229,7 @@ fn uninstall_expected_application(
             let registration: HostRegistration =
                 serde_json::from_slice(&removal.registration_bytes)
                     .map_err(|_| error("Browser registration changed during cleanup."))?;
-            if !same_application(&registration.application, application) {
+            if !registration_owned(&registration, application)? {
                 return Err(error(
                     "The browser host now belongs to another application; it was preserved.",
                 ));
@@ -256,6 +257,32 @@ fn same_application(registered: &Path, current: &Path) -> bool {
         && fs::canonicalize(registered).is_ok_and(|registered| registered == current)
 }
 
+fn registration_owned(
+    registration: &HostRegistration,
+    current: &Path,
+) -> Result<bool, PickleError> {
+    let current_identity = match std::env::current_exe().and_then(fs::canonicalize) {
+        Ok(executable) if executable == current => super::package::current_aumid()?,
+        _ => None,
+    };
+    Ok(ownership_matches(
+        registration,
+        current,
+        current_identity.as_deref(),
+    ))
+}
+
+fn ownership_matches(
+    registration: &HostRegistration,
+    current: &Path,
+    identity: Option<&str>,
+) -> bool {
+    match registration.application_aumid.as_deref() {
+        Some(registered) => super::package::valid_aumid(registered) && identity == Some(registered),
+        None => same_application(&registration.application, current),
+    }
+}
+
 fn cleanup_for_application(
     application: &Path,
     support_root: &Path,
@@ -275,7 +302,7 @@ fn cleanup_for_application(
         let registration: HostRegistration = serde_json::from_slice(&bytes).map_err(|_| {
             error("A browser host registration is unreadable; no cleanup was started.")
         })?;
-        if !same_application(&registration.application, &application) {
+        if !registration_owned(&registration, &application)? {
             continue;
         }
         if registration.browser != browser {
@@ -296,8 +323,9 @@ fn cleanup_for_application(
     Ok(removed)
 }
 
-/// Installer cleanup: disconnect only hosts whose recorded application resolves to this exact app.
-/// Other installation paths and same-named binaries elsewhere are deliberately skipped.
+/// Installer cleanup: disconnect only this exact executable or this process's OS package identity.
+/// Full MSIX registrations can survive versioned paths; sparse and unpackaged hosts require the
+/// same canonical executable. Other application identities and installations are skipped.
 pub fn uninstall_hosts_for_application(
     application: &Path,
     support_root: &Path,
@@ -396,6 +424,41 @@ fn remove_registry_value(browser: BrowserKind, expected: &Path) -> Result<(), Pi
 mod tests {
     use super::*;
     const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    #[test]
+    fn package_ownership_survives_version_paths_but_never_crosses_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("new-version.exe");
+        fs::write(&current, "fixture").unwrap();
+        let current = fs::canonicalize(current).unwrap();
+        let mut registration = HostRegistration {
+            browser: BrowserKind::Chrome,
+            allowed_origin: format!("chrome-extension://{ID}/"),
+            bridge_directory: root.path().join("BrowserBridge"),
+            application: root.path().join("removed-old-version.exe"),
+            application_aumid: Some("Pickle.Rune_123456789abcd!Pickle".into()),
+        };
+        assert!(ownership_matches(
+            &registration,
+            &current,
+            Some("Pickle.Rune_123456789abcd!Pickle")
+        ));
+        assert!(!ownership_matches(
+            &registration,
+            &current,
+            Some("Pickle.Other_123456789abcd!Pickle")
+        ));
+        assert!(!ownership_matches(&registration, &current, None));
+        registration.application = current.clone();
+        assert!(!ownership_matches(&registration, &current, None));
+        registration.application_aumid = None;
+        assert!(ownership_matches(&registration, &current, None));
+        registration.application = root.path().join("other.exe");
+        assert!(!ownership_matches(
+            &registration,
+            &current,
+            Some("Pickle.Rune_123456789abcd!Pickle")
+        ));
+    }
     fn installed(root: &Path) -> PathBuf {
         let directory = root.join("NativeHost/chrome");
         fs::create_dir_all(&directory).unwrap();
@@ -410,6 +473,7 @@ mod tests {
             allowed_origin: format!("chrome-extension://{ID}/"),
             bridge_directory: root.join("BrowserBridge"),
             application: root.join("Pickle"),
+            application_aumid: None,
         };
         fs::write(
             directory.join("registration.json"),
@@ -523,6 +587,7 @@ mod tests {
             allowed_origin: format!("chrome-extension://{ID}/"),
             bridge_directory: root.path().join("BrowserBridge"),
             application: other,
+            application_aumid: None,
         };
         fs::write(
             edge.join("registration.json"),

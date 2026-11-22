@@ -17,6 +17,8 @@ if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or @($Version.Split('.') | Where-
 if ($UnsignedDevelopment -and $CertificateThumbprint) { throw 'Choose either explicit unsigned development or signing.' }
 if (!$UnsignedDevelopment -and $CertificateThumbprint -notmatch '^[a-fA-F0-9]{40}$') { throw 'Release MSIX requires an existing signing certificate thumbprint; use -UnsignedDevelopment only for CI inspection.' }
 $stage = (Resolve-Path -LiteralPath $StageDirectory).Path
+& python (Join-Path (Split-Path $PSScriptRoot -Parent) 'packaging/verify-windows-runtime.py') --directory $stage --architecture $Architecture
+if ($LASTEXITCODE -ne 0) { throw 'MSIX payload does not satisfy the static Windows runtime policy.' }
 foreach ($name in @('PickleRune.exe','pickle-browser-host.exe','Pickle.ico','THIRD_PARTY_NOTICES.txt','dependency-inventory.json','browser-extension')) {
   if (!(Test-Path -LiteralPath (Join-Path $stage $name))) { throw "Windows staging payload is missing $name." }
 }

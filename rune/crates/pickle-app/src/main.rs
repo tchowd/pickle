@@ -5,6 +5,7 @@
 mod browser_setup;
 mod context;
 mod controller;
+mod diagnostics;
 mod geometry_store;
 mod instance;
 mod invocation_ui;
@@ -27,6 +28,22 @@ use std::sync::Arc;
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.iter().any(|arg| arg == "--verify-windows-ocr") {
+        if arguments.len() != 1 {
+            eprintln!("The fixed OCR probe cannot be combined with other options.");
+            std::process::exit(2);
+        }
+        match pickle_platform::verify_ocr_runtime() {
+            Ok(()) => {
+                println!(r#"{{"schema":1,"test":"windows-ocr-fixed-fixture","passed":true}}"#)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if let Some(exit_code) = maintenance::handle(&arguments) {
         std::process::exit(exit_code);
     }

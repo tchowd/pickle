@@ -9,6 +9,7 @@ cargo fmt --manifest-path tools/icon-builder/Cargo.toml --check
 cargo clippy --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked --all-targets -- -D warnings
 cargo test --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked
 python3 packaging/test_notices.py
+python3 packaging/test_windows_runtime.py
 (
   cd ..
   node Tests/BrowserExtensionTests/extract.test.js

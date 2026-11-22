@@ -48,6 +48,8 @@ The Windows UI Automation reader intentionally does not claim access to elevated
 
 Windows page OCR requires package identity; it is disabled in the unpackaged ZIP/NSIS build. The [MSIX packaging instructions](packaging/windows/MSIX.md) provide an explicit identity/signing path and unsigned CI inspection commands. Installed OCR, runtime dependencies, browser-host continuity across package updates, and clean-machine install/upgrade/uninstall remain release gates. An unsigned MSIX artifact is for inspection and is not a distributable user release.
 
+The preferred complete Windows installer uses NSIS with a signed external identity package, retaining a stable application path and ownership-checked uninstall cleanup. `scripts/build-identity.ps1` requires an existing trusted publisher certificate. The [runtime audit](packaging/windows/RUNTIME.md) scopes static CRT compilation to the Windows application target and checks packaged PE imports before distribution. Production builders never create certificates or modify certificate trust. The separate signed-identity CI test changes trust only within a disposable GitHub-hosted runner and removes its test certificate/private key afterward.
+
 ## First reading session
 
 1. Launch the app and choose **Try a sample** to test a clearly labeled fixed, network-free demonstration.
@@ -103,6 +105,8 @@ The browser-specific native host is a bundled Rust executable; users do not need
 - Local files use a versioned schema, atomic replacement, and a cross-process write lock. Malformed or unsupported archives block replacement writes.
 
 Settings offers **Import original Pickle history** on macOS. It reads the original knowledge-base JSON and explicit bookmark data, preserves chart/reference metadata, deduplicates imports, and leaves source files untouched. It does not import credentials or privacy consent. The new app uses a separate development identity and storage location.
+
+Settings → **Support diagnostics** lets you review the complete report before choosing a destination in the native Save dialog. The report includes bounded build/platform metadata, capability/permission booleans and general policy flags. It excludes passages, answers, history, context, credentials, endpoints, model names, file paths and exclusions. Export is local and explicit; nothing is submitted automatically.
 
 ## Tests and reproducible UI scenes
 

@@ -91,11 +91,28 @@ mod windows_context;
 #[cfg(target_os = "windows")]
 mod windows_impl;
 #[cfg(target_os = "windows")]
+mod windows_ocr;
+#[cfg(target_os = "windows")]
 pub use windows_impl::*;
 #[cfg(target_os = "windows")]
 mod windows_shell;
 #[cfg(target_os = "windows")]
 pub use windows_shell::NativeShell;
+
+/// Verify Windows package identity and actual local recognition against a fixed
+/// in-memory fixture. Reads no screen, clipboard, source application, or network.
+pub fn verify_ocr_runtime() -> Result<(), PlatformError> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_ocr::verify_ocr_runtime()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(PlatformError(
+            "Windows OCR verification is available only on Windows.".into(),
+        ))
+    }
+}
 
 /// Match the same exclusion policy before capture, before a request, and when
 /// accepting browser context. Windows exclusions accept a qualified identity,

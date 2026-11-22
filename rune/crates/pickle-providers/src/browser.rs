@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::transport::error;
 
+mod package;
 mod uninstall;
 pub use uninstall::{uninstall_browser_host, uninstall_hosts_for_application};
 
@@ -362,6 +363,9 @@ pub struct HostRegistration {
     pub allowed_origin: String,
     pub bridge_directory: PathBuf,
     pub application: PathBuf,
+    /// OS-derived stable identity for MSIX; absent in legacy and unpackaged registrations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_aumid: Option<String>,
 }
 
 /// Explicit setup action. Installs a browser-specific binary copy and origin-bound registration.
@@ -372,6 +376,7 @@ pub fn install_browser_host(
     application: &Path,
     support_directory: &Path,
 ) -> Result<PathBuf, PickleError> {
+    let mut application_aumid = package::current_aumid()?;
     if extension_id.len() != 32
         || !extension_id
             .bytes()
@@ -385,6 +390,19 @@ pub fn install_browser_host(
         return Err(error(
             "Use the packaged Pickle application to connect the extension.",
         ));
+    }
+    if application_aumid.is_some()
+        && std::env::current_exe().and_then(std::fs::canonicalize).ok()
+            != std::fs::canonicalize(application).ok()
+    {
+        return Err(error(
+            "Packaged browser setup must belong to this exact application.",
+        ));
+    }
+    // Sparse identity keeps NSIS's stable executable path and exact-path cleanup ownership.
+    // Full MSIX needs version-independent activation because its WindowsApps path changes.
+    if application_aumid.is_some() && package::uses_external_location()? {
+        application_aumid = None;
     }
     #[cfg(target_os = "windows")]
     if browser.registry_key().is_none() {
@@ -427,6 +445,7 @@ pub fn install_browser_host(
             allowed_origin: format!("chrome-extension://{extension_id}/"),
             bridge_directory: support_directory.join("BrowserBridge"),
             application: application.to_path_buf(),
+            application_aumid,
         };
         private_json(&directory.join("registration.json"), &registration)?;
         #[cfg(target_os = "macos")]
@@ -500,7 +519,12 @@ fn write_frame(output: &mut impl Write, value: Value) -> Result<(), PickleError>
         .map_err(|_| error("Could not write browser response."))
 }
 
-fn launch_app(path: &Path) {
+fn launch_app(registration: &HostRegistration) -> Result<(), PickleError> {
+    if let Some(aumid) = &registration.application_aumid {
+        // No stale-path fallback: a removed package must not launch a different executable.
+        return package::activate(aumid);
+    }
+    let path = &registration.application;
     #[cfg(target_os = "macos")]
     if path.extension().is_some_and(|value| value == "app") {
         let _ = std::process::Command::new("/usr/bin/open")
@@ -509,7 +533,7 @@ fn launch_app(path: &Path) {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
-        return;
+        return Ok(());
     }
     let mut command = std::process::Command::new(path);
     command
@@ -521,7 +545,9 @@ fn launch_app(path: &Path) {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let _ = command.spawn();
+    command.spawn().map(|_| ()).map_err(|_| {
+        error("Could not open Pickle. Check that this installation is still available.")
+    })
 }
 
 pub fn relay_native_message(
@@ -584,7 +610,7 @@ pub fn relay_native_message(
             return Ok(response);
         }
         if !launched {
-            launch_app(&registration.application);
+            launch_app(registration)?;
             launched = true;
         }
         thread_sleep();

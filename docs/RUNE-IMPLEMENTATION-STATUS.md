@@ -13,7 +13,7 @@ The repository now contains a substantial Rust/Rune application, native adapters
 | Partial | Some required behavior exists, with a concrete missing part or intentional difference below. |
 | Release gate open | Requires release infrastructure, production credentials, distribution review, or acceptance evidence. |
 
-This is a source-and-local-execution snapshot, not a certification. GitHub CI configuration is present; no successful remote run is asserted here. A cross-target check validates Rust types and conditional compilation, not Windows linking, installation, focus, UI Automation, capture, or graphics execution. Headless Rune screenshots validate a distinct path from native desktop interaction.
+This is a source-and-execution snapshot, not a certification. [CI run 45084489205](https://github.com/tchowd/pickle/actions/runs/45084489205) at `86473ea128175685ea062e7f49b03da641f94110` passed the complete macOS job; Windows passed workspace checking and stopped on a target-specific unused-helper lint error. The helper's conditional compilation is fixed in the subsequent source. New diagnostics, identity and runtime changes require another integrated run. A cross-target check validates Rust types and conditional compilation, not Windows linking, installation, focus, UI Automation, capture, or graphics execution. Headless Rune screenshots validate a distinct path from native desktop interaction.
 
 ## 2. Actual application structure
 
@@ -90,6 +90,7 @@ Rune is pinned to `67d73a5f18390686c8e9b8b3a32b3414ebd66db0`, with required patc
 | Explicit bookmarks | Save current answer/passage; capacity 200. | Tests cover dedup, limits and corruption behavior. Follow-up saves do not inherit unrelated base chart metadata. |
 | Optional history | Knowledge-base recording defaults off; accepted completed answers only; capacity 1,000. Refused/failed/chart-refusal results are not successful answer records. | Controller/storage regression fixtures. Test UI search/open/delete and restart with real packaged data. |
 | Content minimization | Stores passage/answer and reference pointers, not complete reference bodies, screenshots, OCR, audio, prompts or credentials. | Schema/source inspection and fixtures; review future diagnostics/export additions separately. |
+| Support diagnostics | Explicit Settings review of a typed allowlisted report, followed by a native Save dialog and background atomic private-file export. No automatic transmission. | Six fixtures cover exact field keys, excluded connection/content data, reviewed-byte equivalence, cancellation/stale/headless rejection and safe destinations. Actual native Save dialogs still need Mac/Windows acceptance. |
 | Atomicity and corruption | Versioned archives, atomic replacement, cross-process locks; malformed/unknown archives block replacement. Settings writes are serialized. | Automated storage fixtures; actual crash/power-loss/permission-denial and rollback execution remain. |
 | Legacy macOS import | Explicit import of history JSON and savedAnswers plist Data; preserves chart/reference metadata, validates all sources before writes, deduplicates and leaves legacy files untouched. | Nine migration fixtures, including Swift date formats. Credentials and consent are deliberately not imported. Validate with a backed-up real legacy installation. |
 
@@ -99,20 +100,22 @@ The following are bounded observations from this checkout, not a public release 
 
 | Command or artifact | Observed result | What it does not prove |
 |---|---|---|
-| Workspace tests through `MACOSX_DEPLOYMENT_TARGET=14.0 RUSTUP_TOOLCHAIN=stable bash rune/scripts/check.sh` | **193 passed, 0 failed, 2 ignored**. Breakdown: app 81; core 44; platform 27; providers 40; browser-host integration 1. | Native Windows execution, all OS permissions, real UI focus, live AI/model compatibility, or release packaging. |
+| Workspace tests through `MACOSX_DEPLOYMENT_TARGET=14.0 RUSTUP_TOOLCHAIN=stable bash rune/scripts/check.sh` | **203 passed, 0 failed, 2 ignored**. Breakdown: app 87; core 44; platform 28; providers 43; browser-host integration 1. | Native Windows execution, all OS permissions, real UI focus, live AI/model compatibility, or release packaging. |
 | Ignored tests in that command | Signing-script/OpenSSL manifest integration and live public article smoke are explicitly excluded from the normal test count. | These integrations require separate explicit execution; a green normal suite must not imply they ran. |
-| Full local check script | Workspace formatting, all-target checks, strict workspace Clippy, Rust tests, icon formatting/Clippy/three tests, eight notice tests, four gateway tests, browser extraction/legacy-host fixtures and three UI renders passed. | A Mac run does not prove Windows linking, installation or native interaction. |
+| Full local check script | Workspace formatting, all-target checks, strict workspace Clippy, Rust tests, icon formatting/Clippy/three tests, eight notice tests, eight PE-runtime verifier tests, four gateway tests, browser extraction/legacy-host fixtures and three UI renders passed. | A Mac run does not prove Windows linking, installation or native interaction. |
 | Geometry integration tests | 14 passed: 12 store/worker/clamping fixtures and two controller privacy/lifecycle regressions. Background writes coalesce; ordinary quit flushes after the event loop. | Actual native close/quit, forced OS session termination, display restoration and automatic chooser placement. |
 | Standalone icon-builder tests | Three tests passed; generated ICO/ICNS recognized by file tooling; ICNS decoded at 1024 px. | Actual Windows Explorer/tray rendering or every shell icon cache behavior. |
 | `python3 rune/packaging/test_notices.py` | Eight tests passed. | Distribution/legal approval of the app or every non-Cargo component. |
-| Strict notice generation, macOS arm64 | 384 reachable normal/build packages, 256 distinct full notice texts, zero unresolved inventory gaps. | Actual production feature/artifact equivalence or license-owner review. |
-| Strict notice generation, Windows x64 MSVC | 361 packages, 253 distinct full notice texts, zero unresolved inventory gaps. | Windows build/runtime or installer component redistribution review. |
+| Strict notice generation, macOS arm64 | 385 reachable normal/build packages, 257 distinct full notice texts, zero unresolved inventory gaps, including native Save dialog support. | Actual production feature/artifact equivalence or license-owner review. |
+| Strict notice generation, Windows x64 MSVC | 362 packages, 254 distinct full notice texts, zero unresolved inventory gaps, including native Save dialog support. | Windows build/runtime or installer component redistribution review. |
 | `node Tests/BrowserExtensionTests/extract.test.js` | Passed video-window, caption/transcript, unavailable-source, host-boundary and Unicode-limit fixtures. | Actual Chrome/Edge native messaging or changing video-site DOMs. |
 | Local Mac development bundle | Rebuilt arm64 development bundle passed strict codesign verification with ad hoc signing. Native UI: sample chooser → answer → pin → close → Finder reopen preserved the answer and pin state. The explicit accessory-app reopen handler resolved the observed reopen failure. | No Developer ID team, notarization, Gatekeeper acceptance or clean-machine launch. Later changes must be rebuilt and retested; this observation is not a release sign-off. |
 | Bundle permission probe | Accessibility and screen-capture permissions reported **false** on this development Mac. | Cross-app AX and ScreenCaptureKit cannot be considered validated here until the user grants permissions and the workflows are exercised. Capability flags describe available implementations, not successful permission/device tests. |
 | Headless reader/chooser artifacts | PNG and element-tree files produced from fixed scenes. | Native capture, nonactivating focus, real accessibility, tray menus or installed graphics/runtime dependencies. |
 
-The standalone icon and Python helper tests are outside the main Cargo workspace; they are not included in the 193-test figure. The legacy Swift baseline was rerun separately: `swift run PickleChecks` passed all 75 checks.
+The standalone icon and Python helper tests are outside the main Cargo workspace; they are not included in the 203-test figure. The legacy Swift baseline was rerun separately: `swift run PickleChecks` passed all 75 checks.
+
+The successful earlier macOS CI job built `aarch64-apple-darwin`. Its downloaded `PickleRune-macos.zip` SHA-256 is `81efeb4d7893a42ffa4fcc825316094c1602e96fc11d7b766018694d80444049`; the enclosing GitHub artifact digest is `sha256:8f902ce1579cca5d94b8d7253d58e299aa3906a7b6790bb49a0f44595891aafa`. These identify the earlier commit's development package, not later working-tree changes or a notarized release.
 
 ## 6. CI and documentation review
 
@@ -137,7 +140,9 @@ The Mac package script creates an app/ZIP, embeds the browser host/extension/not
 
 The Windows script creates a per-user package and optional NSIS installer, embeds the icon and notices, and supports explicit Authenticode signing. Public distribution requires clean Windows 11 MSVC/runtime validation, publisher verification, install/upgrade/reinstall behavior and recorded uninstall results.
 
-The [MSIX script and manifest](../rune/packaging/windows/MSIX.md) add a concrete package-identity path for Windows OCR. The script requires explicit identity/publisher metadata, validates both EXE architectures, resolves SDK tools, and supports existing-certificate signing or explicitly unsigned CI inspection. It does not create trust or install packages. CI is configured to build and inspect an unsigned artifact; installed identity/OCR, clean-machine CRT availability, versioned browser-host activation, upgrade and removal remain open. The current package does not bundle VCRedist or declare a VCLibs dependency.
+The [identity packaging scripts](../rune/packaging/windows/MSIX.md) provide both full MSIX and a preferred NSIS plus signed external-identity package. The latter keeps a stable executable path and lets the uninstaller disconnect owned browser hosts and unregister the exact publisher/family/external path. Production builders require an existing trusted certificate and never create trust. A separate hosted-runner-only test creates a short-lived test certificate, exercises installation and fixed-fixture OCR, and removes its exact certificate/private key and package afterward. That test is configured, not yet proven executed successfully.
+
+The Windows builder now scopes static CRT flags to an explicit application target, separately from host procedural macros, and audits ordinary and delayed PE imports before packaging. No VCRedist is bundled. Eight portable verifier fixtures pass; native Windows linking/loading, production signing, installed identity/OCR, browser continuity and upgrade/removal still need execution evidence.
 
 Two installer lifecycle issues found in the initial inspection have now been addressed in source, with Windows runtime validation pending:
 
@@ -177,6 +182,8 @@ Create one record per tested OS version, architecture, GPU/display setup and sou
 - **Performance:** optimized startup, chooser latency, first token/final answer, idle CPU/GPU, repeated-session memory, resize/history behavior and a documented soak duration.
 
 Proposed initial support remains macOS 14+ on Apple Silicon and tested Windows 11 x64 releases. Intel Mac, Windows ARM64 and Windows 10 are not supported by inference from source compatibility alone. Publish the exact tested matrix and any feature differences before release.
+
+The user declined setting up a Windows machine or VM for interactive testing. No such environment was provisioned. Continue the existing GitHub runner checks and report the Windows 11 interactive matrix as unverified rather than treating CI as its replacement.
 
 ## 9. Next sequence
 

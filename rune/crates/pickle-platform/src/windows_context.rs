@@ -330,6 +330,16 @@ fn recognize(
     image: &image::RgbaImage,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> windows::core::Result<String> {
+    let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
+    recognize_with_engine(image, cancel, &engine, Duration::from_secs(2))
+}
+
+pub(super) fn recognize_with_engine(
+    image: &image::RgbaImage,
+    cancel: &tokio_util::sync::CancellationToken,
+    engine: &OcrEngine,
+    timeout: Duration,
+) -> windows::core::Result<String> {
     let mut pixels = image.as_raw().clone();
     for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2)
@@ -343,9 +353,8 @@ fn recognize(
         image.height() as i32,
         BitmapAlphaMode::Ignore,
     )?;
-    let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
     let operation = engine.RecognizeAsync(&bitmap)?;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + timeout;
     // WinRT AsyncStatus::Started has value zero; bindings expose it from windows-future.
     while operation.Status()?.0 == 0 {
         if cancel.is_cancelled() || Instant::now() >= deadline {

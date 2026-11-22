@@ -1,10 +1,11 @@
-param([string]$InstallerPath = 'artifacts/PickleRune-setup.exe')
+param([string]$InstallerPath = 'artifacts/PickleRune-setup.exe', [string]$InstallDirectory)
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 $installer = (Resolve-Path $InstallerPath).Path
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PickleRune'
 if (Test-Path $uninstallKey) { throw 'Use a clean, isolated Windows test account. This smoke test does not overwrite an existing installed-app registration.' }
-$testDirectory = Join-Path ([IO.Path]::GetTempPath()) ('pickle-package-smoke-' + [guid]::NewGuid().ToString('N'))
+$testDirectory = if ($InstallDirectory) { [IO.Path]::GetFullPath($InstallDirectory) } else { Join-Path ([IO.Path]::GetTempPath()) ('pickle-package-smoke-' + [guid]::NewGuid().ToString('N')) }
+if (Test-Path -LiteralPath $testDirectory) { throw 'The smoke installation directory must be new and test-owned.' }
 $secondDirectory = Join-Path ([IO.Path]::GetTempPath()) ('pickle-package-second-' + [guid]::NewGuid().ToString('N'))
 $process = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$testDirectory") -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)." }
@@ -22,8 +23,18 @@ $probe = Start-Process -FilePath $application -ArgumentList @('--capabilities') 
 if ($probe.ExitCode -ne 0) { throw 'Installed application capabilities probe failed.' }
 $report = Get-Content $capabilities -Raw | ConvertFrom-Json
 if (!$report.selection -or !$report.menu_bar) { throw 'Installed application did not report the core Windows capabilities.' }
-$snapshot = Join-Path $PWD 'artifacts/installed-reader.png'
-$tree = Join-Path $PWD 'artifacts/installed-reader-tree.json'
+$hasIdentity = Test-Path (Join-Path $testDirectory 'PickleIdentity.msix')
+if ($hasIdentity -and !$report.window_capture_ocr) { throw 'The signed external identity did not reach the installed app process.' }
+Copy-Item -LiteralPath $capabilities -Destination (Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-capabilities.json' } else { 'artifacts/unpackaged-capabilities.json' }))
+if ($hasIdentity) {
+  $ocrReport = Join-Path $PWD 'artifacts/identity-ocr-result.json'
+  $ocr = Start-Process -FilePath $application -ArgumentList @('--verify-windows-ocr') -RedirectStandardOutput $ocrReport -Wait -PassThru
+  if ($ocr.ExitCode -ne 0) { throw 'Installed Windows OCR could not recognize the fixed in-memory fixture.' }
+  $ocrResult = Get-Content -Raw $ocrReport | ConvertFrom-Json
+  if ($ocrResult.test -cne 'windows-ocr-fixed-fixture' -or $ocrResult.passed -ne $true) { throw 'The installed OCR probe did not return its expected evidence.' }
+}
+$snapshot = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader.png' } else { 'artifacts/unpackaged-installed-reader.png' })
+$tree = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader-tree.json' } else { 'artifacts/unpackaged-installed-reader-tree.json' })
 $render = Start-Process -FilePath $application -ArgumentList @('--scene', 'sample', '--snap', "`"$snapshot`"", '--tree', "`"$tree`"") -Wait -PassThru
 if ($render.ExitCode -ne 0 -or !(Test-Path $snapshot) -or !(Test-Path $tree)) { throw 'Installed application could not render the offline sample.' }
 $uninstaller = Join-Path $testDirectory 'Uninstall.exe'
@@ -61,6 +72,25 @@ $supportRoot = Join-Path $env:LOCALAPPDATA 'Pickle\PickleRune\data'
 $dataMarker = Join-Path $supportRoot ('package-smoke-retention-' + [guid]::NewGuid().ToString('N') + '.txt')
 New-Item -ItemType Directory -Path $supportRoot -Force | Out-Null
 Set-Content -LiteralPath $dataMarker -Value 'Uninstall must preserve application data.'
+if ($hasIdentity) {
+  $identity = Get-Content -Raw (Join-Path $testDirectory 'PickleIdentity.json') | ConvertFrom-Json
+  $registered = @(Get-AppxPackage -Name $identity.name | Where-Object { $_.PackageFamilyName -ceq $identity.family })
+  if ($registered.Count -ne 1) { throw 'Expected the exact signed identity family to be registered.' }
+  $repair = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$testDirectory") -Wait -PassThru
+  if ($repair.ExitCode -ne 0) { throw 'Repairing the same identity version and location failed.' }
+  $conflict = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$secondDirectory") -Wait -PassThru
+  if ($conflict.ExitCode -eq 0) { throw 'An identity already owned by another external directory must not be stolen.' }
+  if (!(Test-Path $application) -or (Get-ItemProperty -LiteralPath $uninstallKey).InstallLocation -ne $testDirectory) { throw 'Identity conflict changed the original installed application.' }
+  $removed = Start-Process -FilePath $uninstaller -ArgumentList @('/S', "_?=$testDirectory") -Wait -PassThru
+  if ($removed.ExitCode -ne 0 -or (Test-Path $application)) { throw 'Signed identity uninstall failed.' }
+  if (@(Get-AppxPackage -Name $identity.name | Where-Object { $_.PackageFamilyName -ceq $identity.family }).Count) { throw 'Owned identity was retained after successful uninstall.' }
+  if (!(Test-Path $marker) -or !(Test-Path $dataMarker) -or (Test-Path $uninstallKey)) { throw 'Identity uninstall violated data retention or owned entry cleanup.' }
+  if (Test-Path $uninstaller) { Remove-Item -LiteralPath $uninstaller }
+  Remove-Item -LiteralPath $dataMarker
+  Write-Host 'PASS: signed external identity, installed runtime identity, repair, conflict refusal, live-instance guards, offline rendering, owned identity/browser cleanup and retained data.'
+  Write-Host "Test-only diagnostic directory retained at $testDirectory"
+  return
+}
 # A second install replaces the global app entry. Removing the old one must preserve the new one.
 $second = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$secondDirectory") -Wait -PassThru
 if ($second.ExitCode -ne 0) { throw 'The second isolated installation failed.' }

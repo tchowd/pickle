@@ -26,6 +26,7 @@ async fn native_host_executable_preserves_frames_and_enforces_origin() {
         allowed_origin: origin.into(),
         bridge_directory: directory.path().join("bridge"),
         application: directory.path().join("unused-app"),
+        application_aumid: None,
     };
     std::fs::write(
         directory.path().join("registration.json"),

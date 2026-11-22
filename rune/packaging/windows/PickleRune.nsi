@@ -5,6 +5,9 @@ Unicode True
   !define PICKLE_VERSION "0.1.0"
 !endif
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\PickleRune"
+!if /FileExists "${PICKLE_STAGE}\PickleIdentity.msix"
+  !define PICKLE_HAS_IDENTITY
+!endif
 !ifdef PICKLE_SIGN_CERT_THUMBPRINT
   !ifndef PICKLE_SIGNTOOL
     !error "PICKLE_SIGNTOOL must identify the resolved Windows SDK signtool.exe"
@@ -40,6 +43,10 @@ Function .onInit
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /oname=PickleProbe.exe "${PICKLE_STAGE}\PickleRune.exe"
+  !ifdef PICKLE_HAS_IDENTITY
+    File /oname=identity-registration.ps1 "${PICKLE_STAGE}\identity-registration.ps1"
+    File /oname=PickleIdentity.json "${PICKLE_STAGE}\PickleIdentity.json"
+  !endif
   Call EnsureNotRunning
 FunctionEnd
 
@@ -112,10 +119,27 @@ Section "Pickle Rune"
   Call EnsureNotRunning
   ClearErrors
   SetOutPath "$INSTDIR"
+  !ifdef PICKLE_HAS_IDENTITY
+    StrCpy $0 1
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\identity-registration.ps1" -Action Check -InstallDirectory "$INSTDIR" -MetadataPath "$PLUGINSDIR\PickleIdentity.json"' $0
+    ${If} ${Errors}
+    ${OrIf} $0 != 0
+      !insertmacro Fail "This package identity is owned by another installation or cannot be inspected. Existing identity registrations were preserved." 1
+    ${EndIf}
+  !endif
   File /r "${PICKLE_STAGE}\*"
   ${If} ${Errors}
     !insertmacro Fail "Application files could not all be copied. Check storage and close running copies, then rerun this installer to repair the installation. User data was not removed." 1
   ${EndIf}
+  !ifdef PICKLE_HAS_IDENTITY
+    StrCpy $0 1
+    ClearErrors
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\identity-registration.ps1" -Action Register -InstallDirectory "$INSTDIR"' $0
+    ${If} ${Errors}
+    ${OrIf} $0 != 0
+      !insertmacro Fail "Windows could not register Pickle's signed identity. Verify certificate trust and Windows 11 support, then rerun this installer to repair. This installer never changes certificate trust." 1
+    ${EndIf}
+  !endif
   ClearErrors
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateDirectory "$SMPROGRAMS\Pickle Rune"
@@ -158,6 +182,15 @@ retry_browser_cleanup:
     Abort
   ${EndIf}
   Call un.EnsureNotRunning
+  ${If} ${FileExists} "$INSTDIR\PickleIdentity.msix"
+    StrCpy $0 1
+    ClearErrors
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\identity-registration.ps1" -Action Unregister -InstallDirectory "$INSTDIR"' $0
+    ${If} ${Errors}
+    ${OrIf} $0 != 0
+      !insertmacro Fail "The owned external identity could not be unregistered safely. Application files were retained; repair the installation and retry." 1
+    ${EndIf}
+  ${EndIf}
   ; Only known installed files. Unknown files, user history and credentials are retained.
   !insertmacro DeleteOwnedFile "PickleRune.exe"
   !insertmacro DeleteOwnedFile "pickle-browser-host.exe"
@@ -165,6 +198,10 @@ retry_browser_cleanup:
   !insertmacro DeleteOwnedFile "THIRD-PARTY-NOTICES.md"
   !insertmacro DeleteOwnedFile "THIRD_PARTY_NOTICES.txt"
   !insertmacro DeleteOwnedFile "dependency-inventory.json"
+  !insertmacro DeleteOwnedFile "PickleIdentity.msix"
+  !insertmacro DeleteOwnedFile "PickleIdentity.json"
+  !insertmacro DeleteOwnedFile "identity-registration.ps1"
+  !insertmacro DeleteOwnedFile "Pickle-preview.png"
   !insertmacro DeleteOwnedFile "browser-extension\manifest.json"
   !insertmacro DeleteOwnedFile "browser-extension\extract.js"
   !insertmacro DeleteOwnedFile "browser-extension\background.js"

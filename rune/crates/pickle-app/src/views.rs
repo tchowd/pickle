@@ -689,6 +689,7 @@ fn settings(s: &AppState) -> El {
             .child(action(s, "disconnect-chrome", "Disconnect Chrome", false, |s, _| s.disconnect_browser(false)))
             .child(action(s, "disconnect-edge", "Disconnect Edge", false, |s, _| s.disconnect_browser(true))))
         .child(update_tools(s))
+        .child(diagnostics_tools(s))
         .child(section("Existing Pickle data")
             .child(note("Import saved answers and knowledge-base history from the original Mac app. Original files, credentials, and privacy consents are preserved."))
             .child(action(s, "import-legacy", "Import original Pickle history", false, |s, _| s.import_legacy()).disabled(!cfg!(target_os = "macos"))))
@@ -707,6 +708,57 @@ fn settings(s: &AppState) -> El {
         })
         .child(content)
 }
+pub(crate) fn diagnostics_tools(s: &AppState) -> El {
+    use crate::diagnostics::Status;
+    let busy = s.diagnostics.status.busy();
+    let mut panel = section("Support diagnostics")
+        .child(note("Review a report containing only build details, platform capability and permission flags, and reading-policy switches. No passage, answers, context, history, connection addresses, model names, credentials or application exclusions are included. Nothing is sent automatically."))
+        .child(action(s, "review-diagnostics", if s.diagnostics.report.is_some() { "Refresh report preview" } else { "Review diagnostics" }, false, |s, _| s.review_diagnostics()).disabled(busy));
+    if let Some(report) = &s.diagnostics.report {
+        panel = panel
+            .child(
+                col()
+                    .key("diagnostics-preview")
+                    .w_full()
+                    .h(260.0)
+                    .padding(12.0)
+                    .radius(8.0)
+                    .fill(PAPER)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .child(
+                        text(report.json())
+                            .font(TextStyle::new(12.0, 400.0).lh(18.0))
+                            .color(INK)
+                            .selectable(true)
+                            .label("Complete diagnostics report preview"),
+                    ),
+            )
+            .child(
+                action(
+                    s,
+                    "export-diagnostics",
+                    "Export this report…",
+                    false,
+                    |s, tx| s.export_diagnostics(tx),
+                )
+                .disabled(busy),
+            );
+    }
+    match &s.diagnostics.status {
+        Status::Choosing => panel.child(note(
+            "Choose a destination in the save dialog. Canceling writes no file.",
+        )),
+        Status::Writing => panel.child(note("Saving the reviewed report…")),
+        Status::Exported => panel.child(note(
+            "Report exported. You can choose whether to share the file with support.",
+        )),
+        Status::Failed(message) => panel.child(note(*message)),
+        _ => panel,
+    }
+}
+
 fn update_tools(s: &AppState) -> El {
     use crate::update_ui::UpdateState;
     let panel = section(&format!("Pickle Rune {}", env!("CARGO_PKG_VERSION")));
