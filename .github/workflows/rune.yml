@@ -1,0 +1,90 @@
+name: Rune desktop
+on:
+  push:
+    paths: ['rune/**', 'browser-extension/**', 'Tests/BrowserExtensionTests/**', 'scripts/browser-host.py', 'scripts/local-ai/**', '.github/workflows/rune.yml']
+  pull_request:
+    paths: ['rune/**', 'browser-extension/**', 'Tests/BrowserExtensionTests/**', 'scripts/browser-host.py', 'scripts/local-ai/**', '.github/workflows/rune.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  MACOSX_DEPLOYMENT_TARGET: '14.0'
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: rune
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rune
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - run: cargo fmt --all --check
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Check standalone icon builder
+        shell: bash
+        run: |
+          cargo fmt --manifest-path tools/icon-builder/Cargo.toml --check
+          cargo clippy --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked --all-targets -- -D warnings
+          cargo test --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked
+      - name: Test dependency notices
+        run: python packaging/test_notices.py
+      - name: Test browser extraction and local gateway
+        working-directory: .
+        shell: bash
+        run: |
+          node Tests/BrowserExtensionTests/extract.test.js
+          python scripts/local-ai/test_gateway.py
+      - name: Test legacy Mac browser host framing
+        if: runner.os == 'macOS'
+        working-directory: .
+        run: python Tests/BrowserExtensionTests/host_test.py
+      - name: Render deterministic reader
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cargo run --locked -p pickle-app -- --scene sample --snap artifacts/reader.png --tree artifacts/reader-tree.json
+      - name: Package Mac development build
+        if: runner.os == 'macOS'
+        run: bash scripts/build-macos.sh debug
+      - name: Package Windows development build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          ./scripts/build-windows.ps1 -Configuration debug -Installer
+          ./scripts/test-windows-package.ps1
+          $stage = (Get-ChildItem artifacts/windows-* -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+          ./scripts/build-msix.ps1 -StageDirectory $stage -PackageName 'Pickle.Rune.CI' -Publisher 'CN=Pickle CI Development' -PublisherDisplayName 'Pickle CI Development' -Version '0.1.0.0' -UnsignedDevelopment
+          ./scripts/test-msix-package.ps1 -Package artifacts/PickleRune-x64.msix -ExpectedIdentity 'Pickle.Rune.CI'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pickle-rune-${{ runner.os }}
+          if-no-files-found: warn
+          path: |
+            rune/artifacts/*.zip
+            rune/artifacts/*setup.exe
+            rune/artifacts/*.msix
+            rune/artifacts/*.png
+            rune/artifacts/*tree.json
+            rune/artifacts/notices-*/
