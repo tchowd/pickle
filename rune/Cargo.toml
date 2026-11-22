@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/pickle-core", "crates/pickle-providers", "crates/pickle-platform", "crates/pickle-app"]
+default-members = ["crates/pickle-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+
+[workspace.dependencies]
+pickle-core = { path = "crates/pickle-core" }
+pickle-providers = { path = "crates/pickle-providers" }
+pickle-platform = { path = "crates/pickle-platform" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0", features = ["markdown"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+futures-util = "0.3"
+url = "2"
+regex = "1"
+directories = "6"
+tempfile = "3"
+zeroize = "1"
+
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "67d73a5f18390686c8e9b8b3a32b3414ebd66db0" }
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"

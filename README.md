@@ -1,5 +1,7 @@
 # Pickle
 
+The cross-platform Rust/Rune rebuild is being developed alongside this Swift app. See [Rune build/setup instructions](rune/README.md) and the [macOS/Windows implementation plan](docs/RUNE-CROSS-PLATFORM-PLAN.md). The Rune build is developmental; native Windows and release-distribution verification are still in progress.
+
 A native macOS menu-bar reading assistant. Highlight a passage, press and release **Control + Option** together, then choose **Simplify**, **Expand**, or **Chart**. Results appear in a movable, resizable floating panel. Pickle never edits the source app.
 
 This is a **development build**, not a signed/notarized release. The generative model is Cloudflare Workers AI’s Llama 3.3 70B. Jev is integrated through **Cloudflare `typesafe/jev`**, separately from generation. Live Llama and Jev checks now pass. After the user funded AI Gateway, a September 18 browser review confirmed $10.00 credit and the production Swift pipeline completed a Jev-checked simplification. Cloudflare’s Completed-job envelope is now supported.

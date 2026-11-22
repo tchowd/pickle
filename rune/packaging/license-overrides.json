@@ -1,0 +1,1029 @@
+{
+  "schema_version": 1,
+  "canonical_license_revision": "ab9b0904b43db6f4b67431efd8821feb821f1c8b",
+  "packages": {
+    "accesskit@0.25.2": {
+      "declared_license": "MIT OR Apache-2.0",
+      "upstream_repository": "https://github.com/AccessKit/accesskit",
+      "upstream_revision": "f3026222559c7f5f46d8f25cb7404de68eb149f0",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/AccessKit-accesskit-f3026222-LICENSE-APACHE.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/AccessKit-accesskit-f3026222-LICENSE-MIT.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/AccessKit-accesskit-f3026222-LICENSE.chromium.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "accesskit_consumer@0.39.2": {
+      "declared_license": "MIT OR Apache-2.0",
+      "upstream_repository": "https://github.com/AccessKit/accesskit",
+      "upstream_revision": "f3026222559c7f5f46d8f25cb7404de68eb149f0",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/AccessKit-accesskit-f3026222-LICENSE-APACHE.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/AccessKit-accesskit-f3026222-LICENSE-MIT.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/AccessKit-accesskit-f3026222-LICENSE.chromium.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "block2@0.5.1": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "4fc083f1c6d6784577e38b0ee8dbd344481e2fd2",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-4fc083f1-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "block2@0.6.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "b4167b582b2f75f9a1be75495c41b765344fd03c",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-b4167b58-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "dispatch@0.2.0": {
+      "declared_license": "MIT",
+      "upstream_repository": "http://github.com/SSheldon/rust-dispatch",
+      "upstream_revision": "82d6c7a5b75dc0c71c3f46f87bb6c16a476f7748",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/dispatch-0.2.0-upstream-Cargo.toml.txt",
+          "source": "https://raw.githubusercontent.com/SSheldon/rust-dispatch/82d6c7a5b75dc0c71c3f46f87bb6c16a476f7748/Cargo.toml",
+          "sha256": "05c60b829931ef7f1f130735843c11f5cf9cc69546eca5fc941d014781c68e31",
+          "kind": "upstream-declaration"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "dispatch2@0.3.1": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "8852b424193ca41602281b3d7540d7c8ed51e49a",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-8852b424-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "fxhash@0.2.1": {
+      "declared_license": "Apache-2.0/MIT",
+      "upstream_repository": "https://github.com/cbreeden/fxhash",
+      "upstream_revision": "537570af68de22d2f4bbdd5bee5d6e07268e6f42",
+      "revision_basis": "Upstream lib.rs SHA-256 exactly matches the locked published crate",
+      "files": [
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/fxhash-0.2.1-upstream-Cargo.toml.txt",
+          "source": "https://raw.githubusercontent.com/cbreeden/fxhash/537570af68de22d2f4bbdd5bee5d6e07268e6f42/Cargo.toml",
+          "sha256": "9bec196d2092a15bd06dcf91f47581c6d03c02560d3ef6a11a7318d2baf67974",
+          "kind": "upstream-declaration"
+        },
+        {
+          "path": "licenses/fxhash-source-header.txt",
+          "source": "https://raw.githubusercontent.com/cbreeden/fxhash/537570af68de22d2f4bbdd5bee5d6e07268e6f42/lib.rs",
+          "sha256": "5d392ff1ac69a18c9beb41720ecbfd56f7792a1ec4321428e73757d4283f5a61",
+          "kind": "upstream-copyright-or-license-header"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant.",
+      "source_checks": [
+        {
+          "path": "lib.rs",
+          "sha256": "885b72a1c977dc1c3ff4e0652719e62b6d8c3e713403e571afd581283f72df7b"
+        }
+      ]
+    },
+    "mac@0.1.1": {
+      "declared_license": "MIT/Apache-2.0",
+      "upstream_repository": "https://github.com/reem/rust-mac.git",
+      "upstream_revision": "66afc663b68a65633ea165c742b5a9c6734581c2",
+      "revision_basis": "Upstream 0.1.1 tag; src/lib.rs SHA-256 exactly matches the locked published crate",
+      "files": [
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/mac-0.1.1-upstream-Cargo.toml.txt",
+          "source": "https://raw.githubusercontent.com/reem/rust-mac/66afc663b68a65633ea165c742b5a9c6734581c2/Cargo.toml",
+          "sha256": "f2c9d191282c0255b02d36f7c864f15edaa933820945244c269459460b9df4a8",
+          "kind": "upstream-declaration"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant.",
+      "source_checks": [
+        {
+          "path": "src/lib.rs",
+          "sha256": "f9c7705196f71dcabb4cfe1636f1b71b6362abb7eac70ddaa6e05cf9a0683dee"
+        }
+      ]
+    },
+    "match_token@0.35.0": {
+      "declared_license": "MIT OR Apache-2.0",
+      "upstream_repository": "https://github.com/servo/html5ever",
+      "upstream_revision": "6db7bbf1c4dfaecd28731950d427e40c8b911bef",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/servo-html5ever-6db7bbf1-COPYRIGHT.txt",
+          "source": "https://raw.githubusercontent.com/servo/html5ever/6db7bbf1c4dfaecd28731950d427e40c8b911bef/COPYRIGHT",
+          "sha256": "c6b91503fc0a9852e688b56eef715dba9a1ab4b074e86875af2471ce0163b2e5",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/servo-html5ever-6db7bbf1-LICENSE-APACHE.txt",
+          "source": "https://raw.githubusercontent.com/servo/html5ever/6db7bbf1c4dfaecd28731950d427e40c8b911bef/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/servo-html5ever-6db7bbf1-LICENSE-MIT.txt",
+          "source": "https://raw.githubusercontent.com/servo/html5ever/6db7bbf1c4dfaecd28731950d427e40c8b911bef/LICENSE-MIT",
+          "sha256": "86dd7f026f916daf7511e39951ad8ea8cf55a8db67ae64060dacf829761c18f3",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc-sys@0.3.5": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "4fc083f1c6d6784577e38b0ee8dbd344481e2fd2",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-4fc083f1-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2@0.5.3": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "5237cbf081d04ef75a1f6a207b4018e7c1ae7438",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-5237cbf0-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/5237cbf081d04ef75a1f6a207b4018e7c1ae7438/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2@0.6.5": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "d7d2fa23ceaa5e6096c923b081040e5d81b3b9df",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-d7d2fa23-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-app-kit@0.2.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-e282618b-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2-app-kit@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-av-foundation@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-core-audio@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-core-audio-types@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-core-data@0.2.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-e282618b-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2-core-foundation@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-core-graphics@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-core-image@0.2.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-e282618b-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2-core-media@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-core-text@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-core-video@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-encode@4.1.0": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-8d214f54-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-foundation@0.2.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-e282618b-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2-foundation@0.3.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-io-surface@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-metal@0.2.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-e282618b-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2-metal@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "objc2-quartz-core@0.2.2": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-e282618b-LICENSE.txt.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "objc2-quartz-core@0.3.2": {
+      "declared_license": "Zlib OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/madsmtm/objc2",
+      "upstream_revision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/madsmtm-objc2-7b1abfd7-LICENSE.md.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Apache-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/SPDX-Zlib.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/Zlib.txt",
+          "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d",
+          "kind": "canonical-license-text"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "profiling@1.0.18": {
+      "declared_license": "MIT OR Apache-2.0",
+      "upstream_repository": "https://github.com/aclysma/profiling",
+      "upstream_revision": "8271551172eb6fa4cba47369aedd93790c623df9",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/aclysma-profiling-82715511-LICENSE-APACHE.txt",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+          "sha256": "6ee32466aaa724095c99d108c8e549fb9e2bd2c5d81708afb1cd373b3177f7d2",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/aclysma-profiling-82715511-LICENSE-MIT.txt",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+          "sha256": "e64891b51361725890d69bafa508ad013bc92aeef99054caecb6f5ce5f7dfd51",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "selectors@0.31.0": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/servo/stylo",
+      "upstream_revision": "7f8df16fddb15b6ac9097f8ab25caffff1a7095e",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/SPDX-MPL-2.0.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MPL-2.0.txt",
+          "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/selectors-0.31.0-upstream-Cargo.toml.txt",
+          "source": "https://raw.githubusercontent.com/servo/stylo/7f8df16fddb15b6ac9097f8ab25caffff1a7095e/selectors/Cargo.toml",
+          "sha256": "96ec5d1f33d1ac56e7a7e24f80069fb1591ce117fc9244eeb086064560ea9bf0",
+          "kind": "upstream-declaration"
+        },
+        {
+          "path": "licenses/selectors-source-header.txt",
+          "source": "https://raw.githubusercontent.com/servo/stylo/7f8df16fddb15b6ac9097f8ab25caffff1a7095e/selectors/lib.rs",
+          "sha256": "766674381e88a468d55e07de3596987391cf0e8beebe51baf4fddf11078785b3",
+          "kind": "upstream-copyright-or-license-header"
+        }
+      ],
+      "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
+    },
+    "spirv@0.4.0+sdk-1.4.341.0": {
+      "declared_license": "Apache-2.0",
+      "upstream_repository": "https://github.com/gfx-rs/rspirv",
+      "upstream_revision": "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/gfx-rs-rspirv-8afc3d0a-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "symphonia@0.5.5": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/pdeljanov/Symphonia",
+      "upstream_revision": "6d533f26150953a882a6a111ebd13f0abf7129d5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/pdeljanov-Symphonia-6d533f26-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "symphonia-codec-vorbis@0.5.5": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/pdeljanov/Symphonia",
+      "upstream_revision": "6d533f26150953a882a6a111ebd13f0abf7129d5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/pdeljanov-Symphonia-6d533f26-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "symphonia-core@0.5.5": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/pdeljanov/Symphonia",
+      "upstream_revision": "6d533f26150953a882a6a111ebd13f0abf7129d5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/pdeljanov-Symphonia-6d533f26-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "symphonia-format-mkv@0.5.5": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/pdeljanov/Symphonia",
+      "upstream_revision": "6d533f26150953a882a6a111ebd13f0abf7129d5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/pdeljanov-Symphonia-6d533f26-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "symphonia-format-ogg@0.5.5": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/pdeljanov/Symphonia",
+      "upstream_revision": "6d533f26150953a882a6a111ebd13f0abf7129d5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/pdeljanov-Symphonia-6d533f26-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "symphonia-metadata@0.5.5": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/pdeljanov/Symphonia",
+      "upstream_revision": "6d533f26150953a882a6a111ebd13f0abf7129d5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/pdeljanov-Symphonia-6d533f26-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "symphonia-utils-xiph@0.5.5": {
+      "declared_license": "MPL-2.0",
+      "upstream_repository": "https://github.com/pdeljanov/Symphonia",
+      "upstream_revision": "6d533f26150953a882a6a111ebd13f0abf7129d5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/pdeljanov-Symphonia-6d533f26-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "taffy@0.15.1": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/DioxusLabs/taffy",
+      "upstream_revision": "0064bd54cbe38bf1d8bcd6ec6ab0704d45fb048a",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/DioxusLabs-taffy-0064bd54-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/DioxusLabs/taffy/0064bd54cbe38bf1d8bcd6ec6ab0704d45fb048a/LICENSE",
+          "sha256": "f97daf1a0124413dccf399a4e6626b4b74acd05282f80b6d64ac82225650b77a",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "wasmparser@0.245.1": {
+      "declared_license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "upstream_repository": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser",
+      "upstream_revision": "76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/bytecodealliance-wasm-tools-76927bf4-LICENSE-APACHE.txt",
+          "source": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/bytecodealliance-wasm-tools-76927bf4-LICENSE-Apache-2.0_WITH_LLVM-exception.txt",
+          "source": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5/LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "a6c48161a09acc75a0e25503bab66a731eb5fba5392ed4bb4743e4ba5085327a",
+          "kind": "upstream-license-or-notice"
+        },
+        {
+          "path": "licenses/bytecodealliance-wasm-tools-76927bf4-LICENSE-MIT.txt",
+          "source": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    },
+    "clipboard-win@5.4.3": {
+      "declared_license": "BSL-1.0",
+      "upstream_repository": "https://github.com/DoumanAsh/clipboard-win",
+      "upstream_revision": "ed27008ae5d1f10cfbb266de039f0fb35fd05a56",
+      "revision_basis": "Cargo .cargo_vcs_info.json",
+      "files": [
+        {
+          "path": "licenses/DoumanAsh-clipboard-win-ed27008a-LICENSE.txt",
+          "source": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/ed27008ae5d1f10cfbb266de039f0fb35fd05a56/LICENSE",
+          "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+          "kind": "upstream-license-or-notice"
+        }
+      ]
+    }
+  }
+}

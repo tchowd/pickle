@@ -1,0 +1,993 @@
+use crate::controller::{Activity, AppState, Panel, Route};
+use pickle_core::{ChartKind, ReadingAction, ValidatedChart};
+use rune::{
+    Color, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, spacer, text, text_input,
+    tok::{TextStyle, type_},
+};
+use rune_kit::{Markdown, MarkdownStyle};
+
+// Rune stores linear RGB. These decode the original Pickle sRGB palette.
+const PAPER: Color = Color {
+    r: 0.00350,
+    g: 0.00657,
+    b: 0.00542,
+    a: 1.0,
+};
+const SURFACE: Color = Color {
+    r: 0.00786,
+    g: 0.01533,
+    b: 0.01002,
+    a: 1.0,
+};
+const GREEN: Color = Color {
+    r: 0.44799,
+    g: 0.91141,
+    b: 0.05088,
+    a: 1.0,
+};
+const INK: Color = Color {
+    r: 0.78741,
+    g: 0.89001,
+    b: 0.72935,
+    a: 1.0,
+};
+const MUTED: Color = Color {
+    r: 0.35469,
+    g: 0.47700,
+    b: 0.38006,
+    a: 1.0,
+};
+const HAIR: Color = Color {
+    r: 0.03968,
+    g: 0.07829,
+    b: 0.04667,
+    a: 1.0,
+};
+const WARNING: Color = Color {
+    r: 0.95510,
+    g: 0.57048,
+    b: 0.10654,
+    a: 1.0,
+};
+
+pub fn button(
+    s: &AppState,
+    key: impl Into<String>,
+    label: impl Into<String>,
+    primary: bool,
+    f: impl Fn(&mut AppState, &mut Tx) + 'static,
+) -> El {
+    let accent = accent(s);
+    row()
+        .key(key)
+        .role("button")
+        .label(label.into())
+        .focusable(true)
+        .h(34.0)
+        .px(12.0)
+        .center()
+        .radius(8.0)
+        .fill(if primary { accent } else { SURFACE })
+        .border(1.0, if primary { accent } else { HAIR })
+        .hover(if primary {
+            accent.alpha(0.15)
+        } else {
+            accent.alpha(0.07)
+        })
+        .focus_ring(2.0, 2.0, accent)
+        .on_press_tx(f)
+}
+pub(crate) fn action(
+    s: &AppState,
+    key: &str,
+    label: &str,
+    primary: bool,
+    f: impl Fn(&mut AppState, &mut Tx) + 'static,
+) -> El {
+    button(s, key, label, primary, f).child(
+        text(label)
+            .font(TextStyle::new(13.0, 600.0))
+            .color(if primary { PAPER } else { INK }),
+    )
+}
+fn accent(s: &AppState) -> Color {
+    GREEN.mix(INK, 1.0 - s.settings.theme_intensity.clamp(0.0, 1.0))
+}
+fn note(value: impl Into<String>) -> El {
+    text(value)
+        .font(TextStyle::new(12.0, 400.0).lh(18.0))
+        .color(MUTED)
+}
+fn paragraph(value: impl Into<String>) -> El {
+    text(value)
+        .font(TextStyle::new(15.0, 400.0).lh(23.0))
+        .color(INK)
+}
+fn section(title: &str) -> El {
+    col()
+        .w_full()
+        .gap(10.0)
+        .child(text(title).font(TextStyle::new(17.0, 600.0)).color(INK))
+}
+fn input(
+    key: &str,
+    label: &str,
+    value: &TextEdit,
+    edit: fn(&mut AppState) -> &mut TextEdit,
+    secure: bool,
+) -> El {
+    let field = text_input(value, TextStyle::new(14.0, 400.0).lh(22.0))
+        .key(key)
+        .label(label)
+        .single_line()
+        .w_full()
+        .color(INK)
+        .on_edit(edit);
+    let field = if secure { field.secure() } else { field };
+    col().w_full().gap(6.0).child(note(label)).child(
+        el().w_full()
+            .h(38.0)
+            .px(10.0)
+            .center_y()
+            .radius(7.0)
+            .fill(PAPER)
+            .border(1.0, HAIR)
+            .child(field),
+    )
+}
+fn toggle(
+    s: &AppState,
+    key: &str,
+    title: &str,
+    on: bool,
+    f: impl Fn(&mut AppState, &mut Tx) + 'static,
+) -> El {
+    row()
+        .w_full()
+        .gap(10.0)
+        .center_y()
+        .child(paragraph(title).grow(1.0))
+        .child(
+            action(s, key, if on { "On" } else { "Off" }, on, f)
+                .role("switch")
+                .label(title)
+                .checked(on),
+        )
+}
+pub fn view(s: &AppState, _: &mut Cx<AppState>) -> El {
+    let mut root = col()
+        .key("pickle-window")
+        .role("window")
+        .label("Pickle reading assistant")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .system_material(rune::SystemMaterial::Popover)
+        .fill(PAPER.alpha(s.settings.background_opacity))
+        .radius(16.0)
+        .border(1.0, HAIR);
+    let titlebar = row()
+        .key("drag-region")
+        .h(48.0)
+        .px(18.0)
+        .gap(9.0)
+        .center_y()
+        .window_drag()
+        .child(el().size(9.0, 20.0).radius(5.0).fill(GREEN))
+        .child(text("Pickle").font(TextStyle::new(18.0, 650.0)).color(INK))
+        .child(spacer())
+        .child(
+            action(
+                s,
+                "pin-reader",
+                if s.pinned { "Unpin" } else { "Pin" },
+                s.pinned,
+                |s, _| s.toggle_pin(),
+            )
+            .label("Keep the reader on top and preserve it during automatic selection capture")
+            .checked(s.pinned),
+        )
+        .child(action(s, "open-saved", "Saved", false, |s, tx| {
+            s.dismiss_auto_preview();
+            s.route = Route::Library(true);
+            s.library_selected = None;
+            s.library_page = 0;
+            s.expand(tx, 680.0);
+        }))
+        .child(action(s, "open-settings", "Settings", false, |s, tx| {
+            s.dismiss_auto_preview();
+            s.route = Route::Settings;
+            s.expand(tx, 720.0);
+        }))
+        .child(
+            action(s, "close", "×", false, |s, tx| {
+                s.prepare_window_close();
+                s.cancel();
+                tx.close_window();
+            })
+            .label("Close reader"),
+        );
+    root = root.child(titlebar).child(el().h(1.0).w_full().fill(HAIR));
+    root = root.child(match s.route {
+        Route::Reader => reader(s),
+        Route::Settings => settings(s),
+        Route::Library(bookmark) => library(s, bookmark),
+    });
+    root
+}
+fn reader(s: &AppState) -> El {
+    if s.panel == Panel::Compose {
+        return compose(s);
+    }
+    let app = s
+        .display_snapshot()
+        .map(|snapshot| snapshot.app_name.as_str())
+        .unwrap_or("Your passage");
+    let source = s
+        .display_snapshot()
+        .map(|snapshot| snapshot.text.as_str())
+        .unwrap_or("");
+    let mut source_text = text(if s.source_expanded {
+        source.to_owned()
+    } else {
+        source
+            .chars()
+            .take(if s.panel == Panel::Choosing { 210 } else { 450 })
+            .collect()
+    })
+    .font(TextStyle::new(14.0, 400.0).lh(21.0))
+    .color(INK)
+    .selectable(true);
+    if !s.source_expanded {
+        source_text = source_text.max_lines(if s.panel == Panel::Choosing { 2 } else { 8 });
+    }
+    let mut source_panel = col()
+        .key("source-preview")
+        .w_full()
+        .gap(6.0)
+        .padding(14.0)
+        .radius(10.0)
+        .fill(SURFACE)
+        .child(source_text);
+    if source.chars().count() > 450 {
+        source_panel = source_panel.child(action(
+            s,
+            "toggle-full-source",
+            if s.source_expanded {
+                "Collapse passage"
+            } else {
+                "Show full passage"
+            },
+            false,
+            |s, tx| {
+                s.source_expanded = !s.source_expanded;
+                if s.source_expanded {
+                    s.expand(tx, 680.0);
+                }
+            },
+        ));
+    }
+    let mut content = col()
+        .w_full()
+        .gap(16.0)
+        .padding(22.0)
+        .child(
+            row()
+                .gap(10.0)
+                .center_y()
+                .child(note(app))
+                .child(spacer())
+                .child(note(if s.demo && s.auto_preview.is_none() {
+                    "Fixed demonstration · no network"
+                } else if s.settings.mode == "Online" {
+                    "Online · Cloudflare"
+                } else if s.settings.same_device {
+                    "Local · this device"
+                } else {
+                    "Local · configured server"
+                })),
+        )
+        .child(source_panel);
+    let busy = matches!(
+        s.activity,
+        Activity::Running { .. } | Activity::WaitingContext
+    );
+    content = content.child(
+        row()
+            .w_full()
+            .gap(8.0)
+            .child(
+                action(s, "simplify", "Simplify", true, |s, tx| {
+                    s.run_action(ReadingAction::Simplify, tx)
+                })
+                .disabled(busy),
+            )
+            .child(
+                action(s, "expand", "Explain more", false, |s, tx| {
+                    s.run_action(ReadingAction::Expand, tx)
+                })
+                .disabled(busy),
+            )
+            .child(
+                action(s, "chart", "Visualize", false, |s, tx| {
+                    s.run_action(ReadingAction::Chart, tx)
+                })
+                .disabled(busy),
+            )
+            .child(spacer())
+            .child(
+                action(s, "new-passage", "New", false, |s, tx| {
+                    s.reset();
+                    s.expand(tx, 520.0);
+                })
+                .label("Start a new passage"),
+            ),
+    );
+    if s.panel == Panel::Expanded {
+        content = content.child(activity(s));
+        if let Some(result) = &s.result {
+            content = content.child(
+                text(match result.action {
+                    ReadingAction::Simplify => "A little clearer.",
+                    ReadingAction::Expand => "The bigger picture.",
+                    ReadingAction::Chart => "See the connection.",
+                    ReadingAction::FollowUp => "Let’s go deeper.",
+                })
+                .font(TextStyle::new(24.0, 600.0).lh(31.0))
+                .color(INK),
+            );
+            if let Some(chart) = &result.chart {
+                content = content.child(chart_view(chart));
+            }
+            if result.chart.is_none() {
+                content = content.child(answer(&result.text, s.settings.text_size, false));
+            }
+            if let Some(label) = result.quality.visible_label() {
+                content = content.child(note(label));
+            }
+            for (i, turn) in s.conversation.iter().enumerate() {
+                content = content.child(
+                    col()
+                        .key(format!("turn-{i}"))
+                        .w_full()
+                        .gap(12.0)
+                        .child(el().h(1.0).w_full().fill(HAIR))
+                        .child(
+                            text(turn.label.as_ref().unwrap_or(&turn.question))
+                                .font(TextStyle::new(15.0, 600.0))
+                                .color(GREEN),
+                        )
+                        .child(answer(&turn.answer, s.settings.text_size, false)),
+                );
+                if let Some(label) = turn.quality.visible_label() {
+                    content = content.child(note(label));
+                }
+            }
+        }
+        if !s.draft.is_empty() {
+            content = content.child(answer(&s.draft, s.settings.text_size, true));
+        }
+        if s.result.is_some() && !busy {
+            content = content.child(
+                row()
+                    .gap(8.0)
+                    .child(action(s, "copy-answer", "Copy", false, |s, tx| {
+                        tx.copy(s.answer())
+                    }))
+                    .child(action(s, "save-answer", "Save", false, |s, _| {
+                        s.save_answer()
+                    }))
+                    .child(action(s, "retry", "Retry", false, |s, tx| {
+                        if let Some(pending) = s.last.clone() {
+                            s.start(pending, tx);
+                        }
+                    })),
+            );
+            content = content.child(row().gap(8.0)
+                .child(action(s, "shorter", "Shorter", false, |s, tx| s.follow_up("Make the explanation shorter without losing qualifications, uncertainty, or important details.".into(), Some("Shorter".into()), tx)))
+                .child(action(s, "more-detail", "More detail", false, |s, tx| s.follow_up("Explain this in more detail, distinguishing source facts from general background.".into(), Some("More detail".into()), tx)))
+                .child(action(s, "example", "Give an example", false, |s, tx| s.follow_up("Give a clearly labeled hypothetical example that illustrates this passage without inventing source-specific facts.".into(), Some("Give an example".into()), tx))));
+            content = content.child(input("follow-up", "Ask about this passage", &s.question, |s| &mut s.question, false))
+                .child(row().gap(8.0).child(action(s, "send-follow-up", "Ask", true, |s, tx| s.follow_up(s.question.text.clone(), None, tx)))
+                    .child(action(s, "explain-selection", "Explain selected words", false, |s, tx| {
+                        if let Some(selection) = tx.text_selection() { let term = selection.text().to_owned(); s.follow_up(format!("Explain this term in the context of the passage: {term}"), Some(format!("Explain “{term}”")), tx); }
+                        else { s.notice = Some("Select a word in the passage or answer, then choose Explain selected words.".into()); }
+                    }).keeps_text_selection()));
+        }
+    }
+    if s.auto_preview.is_none()
+        && (s.context_state.has_content()
+            || s.context_state.pending > 0
+            || s.capture_target.is_some())
+    {
+        content = content.child(context_tools(s));
+    }
+    if let Some(notice) = &s.notice {
+        content = content.child(note(notice));
+    }
+    content = content.child(note(if s.settings.history_enabled {
+        "Knowledge base on · completed answers are saved on this device"
+    } else {
+        "History is off · answers are saved only when you choose Save"
+    }));
+    col()
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(content)
+}
+fn compose(s: &AppState) -> El {
+    let field = text_input(&s.source, TextStyle::new(16.0, 400.0).lh(25.0))
+        .key("passage-input")
+        .label("Passage to read")
+        .w_full()
+        .color(INK)
+        .placeholder("Paste a passage here…", MUTED)
+        .on_edit(|s: &mut AppState| &mut s.source);
+    let mut content = col().w_full().gap(18.0).padding(24.0)
+        .child(text("Make room for understanding.").font(TextStyle::new(27.0, 600.0).lh(35.0)).color(INK))
+        .child(paragraph("Highlight a passage in another app and invoke Pickle, or paste something below."))
+        .child(el().w_full().min_h(150.0).padding(14.0).radius(10.0).fill(SURFACE).border(1.0, HAIR).child(field))
+        .child(row().gap(10.0)
+            .child(action(s, "use-passage", "Read this passage", true, |s, tx| { s.commit_source(); if s.snapshot.is_some() { s.expand(tx, 300.0); } }))
+            .child(action(s, "sample", "Try a sample", false, |s, tx| { s.sample(); s.expand(tx, 300.0); })))
+        .child(note(if cfg!(target_os = "macos") && s.settings.modifier_gesture {
+            "Shortcut: press and release Control + Option. Selection capture needs Accessibility access.".to_string()
+        } else { format!("Shortcut: {}. Some applications do not expose selected text; paste remains available.", s.settings.shortcut) }));
+    if let Activity::Failed(error) = &s.activity {
+        content = content.child(text(error).font(type_::BODY).color(WARNING));
+    }
+    if let Some(notice) = &s.notice {
+        content = content.child(note(notice));
+    }
+    col()
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(content)
+}
+fn answer(value: &str, size: f32, streaming: bool) -> El {
+    Markdown::new(pickle_core::safe_answer_markup(value))
+        .autolink(false)
+        .selectable(true)
+        .streaming(streaming)
+        .render(
+            &MarkdownStyle::neutral(true)
+                .text(INK)
+                .muted(MUTED)
+                .body_font(TextStyle::new(size, 400.0).lh(size * 1.55))
+                .selection(GREEN.alpha(0.22)),
+        )
+        .key(if streaming { "answer-draft" } else { "answer" })
+        .w_full()
+}
+fn activity(s: &AppState) -> El {
+    match &s.activity {
+        Activity::Idle => el(),
+        Activity::WaitingContext => row().gap(12.0).child(note("Reading available context…")).child(action(s, "cancel-context-wait", "Cancel", false, |s, _| s.cancel())),
+        Activity::Running { progress, .. } => row().gap(12.0).center_y().child(text(progress).font(type_::BODY).color(GREEN)).child(spacer()).child(action(s, "cancel-request", "Cancel", false, |s, _| s.cancel())),
+        Activity::Failed(error) => col().w_full().gap(12.0).padding(14.0).radius(10.0).fill(SURFACE)
+            .child(text(error).font(TextStyle::new(14.0, 400.0).lh(21.0)).color(WARNING))
+            .child(row().gap(8.0).child(action(s, "retry-error", "Retry", true, |s, tx| if let Some(p) = s.last.clone() { s.start(p, tx); }))
+                .child(action(s, "error-settings", "Connection settings", false, |s, _| s.route = Route::Settings))),
+        Activity::Consent(_) => {
+            let destination = if s.settings.mode == "Online" { if s.settings.jev_enabled { "Cloudflare for writing, and TypeSafe Jev through Cloudflare for answer checks".to_owned() } else { "Cloudflare for writing".into() } }
+                else { format!("your configured Ollama server at {}{}", s.settings.local_address, if s.settings.same_device { " on this device" } else { " (which may run on another computer)" }) };
+            section("Before sharing this passage").padding(14.0).radius(10.0).fill(SURFACE)
+                .child(paragraph(format!("Your selected passage, supplied context, question, and relevant conversation will be sent to {destination}. Attached OCR, page references, transcripts, and visual summaries are included when present; screenshots are sent only by the explicit visual-analysis action. Requests may incur provider charges. Saved history is never included.")))
+                .child(row().gap(8.0).child(action(s, "consent-continue", "Continue", true, |s, tx| s.consent(tx)))
+                    .child(action(s, "consent-cancel", "Cancel", false, |s, _| s.cancel())))
+        }
+        Activity::ChooseChart(_) => section("Choose a source-backed visual")
+            .child(paragraph("Bar charts need explicit quantities with matching units. Flow diagrams need relationships stated in the passage."))
+            .child(row().gap(8.0)
+                .child(action(s, "choose-bar", "Bar chart", true, |s, tx| if let Activity::ChooseChart(p) = &s.activity { let mut p = p.clone(); p.chart = Some(ChartKind::Bar); s.start(p, tx); }))
+                .child(action(s, "choose-flow", "Flow diagram", false, |s, tx| if let Activity::ChooseChart(p) = &s.activity { let mut p = p.clone(); p.chart = Some(ChartKind::Flow); s.start(p, tx); }))),
+        Activity::NeedsContext(_, flags) => section("A little more context may help")
+            .child(paragraph(flags.join(", ").replace('_', " ")))
+            .child(input("additional-context", "Add surrounding text", &s.context, |s| &mut s.context, false))
+            .child(row().gap(8.0).child(action(s, "retry-context", "Use this context", true, |s, tx| if let Activity::NeedsContext(p, _) = &s.activity { let p = p.clone(); s.start(p, tx); }))
+                .child(action(s, "limited-context", "Explain with limits", false, |s, tx| if let Activity::NeedsContext(p, _) = &s.activity { let mut p = p.clone(); p.limited = true; s.start(p, tx); }))),
+    }
+}
+fn chart_view(chart: &ValidatedChart) -> El {
+    match chart {
+        ValidatedChart::Bar(values) => {
+            let max = values
+                .iter()
+                .map(|v| v.value.abs())
+                .fold(0.0_f64, f64::max)
+                .max(1.0);
+            let mut bars = col()
+                .key("bar-chart")
+                .role("group")
+                .label("Source-backed bar chart")
+                .w_full()
+                .gap(14.0);
+            for (i, value) in values.iter().enumerate() {
+                let width = (value.value.abs() / max * 170.0) as f32;
+                bars = bars.child(
+                    col()
+                        .key(format!("bar-{i}"))
+                        .gap(5.0)
+                        .child(note(value.excerpt.clone()))
+                        .child(
+                            row()
+                                .gap(0.0)
+                                .center_y()
+                                .child(
+                                    row().w(172.0).h(24.0).child(spacer()).child(
+                                        el().w(if value.value < 0.0 { width } else { 0.0 })
+                                            .h(18.0)
+                                            .radius(3.0)
+                                            .fill(WARNING),
+                                    ),
+                                )
+                                .child(el().w(1.0).h(25.0).fill(MUTED))
+                                .child(
+                                    row().w(172.0).h(24.0).center_y().child(
+                                        el().w(if value.value >= 0.0 { width } else { 0.0 })
+                                            .h(18.0)
+                                            .radius(3.0)
+                                            .fill(GREEN),
+                                    ),
+                                ),
+                        )
+                        .child(paragraph(format!("{} {}", value.value, value.unit))),
+                );
+            }
+            bars.child(note(
+                "Zero baseline · each quantity comes from the selected passage",
+            ))
+        }
+        ValidatedChart::Flow { nodes, edges } => {
+            let mut flow = col()
+                .key("flow-chart")
+                .role("group")
+                .label("Source-backed relationships")
+                .w_full()
+                .gap(14.0);
+            for (i, edge) in edges.iter().enumerate() {
+                let from = nodes
+                    .iter()
+                    .find(|n| n.id == edge.from)
+                    .map(|n| n.label.as_str())
+                    .unwrap_or("");
+                let to = nodes
+                    .iter()
+                    .find(|n| n.id == edge.to)
+                    .map(|n| n.label.as_str())
+                    .unwrap_or("");
+                flow = flow.child(
+                    col()
+                        .key(format!("edge-{i}"))
+                        .gap(8.0)
+                        .padding(14.0)
+                        .radius(8.0)
+                        .fill(SURFACE)
+                        .child(paragraph(format!("{from}  →  {to}")))
+                        .child(note(if edge.condition.is_empty() {
+                            edge.evidence.clone()
+                        } else {
+                            format!("When: {}\nSource: {}", edge.condition, edge.evidence)
+                        })),
+                );
+            }
+            flow
+        }
+    }
+}
+fn settings(s: &AppState) -> El {
+    if s.settings_pending {
+        return col()
+            .w_full()
+            .grow(1.0)
+            .padding(24.0)
+            .gap(12.0)
+            .child(paragraph("Saving settings…"))
+            .child(note(
+                "Your active connection changes only after the saved configuration is accepted.",
+            ));
+    }
+    let mut content = col()
+        .w_full()
+        .gap(24.0)
+        .padding(24.0)
+        .child(
+            row()
+                .gap(10.0)
+                .center_y()
+                .child(
+                    text("Settings")
+                        .font(TextStyle::new(25.0, 600.0))
+                        .color(INK),
+                )
+                .child(spacer())
+                .child(action(s, "back-reader", "Back", false, |s, _| {
+                    s.route = Route::Reader
+                })),
+        )
+        .child(
+            section("Where answers are created").child(
+                row()
+                    .gap(8.0)
+                    .child(action(
+                        s,
+                        "mode-local",
+                        "Local",
+                        s.settings.mode == "Local",
+                        |s, _| s.change_mode("Local"),
+                    ))
+                    .child(action(
+                        s,
+                        "mode-online",
+                        "Online",
+                        s.settings.mode == "Online",
+                        |s, _| s.change_mode("Online"),
+                    )),
+            ),
+        );
+    content = if s.settings.mode == "Local" {
+        content.child(section("Local connection")
+            .child(input("local-address", "Ollama server address", &s.local_address, |s| &mut s.local_address, false))
+            .child(input("local-model", "Downloaded model", &s.local_model, |s| &mut s.local_model, false))
+            .child(input("local-vision-model", "Downloaded vision model (optional)", &s.local_vision_model, |s| &mut s.local_vision_model, false))
+            .child(toggle(s, "same-device", "This server runs on this device", s.settings.same_device, |s, _| { s.cancel(); s.settings.same_device = !s.settings.same_device; s.settings.local_consent.clear(); }))
+            .child(note("A loopback SSH tunnel can lead to another computer. Enable this only for inference actually running on this device.")))
+    } else {
+        content.child(section("Cloudflare connection")
+            .child(input("cloud-account", "Account ID", &s.account_id, |s| &mut s.account_id, false))
+            .child(input("cloud-model", "Writing model", &s.cloud_model, |s| &mut s.cloud_model, false))
+            .child(toggle(s, "jev-enabled", "Check answers with Jev", s.settings.jev_enabled, |s, _| { s.cancel(); s.settings.jev_enabled = !s.settings.jev_enabled; }))
+            .child(note("Jev sends the source and candidate answer to TypeSafe through Cloudflare. Checks are model judgments, not fact verification.")))
+    };
+    content = content.child(section("Credentials")
+        .child(input("credential", if s.settings.mode == "Online" { "Cloudflare API token" } else { "Local server access key (if required)" }, &s.credential, |s| &mut s.credential, true))
+        .child(row().gap(8.0).child(action(s, "save-credential", "Save credential", false, |s, _| s.save_credential(false)))
+            .child(action(s, "remove-credential", "Remove saved credential", false, |s, _| s.save_credential(true))))
+        .child(action(s, "authorize-credential", "Authorize saved credential…", false, |s, _| s.authorize_credential())))
+        .child(section("Privacy and reading")
+            .child(toggle(s, "strict-offline", "Strict offline mode", s.settings.strict_offline, |s, _| { s.cancel(); s.cancel_update(); s.settings.strict_offline = !s.settings.strict_offline; }))
+            .child(note("Blocks cloud AI and inference on another computer, including tunneled servers."))
+            .child(toggle(s, "history-enabled", "Keep a knowledge base on this device", s.settings.history_enabled, |s, _| s.settings.history_enabled = !s.settings.history_enabled))
+            .child(note("Records completed answers and their selected passages. Turning this off keeps existing entries. History is never sent to the AI."))
+            .child(toggle(s, "streaming-enabled", "Show answers as they arrive", s.settings.streaming, |s, _| { s.cancel(); s.settings.streaming = !s.settings.streaming; }))
+            .child(toggle(s, "page-context-enabled", "Capture source-window text with local OCR", s.settings.screen_context_enabled, |s, _| { s.clear_context(); s.settings.screen_context_enabled = !s.settings.screen_context_enabled; s.settings.context_consent_destination.clear(); }))
+            .child(toggle(s, "web-context-enabled", "Include webpage and browser references", s.settings.web_context_enabled, |s, _| { s.clear_context(); s.settings.web_context_enabled = !s.settings.web_context_enabled; s.settings.context_consent_destination.clear(); }))
+            )
+        .child(crate::preferences_view::reading_and_appearance(s))
+        .child(section("Invocation")
+            .child(input("invocation-shortcut", "Global shortcut (for example ctrl+alt+p)", &s.shortcut, |s| &mut s.shortcut, false))
+            .child(note("Save settings to register a new shortcut. On macOS, turn off the modifier gesture to use it. A conflicting shortcut leaves the previous registration active."))
+            .child(toggle(s, "modifier-gesture", "Control + Option press and release on macOS", s.settings.modifier_gesture, |s, _| s.set_modifier_gesture(!s.settings.modifier_gesture)).disabled(!cfg!(target_os = "macos")))
+            .child(toggle(s, "automatic-menu", "Show the chooser after selecting text", s.settings.automatic_menu, |s, _| s.set_automatic_menu(!s.settings.automatic_menu)))
+            .child(note("Automatic previews do not replace your answer until you choose an action. Pin the reader to suppress them.")))
+        .child(section("Selection capture")
+            .child(note("Pickle reads selections exposed by the source application. Protected fields and excluded applications are blocked."))
+            .child(action(s, "accessibility-permission", "Request selection access", false, |s, _| { pickle_platform::request_accessibility(); s.notice = Some("Review Pickle's selection permission in system settings, then try the shortcut again.".into()); }))
+            .child(action(s, "screen-permission", "Allow screen capture", false, |s, _| { pickle_platform::request_screen_capture(); s.notice = Some("Review the system's screen-capture permission, then invoke Pickle again.".into()); }))
+            .child(note("Excluded application IDs or Windows executable names, one per line"))
+            .child(el().w_full().h(80.0).padding(10.0).radius(7.0).fill(PAPER).border(1.0, HAIR).child(text_input(&s.exclusions, type_::BODY).key("excluded-apps").label("Excluded application IDs or Windows executable names").color(INK).on_edit(|s: &mut AppState| &mut s.exclusions))))
+        .child(section("Local audio transcription on Windows")
+            .child(note("Choose a trusted whisper.cpp executable and an already downloaded model. Audio is passed in memory; no microphone, cloud service, or automatic model download is used. macOS uses its available on-device speech recognizer."))
+            .child(input("transcriber-executable", "Absolute path to whisper-cli.exe", &s.transcriber_executable, |s| &mut s.transcriber_executable, false))
+            .child(input("transcriber-model", "Absolute path to the downloaded model", &s.transcriber_model, |s| &mut s.transcriber_model, false))
+            .child(input("transcriber-language", "Language code (auto or en, for example)", &s.transcriber_language, |s| &mut s.transcriber_language, false)))
+        .child(section("Browser extension")
+            .child(note("Open the bundled extension folder. In Chrome or Edge, load it from the extensions page using Developer mode, then paste its extension ID below. Browser references must be enabled separately."))
+            .child(action(s, "show-extension", "Show extension folder", false, |s, _| s.reveal_extension()))
+            .child(input("extension-id", "Extension ID", &s.extension_id, |s| &mut s.extension_id, false))
+            .child(row().gap(8.0).child(action(s, "connect-chrome", "Connect Chrome", false, |s, _| s.connect_browser(false)))
+                .child(action(s, "connect-edge", "Connect Edge", false, |s, _| s.connect_browser(true)))))
+        .child(row().gap(8.0)
+            .child(action(s, "disconnect-chrome", "Disconnect Chrome", false, |s, _| s.disconnect_browser(false)))
+            .child(action(s, "disconnect-edge", "Disconnect Edge", false, |s, _| s.disconnect_browser(true))))
+        .child(update_tools(s))
+        .child(section("Existing Pickle data")
+            .child(note("Import saved answers and knowledge-base history from the original Mac app. Original files, credentials, and privacy consents are preserved."))
+            .child(action(s, "import-legacy", "Import original Pickle history", false, |s, _| s.import_legacy()).disabled(!cfg!(target_os = "macos"))))
+        .child(row().gap(8.0).child(action(s, "save-settings", "Save settings", true, |s, _| s.save_settings()))
+            .child(action(s, "open-history", "Knowledge base", false, |s, _| s.route = Route::Library(false)))
+            .child(action(s, "pause", if s.paused { "Resume" } else { "Pause" }, false, |s, _| s.toggle_pause())));
+    if let Some(notice) = &s.notice {
+        content = content.child(note(notice));
+    }
+    col()
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(content)
+}
+fn update_tools(s: &AppState) -> El {
+    use crate::update_ui::UpdateState;
+    let panel = section(&format!("Pickle Rune {}", env!("CARGO_PKG_VERSION")));
+    match &s.update_state {
+        UpdateState::Idle => panel.child(note("Updates are checked only when you choose. Downloads must match the publisher's signature and the signed artifact checksum."))
+            .child(action(s, "check-updates", "Check for updates", false, |s, _| s.check_updates())),
+        UpdateState::Checking(_) | UpdateState::Downloading(_) => panel.child(note(if matches!(s.update_state, UpdateState::Checking(_)) { "Checking the signed release feed…" } else { "Downloading and verifying the update…" }))
+            .child(action(s, "cancel-update", "Cancel update request", false, |s, _| s.cancel_update())),
+        UpdateState::Available(release) => panel.child(paragraph(format!("Version {} is available.", release.version)))
+            .child(note(format!("{} channel · published {} · {:.1} MB", release.channel, release.published_at, release.artifact().size as f64 / 1_048_576.0))).child(note(release.notes.clone()))
+            .child(action(s, "download-update", "Download signed update", true, |s, _| s.download_update())),
+        UpdateState::Ready(path) => panel.child(note(format!("Verified download: {}", path.display())))
+            .child(note("Quit Pickle before replacing it. Open the verified installer/archive and follow the platform's installation steps. Your saved answers are kept."))
+            .child(action(s, "show-update", "Show verified download", false, |s, _| s.reveal_update())),
+        UpdateState::Current => panel.child(note("This build is up to date.")).child(action(s, "recheck-updates", "Check again", false, |s, _| s.check_updates())),
+        UpdateState::Failed(error) => panel.child(note(error)).child(action(s, "retry-update", "Check again", false, |s, _| s.check_updates())),
+    }
+}
+fn context_tools(s: &AppState) -> El {
+    let mut context = section("Session context")
+        .padding(14.0)
+        .radius(10.0)
+        .fill(SURFACE);
+    if s.context_state.pending > 0 {
+        context = context.child(note("Reading or recording context…"));
+    }
+    if s.context_state.has_content() {
+        context = context.child(action(
+            s,
+            "preview-full-context",
+            if s.context_state.preview_full {
+                "Collapse context preview"
+            } else {
+                "Preview full context"
+            },
+            false,
+            |s, _| s.context_state.preview_full = !s.context_state.preview_full,
+        ));
+    }
+    if let Some(page) = &s.context_state.page {
+        if s.context_state.preview_full
+            && let Some(image) = &s.context_state.page_image
+        {
+            context = context.child(
+                el().key("source-screenshot")
+                    .role("img")
+                    .label("Session-only screenshot of the source window")
+                    .w_full()
+                    .h(220.0)
+                    .pixels_fit(image.pixels(), rune::SurfaceFit::Fit),
+            );
+        }
+        context = context.child(note(if page.truncated { "Source-window OCR excerpt (truncated)" } else { "Source-window OCR (may contain errors)" }))
+            .child(text(if s.context_state.preview_full { page.text.clone() } else { page.text.chars().take(500).collect::<String>() }).font(type_::BODY).color(MUTED).selectable(true))
+            .child(note(if s.settings.mode == "Online" { "Analyze visuals explicitly sends this session's screenshot and selected text to Cloudflare. Charges may apply.".to_owned() } else { format!("Analyze visuals explicitly sends this session's screenshot and selected text to your Local vision model at {}.", s.settings.local_address) }))
+            .child(action(s, "analyze-visuals", if s.settings.mode == "Online" { "Analyze visuals with Cloudflare" } else { "Analyze visuals locally" }, false, |s, _| s.begin_visual_analysis()).disabled(s.context_state.pending > 0));
+    }
+    if let Some(reference) = &s.context_state.reference {
+        context = context
+            .child(note(format!("{} · {}", reference.title, reference.kind)))
+            .child(
+                text(if s.context_state.preview_full {
+                    reference.text.clone()
+                } else {
+                    reference.text.chars().take(500).collect::<String>()
+                })
+                .font(type_::BODY)
+                .color(MUTED)
+                .selectable(true),
+            );
+    }
+    if !s.context_state.visual_summary.is_empty() {
+        context = context.child(note(format!(
+            "Unverified visual interpretation: {}",
+            s.context_state.visual_summary
+        )));
+    }
+    if !s.context_state.audio_text.is_empty() {
+        context = context.child(note(format!(
+            "Local audio transcript: {}",
+            s.context_state.audio_text
+        )));
+    }
+    if let Some(notice) = &s.context_state.notice {
+        context = context.child(note(notice));
+    }
+    context.child(
+        row()
+            .gap(8.0)
+            .child(action(
+                s,
+                "remove-context",
+                "Remove context",
+                false,
+                |s, _| s.clear_context(),
+            ))
+            .child(
+                action(s, "listen", "Listen for 30 seconds", false, |s, _| {
+                    s.begin_audio()
+                })
+                .disabled(
+                    s.context_state.pending > 0 || !pickle_platform::capabilities().source_audio,
+                ),
+            ),
+    )
+}
+fn library(s: &AppState, bookmark: bool) -> El {
+    let entries = if bookmark { &s.bookmarks } else { &s.entries };
+    let mut content = col()
+        .w_full()
+        .gap(18.0)
+        .padding(24.0)
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(
+                    text(if bookmark {
+                        "Saved answers"
+                    } else {
+                        "Knowledge base"
+                    })
+                    .font(TextStyle::new(24.0, 600.0))
+                    .color(INK),
+                )
+                .child(spacer())
+                .child(action(s, "library-back", "Back", false, |s, _| {
+                    s.route = Route::Reader
+                })),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(action(s, "library-bookmarks", "Saved", bookmark, |s, _| {
+                    s.route = Route::Library(true);
+                    s.library_selected = None;
+                    s.library_page = 0;
+                }))
+                .child(action(
+                    s,
+                    "library-history",
+                    "Knowledge base",
+                    !bookmark,
+                    |s, _| {
+                        s.route = Route::Library(false);
+                        s.library_selected = None;
+                        s.library_page = 0;
+                    },
+                )),
+        );
+    if let Some(entry) = s
+        .library_selected
+        .as_ref()
+        .and_then(|id| entries.iter().find(|entry| &entry.id == id))
+    {
+        let copied = entry.answer.clone();
+        content = content
+            .child(action(s, "entry-back", "Back to results", false, |s, _| {
+                s.library_selected = None
+            }))
+            .child(note(format!("{} · {}", entry.app_name, entry.recorded_at)))
+            .child(answer(&entry.answer, s.settings.text_size, false))
+            .child(
+                section("Original passage")
+                    .child(paragraph(entry.passage.clone()).selectable(true)),
+            )
+            .child(action(
+                s,
+                "copy-saved-detail",
+                "Copy answer",
+                false,
+                move |_, tx| tx.copy(copied.clone()),
+            ));
+        return col()
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(content);
+    }
+    content = content.child(input(
+        "search-library",
+        "Search passages and answers",
+        &s.search,
+        |s| {
+            s.library_page = 0;
+            &mut s.search
+        },
+        false,
+    ));
+    if entries.is_empty() {
+        content = content.child(paragraph(if bookmark {
+            "Choose Save beside an answer to keep it here."
+        } else {
+            "Enable the knowledge base in Settings to record completed answers on this device."
+        }));
+    }
+    let matches: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.matches(&s.search.text))
+        .collect();
+    let pages = matches.len().div_ceil(20).max(1);
+    let page = s.library_page.min(pages - 1);
+    if !entries.is_empty() && matches.is_empty() {
+        content = content.child(paragraph("No saved answers match this search."));
+    }
+    for entry in matches.iter().skip(page * 20).take(20) {
+        let id = entry.id.clone();
+        let selected = entry.id.clone();
+        let answer_text = entry.answer.clone();
+        content = content.child(
+            col()
+                .key(format!("entry-{}", entry.id))
+                .w_full()
+                .gap(10.0)
+                .padding(16.0)
+                .radius(10.0)
+                .fill(SURFACE)
+                .child(note(format!("{} · {}", entry.app_name, entry.action)))
+                .child(answer(
+                    &entry.answer.chars().take(500).collect::<String>(),
+                    s.settings.text_size,
+                    false,
+                ))
+                .child(note(entry.passage.chars().take(250).collect::<String>()))
+                .child(
+                    row()
+                        .gap(8.0)
+                        .child(action(
+                            s,
+                            format!("copy-{}", entry.id).as_str(),
+                            "Copy",
+                            false,
+                            move |_, tx| tx.copy(answer_text.clone()),
+                        ))
+                        .child(action(
+                            s,
+                            format!("read-{}", entry.id).as_str(),
+                            "Read answer",
+                            false,
+                            move |s, _| s.library_selected = Some(selected.clone()),
+                        ))
+                        .child(action(
+                            s,
+                            format!("remove-{}", entry.id).as_str(),
+                            "Remove",
+                            false,
+                            move |s, _| s.remove_entry(bookmark, id.clone()),
+                        )),
+                ),
+        );
+    }
+    if pages > 1 {
+        content = content.child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(
+                    action(s, "library-previous", "Previous", false, |s, _| {
+                        s.library_page = s.library_page.saturating_sub(1)
+                    })
+                    .disabled(page == 0),
+                )
+                .child(note(format!("Page {} of {pages}", page + 1)))
+                .child(
+                    action(s, "library-next", "Next", false, |s, _| s.library_page += 1)
+                        .disabled(page + 1 >= pages),
+                ),
+        );
+    }
+    if let Some(notice) = &s.notice {
+        content = content.child(note(notice));
+    }
+    col()
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(content)
+}

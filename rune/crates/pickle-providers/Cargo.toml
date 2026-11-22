@@ -1,0 +1,27 @@
+[package]
+name = "pickle-providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+pickle-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+url.workspace = true
+regex.workspace = true
+zeroize.workspace = true
+base64 = "0.22"
+scraper = "0.24"
+directories.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }

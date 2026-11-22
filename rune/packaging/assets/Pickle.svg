@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Pickle</title>
+  <desc>A seeded green pickle framed by a quiet portal on a forest-green tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="32" x2="416" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#193728"/><stop offset="1" stop-color="#0C1C15"/>
+    </linearGradient>
+    <linearGradient id="pickle" x1="196" y1="124" x2="316" y2="396" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D0F77A"/><stop offset="0.48" stop-color="#B3F540"/><stop offset="1" stop-color="#78B831"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="104" fill="url(#tile)"/>
+  <rect x="29.5" y="29.5" width="453" height="453" rx="102.5" fill="none" stroke="#31533C" stroke-width="3"/>
+  <ellipse cx="256" cy="256" rx="161" ry="107" transform="rotate(-28 256 256)" fill="none" stroke="#5CBE9E" stroke-opacity="0.48" stroke-width="13"/>
+  <g transform="rotate(24 256 256)">
+    <path d="M256 110C215 110 190 143 190 182V329C190 374 215 402 256 402C297 402 322 374 322 329V182C322 143 297 110 256 110Z" fill="#07180D" fill-opacity="0.2" transform="translate(0 9)"/>
+    <path d="M256 110C215 110 190 143 190 182V329C190 374 215 402 256 402C297 402 322 374 322 329V182C322 143 297 110 256 110Z" fill="url(#pickle)"/>
+    <path d="M230 145C217 154 212 168 212 187V311" fill="none" stroke="#E6FFAD" stroke-opacity="0.7" stroke-width="10" stroke-linecap="round"/>
+    <g fill="#4E7E27">
+      <ellipse cx="267" cy="169" rx="9" ry="13" transform="rotate(-16 267 169)"/>
+      <ellipse cx="283" cy="230" rx="8" ry="12" transform="rotate(18 283 230)"/>
+      <ellipse cx="239" cy="266" rx="8" ry="12" transform="rotate(-16 239 266)"/>
+      <ellipse cx="279" cy="307" rx="9" ry="13" transform="rotate(16 279 307)"/>
+      <ellipse cx="242" cy="352" rx="8" ry="11" transform="rotate(-16 242 352)"/>
+    </g>
+  </g>
+</svg>

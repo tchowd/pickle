@@ -1,0 +1,35 @@
+[package]
+name = "pickle-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+pickle-core.workspace = true
+pickle-providers.workspace = true
+pickle-platform.workspace = true
+rune.workspace = true
+rune-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+directories.workspace = true
+tempfile.workspace = true
+fs2 = "0.4"
+plist = "1"
+reqwest.workspace = true
+futures-util.workspace = true
+url.workspace = true
+ed25519-dalek = "2"
+sha2 = "0.10"
+hex = "0.4"
+semver = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
