@@ -47,7 +47,9 @@ jobs:
           cargo clippy --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked --all-targets -- -D warnings
           cargo test --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked
       - name: Test dependency notices
-        run: python packaging/test_notices.py
+        run: |
+          python packaging/test_notices.py
+          python packaging/test_windows_runtime.py
       - name: Test browser extraction and local gateway
         working-directory: .
         shell: bash
@@ -65,7 +67,9 @@ jobs:
           cargo run --locked -p pickle-app -- --scene sample --snap artifacts/reader.png --tree artifacts/reader-tree.json
       - name: Package Mac development build
         if: runner.os == 'macOS'
-        run: bash scripts/build-macos.sh debug
+        run: |
+          bash scripts/build-macos.sh debug
+          bash scripts/build-macos-fixture.sh
       - name: Package Windows development build
         if: runner.os == 'Windows'
         shell: pwsh
@@ -76,6 +80,8 @@ jobs:
           $stage = (Get-ChildItem artifacts/windows-* -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
           ./scripts/build-msix.ps1 -StageDirectory $stage -PackageName 'Pickle.Rune.CI' -Publisher 'CN=Pickle CI Development' -PublisherDisplayName 'Pickle CI Development' -Version '0.1.0.0' -UnsignedDevelopment
           ./scripts/test-msix-package.ps1 -Package artifacts/PickleRune-x64.msix -ExpectedIdentity 'Pickle.Rune.CI'
+          ./scripts/test-identity-registration.ps1
+          ./scripts/test-signed-identity-ci.ps1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -88,3 +94,6 @@ jobs:
             rune/artifacts/*.png
             rune/artifacts/*tree.json
             rune/artifacts/notices-*/
+            rune/artifacts/*capabilities.json
+            rune/artifacts/identity-ocr-result.json
+            rune/artifacts/windows-runtime-report.json
