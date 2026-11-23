@@ -58,10 +58,49 @@ if (!$python) { $python=Get-Command python3 -CommandType Application -ErrorActio
 if ($LASTEXITCODE -ne 0) { throw 'The non-forwarding owned proxy contract failed.' }
 $valid=[ordered]@{schema=1;test='windows-stable-bundled-extension-load';scope='bundled-extension-load-only';browser='chrome';extension_id='abcdefghijklmnopabcdefghijklmnop';extension_version='0.1.0';browser_version='157.0.1.2';passed=$true;atomic_job_membership_verified=$true;owned_window_verified=$true;developer_mode_enabled=$true;load_unpacked_invoked=$true;folder_picker_owned=$true;folder_path_value_verified=$true;folder_picker_closed=$true;extension_loaded=$true;browser_job_drained=$true;full_delivery_verified=$false;native_host_registered=$false;native_host_executed=$false;authenticated_bridge_verified=$false;app_launched=$false;devtools_or_cdp_used=$false;extension_code_modified=$false}
 $valid.extension_card_identity_verified=$true
+$valid.extension_identity_proof='card';$valid.extension_details_identity_verified=$false
 foreach ($key in @('owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified')) { $valid[$key]=$true }
 $valid.navigation_shortcut_events=4;$valid.navigation_enter_events=2;$valid.navigation_confirm_shortcut_events=4;$valid.navigation_escape_events=2
 $report=ConvertTo-PickleExtensionStageReport ([pscustomobject]$valid)
 Assert-PickleExtensionStageReport $report 'chrome'
+foreach ($pair in @(@('failure','native-operation-failed'),@('error_kind','com'),@('error_hresult',0))) {
+  $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1]
+  $null=ConvertTo-PickleExtensionStageReport $bad
+  Assert-ExtensionRefused { Assert-PickleExtensionStageReport $bad 'chrome' }
+}
+$layout=[ordered]@{stage='complete';action_performed=$true;safely_verified=$true;before_verified=$true;set_window_pos_succeeded=$true;after_verified=$true;unavailable=$false;requested_outer_width=1280;requested_outer_height=800;before_client_width=988;before_client_height=692;after_client_width=1264;after_client_height=762;after_outer_width=1280;after_outer_height=800} | ConvertTo-Json | ConvertFrom-Json
+$layoutClean=ConvertTo-PickleExtensionLayout $layout
+if (!$layoutClean.safely_verified -or $layoutClean.after_outer_width -ne 1280) { throw 'The sole safely verified resize changed.' }
+$recovered=$valid | ConvertTo-Json | ConvertFrom-Json;$recovered.browser='edge'
+$recovered | Add-Member -NotePropertyName initial_developer_failure -NotePropertyValue 'developer-toggle-unavailable'
+$recovered | Add-Member -NotePropertyName edge_layout_observation -NotePropertyValue $layout
+Assert-PickleExtensionStageReport (ConvertTo-PickleExtensionStageReport $recovered) 'edge'
+foreach ($change in @(@('requested_outer_width',1024),@('after_outer_height',799),@('after_client_width',1281),@('action_performed',$false),@('safely_verified',$false),@('before_verified',$false),@('set_window_pos_succeeded',$false),@('after_verified',$false),@('unavailable',$true),@('stage','after-document'),@('before_client_width',0),@('after_outer_width','1280'))) {
+  $bad=$layout | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionLayout $bad }
+}
+$unsafe=$layout | ConvertTo-Json | ConvertFrom-Json;$unsafe.stage='after-document';$unsafe.safely_verified=$false;$unsafe.after_verified=$false;$unsafe.unavailable=$true
+$unsafeReceipt=$recovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$unsafeReceipt.passed=$false;$unsafeReceipt.edge_layout_observation=$unsafe
+$unsafeReceipt | Add-Member -NotePropertyName failure -NotePropertyValue 'edge-layout-unverified'
+$unsafeClean=ConvertTo-PickleExtensionStageReport $unsafeReceipt
+if ($unsafeClean.edge_layout_observation.safely_verified -or $unsafeClean.initial_developer_failure -cne 'developer-toggle-unavailable' -or $unsafeClean.failure -cne 'edge-layout-unverified') { throw 'Unsafe attempted layout lost the original discovery or stop evidence.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $unsafeReceipt 'edge' }
+$bad=$recovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.browser='chrome'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+$bad=$recovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.initial_developer_failure='stage-deadline'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+$bad=$recovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.PSObject.Properties.Remove('edge_layout_observation')
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+$bad=$layout | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member -NotePropertyName arbitrary_window_text -NotePropertyValue 'not-retained'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionLayout $bad }
+$detail=$valid | ConvertTo-Json | ConvertFrom-Json;$detail.extension_identity_proof='detail-view';$detail.extension_card_identity_verified=$false;$detail.extension_details_identity_verified=$true
+$detail | Add-Member -NotePropertyName owned_extension_folder_verified -NotePropertyValue $true
+$detail | Add-Member -NotePropertyName detail_identity_stage -NotePropertyValue 'verified'
+Assert-PickleExtensionStageReport (ConvertTo-PickleExtensionStageReport $detail) 'chrome'
+foreach ($change in @(@('extension_identity_proof','manager'),@('extension_card_identity_verified',$true),@('extension_details_identity_verified',$false),@('owned_extension_folder_verified',$false),@('detail_identity_stage','path'))) {
+  $bad=$detail | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { Assert-PickleExtensionStageReport $bad 'chrome' }
+}
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $report 'edge' }
 $wrongCard=$valid | ConvertTo-Json | ConvertFrom-Json;$wrongCard.extension_card_identity_verified=$false
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $wrongCard 'chrome' }
@@ -114,6 +153,11 @@ $diagnosed.stage='developer-mode';$diagnosed.failure='developer-toggle-unavailab
 $diagnosed | Add-Member -NotePropertyName failure_observation -NotePropertyValue $failureObserved
 $null=ConvertTo-PickleExtensionStageReport $diagnosed
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $diagnosed 'edge' }
+$detailFailure=$diagnosed | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$detailFailure.stage='loaded-extension-details';$detailFailure.failure='detail-identity-unavailable'
+$detailFailure | Add-Member -NotePropertyName detail_identity_stage -NotePropertyValue 'path'
+$detailFailureClean=ConvertTo-PickleExtensionStageReport $detailFailure
+if ($detailFailureClean.detail_identity_stage -cne 'path' -or $null -eq $detailFailureClean.failure_observation -or $detailFailureClean.failure -cne 'detail-identity-unavailable') { throw 'New detail refusal lost its bounded phase or existing failure diagnostics.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $detailFailure 'edge' }
 $policyRecords=@(foreach ($hive in @('HKCU','HKLM')) { foreach ($view in @(32,64)) { foreach ($policy in @('ExtensionDeveloperModeSettings','DeveloperToolsAvailability')) { [ordered]@{hive=$hive;view=$view;policy=$policy;state='absent'} } } })
 $policies=[ordered]@{effective_policy_claimed=$false;incomplete=$false;records=$policyRecords} | ConvertTo-Json -Depth 5 | ConvertFrom-Json
 $policyClean=ConvertTo-PickleExtensionEdgePolicies $policies
@@ -325,9 +369,11 @@ try {
   if ([IO.File]::ReadAllText((Join-Path $hostDir 'existing.json')) -cne 'do not replace') { throw 'Foreign native-host data changed.' }
   if ($IsWindows) {
     $exe=Build-PickleExtensionFixture $root
-    $child=Start-PickleReadingChild $exe @('--self-test')
-    try { if (!$child.WaitForExit(10000) -or $child.ExitCode -ne 0) { throw 'Native fixture non-UI predicates failed.' } }
-    finally { if (!$child.HasExited) { $child.Kill();$child.WaitForExit(10000) | Out-Null };$child.Dispose() }
+    foreach ($mode in @('--self-test','--details-self-test','--layout-self-test')) {
+      $child=Start-PickleReadingChild $exe @($mode)
+      try { if (!$child.WaitForExit(10000) -or $child.ExitCode -ne 0) { throw 'Native fixture non-UI predicates failed.' } }
+      finally { if (!$child.HasExited) { $child.Kill();$child.WaitForExit(10000) | Out-Null };$child.Dispose() }
+    }
   } else {
     Assert-ExtensionRefused { Invoke-PickleExtensionSetupStage $package 'chrome' (Join-Path $root 'must-not-exist.json') }
     if (Test-Path -LiteralPath (Join-Path $root 'must-not-exist.json')) { throw 'Non-Windows acceptance touched native evidence.' }

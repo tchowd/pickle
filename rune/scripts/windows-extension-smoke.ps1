@@ -94,18 +94,20 @@ function Build-PickleExtensionFixture([string]$Directory) {
   $output=Join-Path $Directory 'BrowserExtensionFixture.exe'
   $references=@('System.dll','System.Core.dll','System.Drawing.dll','System.Web.Extensions.dll','WPF/WindowsBase.dll','WPF/UIAutomationClient.dll','WPF/UIAutomationTypes.dll') | ForEach-Object { Join-Path $framework $_ }
   foreach ($reference in $references) { if (!(Test-Path -LiteralPath $reference -PathType Leaf)) { throw 'A required inbox UI Automation reference was unavailable.' } }
-  $arguments=@('/nologo','/langversion:5','/target:exe',"/out:$output")+@($references | ForEach-Object { "/reference:$_" })+@((Join-Path $PSScriptRoot '../native/windows/BrowserExtensionFixture.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionDelivery.cs'))
+  $arguments=@('/nologo','/langversion:5','/target:exe',"/out:$output")+@($references | ForEach-Object { "/reference:$_" })+@((Join-Path $PSScriptRoot '../native/windows/BrowserExtensionFixture.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionDelivery.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionDetails.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionLayout.cs'))
   $compile=Start-PickleReadingChild $compiler $arguments
   try { if (!$compile.WaitForExit(30000) -or $compile.ExitCode -ne 0 -or !(Test-Path -LiteralPath $output -PathType Leaf)) { throw 'The owned extension fixture did not compile within its deadline.' } }
   finally { if (!$compile.HasExited) { $compile.Kill();$compile.WaitForExit(10000) | Out-Null };$compile.Dispose() }
   return $output
 }
 function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
-  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure_observation','window_capture','edge_policy_observation') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
+  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure','error_kind','error_hresult','failure_observation','window_capture','edge_policy_observation') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
+  Assert-PickleExtensionRecoveredLayout $Report
   if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-bundled-extension-load' -or $Report.scope -cne 'bundled-extension-load-only' -or $Report.browser -cne $Browser) { throw 'The native setup stage report had the wrong scope.' }
-  foreach ($key in @('passed','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_card_identity_verified','extension_loaded','browser_job_drained')) {
+  foreach ($key in @('passed','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_loaded','browser_job_drained')) {
     if ($Report.$key -isnot [bool] -or !$Report.$key) { throw 'The native bundled-extension loading stage did not pass completely.' }
   }
+  Assert-PickleExtensionIdentityProof $Report
   foreach ($item in @(@('navigation_shortcut_events',4),@('navigation_enter_events',2),@('navigation_confirm_shortcut_events',4),@('navigation_escape_events',2))) {
     $value=$Report.($item[0])
     if (($value -isnot [int] -and $value -isnot [long]) -or $value -ne $item[1]) { throw 'The owned browser navigation input was incomplete.' }
@@ -114,6 +116,38 @@ function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
     if ($Report.$key -isnot [bool] -or $Report.$key) { throw 'The setup-only report claimed an unverified feature or unsupported setup path.' }
   }
   if ($Report.extension_id -isnot [string] -or $Report.extension_id -cnotmatch '^[a-p]{32}$' -or $Report.extension_version -cne '0.1.0') { throw 'The native extension card did not attest an exact ID and version.' }
+}
+function Assert-PickleExtensionIdentityProof($Report) {
+  if ($Report.extension_identity_proof -ceq 'detail-view') {
+    if ($Report.extension_card_identity_verified -isnot [bool] -or $Report.extension_card_identity_verified -or $Report.extension_details_identity_verified -isnot [bool] -or !$Report.extension_details_identity_verified -or $Report.owned_extension_folder_verified -isnot [bool] -or !$Report.owned_extension_folder_verified -or $Report.detail_identity_stage -cne 'verified') { throw 'Detail identity cannot be reported as card identity or an unbound folder.' }
+  } elseif ($Report.extension_identity_proof -ceq 'card') {
+    if ($Report.extension_card_identity_verified -isnot [bool] -or !$Report.extension_card_identity_verified -or $Report.extension_details_identity_verified -isnot [bool] -or $Report.extension_details_identity_verified) { throw 'Card identity cannot be reported without its actual proof.' }
+  } else { throw 'An explicit supported extension identity proof was required.' }
+}
+function ConvertTo-PickleExtensionLayout($Observation) {
+  $bools=@('action_performed','safely_verified','before_verified','set_window_pos_succeeded','after_verified','unavailable')
+  $dims=@('before_client_width','before_client_height','after_client_width','after_client_height','after_outer_width','after_outer_height')
+  $keys=$bools+$dims+@('stage','requested_outer_width','requested_outer_height')
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'The owned layout record had unknown fields.' }
+  $stages=@('before-ownership','before-document','before-dimensions','before-action-document','resize','after-dimensions','after-document','complete')
+  if ($Observation.stage -isnot [string] -or $Observation.stage -cnotin $stages) { throw 'The owned layout stage was invalid.' }
+  $clean=[ordered]@{stage=$Observation.stage}
+  foreach ($key in $bools) { if ($Observation.$key -isnot [bool]) { throw 'A layout proof flag was not boolean.' };$clean[$key]=$Observation.$key }
+  foreach ($pair in @(@('requested_outer_width',1280),@('requested_outer_height',800))) { $v=$Observation.($pair[0]);if (($v -isnot [int] -and $v -isnot [long]) -or $v -ne $pair[1]) { throw 'The sole owned layout request changed.' };$clean[$pair[0]]=$v }
+  foreach ($key in $dims) { $v=$Observation.$key;if ($null -ne $v -and (($v -isnot [int] -and $v -isnot [long]) -or $v -lt 1 -or $v -gt 32768)) { throw 'A layout dimension exceeded its bound.' };$clean[$key]=$v }
+  if (($null -eq $clean.before_client_width) -ne ($null -eq $clean.before_client_height)) { throw 'Layout before-dimensions were inconsistent.' }
+  $after=@($dims | Where-Object { $_ -clike 'after_*' } | Where-Object { $null -ne $clean[$_] }).Count
+  if ($after -notin @(0,4) -or ($clean.action_performed -and (!$clean.before_verified -or $null -eq $clean.before_client_width)) -or ($clean.set_window_pos_succeeded -and !$clean.action_performed) -or ($clean.after_verified -and !$clean.safely_verified)) { throw 'Layout action/ownership evidence was inconsistent.' }
+  if ($clean.safely_verified) {
+    if ($clean.stage -cne 'complete' -or !$clean.action_performed -or !$clean.before_verified -or !$clean.set_window_pos_succeeded -or !$clean.after_verified -or $clean.unavailable -or $after -ne 4 -or $clean.after_outer_width -ne 1280 -or $clean.after_outer_height -ne 800 -or $clean.after_client_width -gt 1280 -or $clean.after_client_height -gt 800) { throw 'The completed layout proof did not match its sole verified request.' }
+  } elseif ($clean.stage -ceq 'complete') { throw 'An unsafe layout record cannot claim completion.' }
+  return [pscustomobject]$clean
+}
+function Assert-PickleExtensionRecoveredLayout($Report) {
+  $keys=@($Report.PSObject.Properties.Name);$hasLayout=$keys -ccontains 'edge_layout_observation';$hasInitial=$keys -ccontains 'initial_developer_failure'
+  if ($hasLayout -or $hasInitial) {
+    if (!$hasLayout -or !$hasInitial -or $Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable' -or !(ConvertTo-PickleExtensionLayout $Report.edge_layout_observation).safely_verified) { throw 'A successful recovery needs one safely verified owned Edge layout.' }
+  }
 }
 function ConvertTo-PickleExtensionDeveloperObservation($Observation) {
   $counters=@('nodes','property_errors','document_count','extensions_label_exact_count','extensions_document_exact_count','welcome_document_known_count','new_tab_document_known_count','address_edit_known_name_count','value_pattern_count','internal_uri_exact_count','internal_uri_without_slash_count','candidate_count')
@@ -253,6 +287,11 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
   $numbers=@('schema','error_hresult','folder_field_candidates','extension_id_candidates','target_card_candidates','last_owned_uia_nodes','refused_uia_pid','last_owned_picker_windows','last_owned_browser_windows','navigation_shortcut_events','navigation_enter_events','navigation_confirm_shortcut_events','navigation_escape_events')
   $fixed=@{test=@('windows-stable-bundled-extension-load');scope=@('bundled-extension-load-only');browser=@('chrome','edge');stage=@('arguments','launch-contained-browser','owned-browser-window','ordinary-navigation','developer-mode','load-unpacked','owned-folder-picker','folder-picker-path','loaded-extension-card','browser-cleanup');error_kind=@('com','access-denied','io','argument','other')}
   $failures=@('requires-hosted-windows-ci','invalid-arguments','unsupported-browser','invalid-proxy-port','profile-not-empty','wrong-browser-executable','not-installed-stable-brand','invalid-bundled-manifest','unexpected-bundled-extension','stage-deadline','owned-browser-window-unavailable','navigation-window-not-owned','navigation-foreground-unavailable','owned-address-bar-unavailable','address-value-pattern-unavailable','navigation-value-not-applied','navigation-focus-or-value-changed','extensions-document-unavailable','committed-internal-uri-unavailable','extensions-document-changed','navigation-input-target-not-owned','navigation-input-key-already-held','navigation-input-incomplete','developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','load-unpacked-unavailable','owned-folder-picker-unavailable','ambiguous-folder-field','folder-field-unavailable','folder-value-pattern-unavailable','folder-path-value-mismatch','select-folder-unavailable','folder-picker-did-not-close','ambiguous-target-card','ambiguous-extension-id','loaded-extension-id-unavailable','native-operation-failed','invalid-owned-directory','directory-reparse-point','invalid-regular-file','invalid-json-size','invalid-json-object','evidence-too-large','uia-element-not-owned','uia-window-not-owned','uia-node-bound','uia-label-bound','ambiguous-owned-control','control-not-actionable','invoke-pattern-unavailable','job-create-failed','job-limits-failed','attribute-size-failed','attribute-initialize-failed','job-list-failed','browser-create-failed','browser-job-membership-failed','invalid-browser-argument','ambiguous-owned-window')
+  $booleans+=@('extension_details_identity_verified','owned_extension_folder_verified')
+  $numbers+=@('candidate_extension_id_count')
+  $fixed.stage+=@('loaded-extension-details');$fixed.extension_identity_proof=@('card','detail-view');$fixed.detail_identity_stage=@('candidate','route','name','id','version','path','recheck','verified')
+  $fixed.initial_developer_failure=@('developer-toggle-unavailable')
+  $failures+=@('detail-candidate-invalid','detail-candidate-unavailable','detail-route-unavailable','detail-identity-unavailable','edge-layout-unverified','edge-layout-unavailable')
   if ($Delivery) {
     $fixed.test=@('windows-stable-extension-reference-delivery');$fixed.scope=@('extension-native-reference-delivery')
     $fixed.stage+=@('delivery-app-ready','delivery-connect','delivery-article','delivery-shortcut','delivery-context','delivery-disconnect','delivery-quit')
@@ -263,12 +302,20 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
   $clean=[ordered]@{}
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
-    if ($key -ceq 'edge_policy_observation') {
-      if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.browser -cne 'edge' -or $Report.stage -cnotin @('developer-mode','loaded-extension-card') -or $Report.failure -isnot [string]) { throw 'Edge policy presence is only a failed Edge stage diagnostic.' }
+    if ($key -ceq 'edge_layout_observation') {
+      if ($Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable' -or $Report.passed -isnot [bool]) { throw 'Only the original owned Edge discovery failure can have a layout record.' }
+      $layout=ConvertTo-PickleExtensionLayout $value
+      if ($Report.passed -and !$layout.safely_verified) { throw 'Unsafe layout cannot attest recovered success.' };$clean[$key]=$layout
+    }
+    elseif ($key -ceq 'initial_developer_failure') {
+      if ($Report.browser -cne 'edge' -or $value -cne 'developer-toggle-unavailable' -or @($Report.PSObject.Properties.Name) -cnotcontains 'edge_layout_observation') { throw 'The original discovery failure must retain its one owned Edge layout record.' };$clean[$key]=$value
+    }
+    elseif ($key -ceq 'edge_policy_observation') {
+      if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.browser -cne 'edge' -or $Report.stage -cnotin @('developer-mode','loaded-extension-card','loaded-extension-details') -or $Report.failure -isnot [string]) { throw 'Edge policy presence is only a failed Edge stage diagnostic.' }
       $clean[$key]=ConvertTo-PickleExtensionEdgePolicies $value
     }
     elseif ($key -cin @('failure_observation','window_capture')) {
-      if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.stage -cnotin @('developer-mode','loaded-extension-card') -or $Report.failure -isnot [string]) { throw 'Failure diagnostics cannot attest success or another stage.' }
+      if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.stage -cnotin @('developer-mode','loaded-extension-card','loaded-extension-details') -or $Report.failure -isnot [string]) { throw 'Failure diagnostics cannot attest success or another stage.' }
       $clean[$key]=if ($key -ceq 'window_capture') { ConvertTo-PickleExtensionWindowCapture $value } else { ConvertTo-PickleExtensionFailureObservation $value }
     }
     elseif ($key -cin @('developer_observation','page_observation_before_navigation','navigation_failure_observation')) { $clean[$key]=ConvertTo-PickleExtensionDeveloperObservation $value }

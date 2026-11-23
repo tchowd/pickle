@@ -171,6 +171,7 @@ public static class BrowserExtensionPredicates {
         return match.Success ? match.Groups[1].Value : null;
     }
     public static bool Browser(string value) { return value=="chrome" || value=="edge"; }
+    public static bool LayoutAfterFailure(string kind,string failure) { return kind=="edge" && failure=="developer-toggle-unavailable"; }
     public static bool ToggleCandidate(string actualName,string expectedName,bool visible,bool enabled,bool supportsToggle) {
         return actualName==expectedName && visible && enabled && supportsToggle;
     }
@@ -241,6 +242,8 @@ public static class BrowserExtensionPredicates {
     public static bool CommittedPage(bool entered,bool document,bool bound,int uriForm) { return entered && document && bound && (uriForm==1 || uriForm==2); }
     public static bool Scope(bool loaded,bool drained,bool fullDelivery) { return loaded && drained && !fullDelivery; }
     public static void SelfTest() {
+        if(!LayoutAfterFailure("edge","developer-toggle-unavailable") || LayoutAfterFailure("chrome","developer-toggle-unavailable") ||
+            LayoutAfterFailure("edge","stage-deadline") || LayoutAfterFailure("edge","uia-element-not-owned")) throw new Exception("layout-only-after-original-discovery-failure");
         foreach(string policy in new[]{"ExtensionDeveloperModeSettings","DeveloperToolsAvailability"}) {
             if(PolicyState(policy,2,0,0,0)!="absent" || PolicyState(policy,3,0,0,0)!="absent" ||
                 PolicyState(policy,5,0,0,0)!="unavailable" || PolicyState(policy,1630,1,0,0)!="unexpected-type" ||
@@ -406,6 +409,8 @@ public static partial class BrowserExtensionFixtureProgram {
     [MTAThread] public static int Main(string[] args) {
         if (args.Length==1 && args[0]=="--self-test") { BrowserExtensionPredicates.SelfTest(); return 0; }
         if (args.Length==1 && args[0]=="--delivery-self-test") { BrowserExtensionDeliveryPredicates.SelfTest(); return 0; }
+        if (args.Length==1 && args[0]=="--details-self-test") { BrowserExtensionDetailsPredicates.SelfTest(); return 0; }
+        if (args.Length==1 && args[0]=="--layout-self-test") { BrowserExtensionLayoutPredicates.SelfTest(); return 0; }
         if(args.Length>0 && args[0]=="--capture-owned-window") return CaptureChild(args);
         bool loaded=false,drained=false,delivery=false,delivered=false;IntPtr window=IntPtr.Zero;
         try {
@@ -456,12 +461,18 @@ public static partial class BrowserExtensionFixtureProgram {
             stage="developer-mode";
             AutomationElement developer=null;
             try { Wait(()=> { developer=NamedToggle(window,"Developer mode"); return developer!=null; },20,"developer-toggle-unavailable"); }
-            catch(ExtensionStageFailure) {
-                // Failure-only observation. Never change the original action,
-                // failure code or deadline; do not emit arbitrary UI strings.
+            catch(ExtensionStageFailure initial) {
+                // Retain the initial discovery observation before the single
+                // approved owned-window layout experiment. No new deadline.
                 try { ObserveDeveloper(window,kind,"developer_observation"); }
                 catch { Report["developer_observation_unavailable"]=true; }
-                throw;
+                if(!BrowserExtensionPredicates.LayoutAfterFailure(kind,initial.Code)) throw;
+                Report["initial_developer_failure"]=initial.Code;
+                bool performed;bool safe=TryEdgeDeveloperLayout(window,kind,out performed);
+                if(!safe) Fail(performed ? "edge-layout-unverified" : "edge-layout-unavailable");
+                // Exactly one repeat of the ORIGINAL selection contract, under
+                // the unchanged scenario deadline. No menu/policy workaround.
+                Wait(()=> { developer=NamedToggle(window,"Developer mode");return developer!=null; },20,"developer-toggle-unavailable");
             }
             Report["developer_toggle_found"]=true;
             object pattern;
@@ -496,38 +507,15 @@ public static partial class BrowserExtensionFixtureProgram {
             Invoke(select);
             Wait(()=>!Native.IsWindow(picker) || !Native.IsWindowVisible(picker),10,"folder-picker-did-not-close");
             Report["folder_picker_closed"]=true;
-            stage="loaded-extension-card";
-            string id=null;
-            Wait(()=> {
-                var root=AutomationElement.FromHandle(window);Owned(root);
-                var document=OwnedExtensionsDocument(window);if(document==null) return false;
-                var reader=new NativeCardReader(window);
-                var first=ExtensionCardMatcher.Observe(document,reader,name,extensionVersion);
-                Report["target_card_candidates"]=first==null ? 0 : first.TargetCount;
-                Report["extension_name_found"]=first!=null && first.TargetCount==1;
-                Report["extension_version_found"]=first!=null && first.TargetCount==1 && first.VersionFound;
-                Report["extension_id_candidates"]=first==null ? 0 : first.IdCount;
-                if(first==null) return false;
-                if(first.TargetCount>1) Fail("ambiguous-target-card");if(first.IdCount>1) Fail("ambiguous-extension-id");
-                if(first.Id==null) return false;
-                // Reacquire the actual window/document and re-read the SAME
-                // anchored card before accepting. Never substitute another
-                // card/root after provider reparenting or navigation.
-                if(!browser.OwnsWindow(window) || !Automation.Compare(root,AutomationElement.FromHandle(window))) return false;
-                var currentDocument=OwnedExtensionsDocument(window);
-                if(currentDocument==null || !Automation.Compare(document,currentDocument)) return false;
-                var last=ExtensionCardMatcher.Observe(document,reader,name,extensionVersion);
-                if(!ExtensionCardMatcher.SameObservation(first,last,reader) ||
-                    !browser.OwnsWindow(window) || !Automation.Compare(root,AutomationElement.FromHandle(window)) || !DiagnosticBound(document,window)) return false;
-                id=last.Id;return true;
-            },20,"loaded-extension-id-unavailable");
-            Report["extension_card_identity_verified"]=true;Report["extension_loaded"]=true;Report["extension_id"]=id;Report["extension_version"]=extensionVersion;
+            stage="loaded-extension-details";
+            string id=ProveLoadedExtensionDetails(window,kind,extension,name,extensionVersion);
+            Report["extension_loaded"]=true;Report["extension_id"]=id;Report["extension_version"]=extensionVersion;
             loaded=true;
             if(delivery) { ContinueDelivery(window,kind,id);delivered=true; }
             stage="browser-cleanup";
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;
-            if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card")) {
+            if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card" || stage=="loaded-extension-details")) {
                 if(Report.ContainsKey("browser") && (string)Report["browser"]=="edge") { try { ObserveEdgePolicies(); } catch { } }
                 try { ObserveFailure(window); } catch { Report["failure_observation_unavailable"]=true; }
                 ObserveWindowCapture(window);
