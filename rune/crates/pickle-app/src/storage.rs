@@ -11,6 +11,10 @@ use std::{
 #[path = "library_search_benchmark.rs"]
 mod library_search_benchmark;
 
+#[cfg(test)]
+#[path = "storage_legacy_tests.rs"]
+mod storage_legacy_tests;
+
 const MAX_ARCHIVE_BYTES: usize = 32_000_000;
 
 /// Count encoded bytes, including JSON escapes, before touching durable data.
