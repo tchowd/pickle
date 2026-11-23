@@ -34,6 +34,16 @@ Attempt 1 on this same commit failed before the corrected anchor case: Chrome pr
 
 The local `rune/artifacts/development-f044617/Pickle Rune.app` and prior bundles were not replaced or launched during this Windows-only runtime work. Current Mac GUI/grants, actual extension delivery, browser WGC pixels, app-scoped audio, first-invocation behavior, screen readers/displays/performance and Windows 11 standard-user acceptance remain separate gates. Production signing/notarization, update hosting and publication remain deferred under the user's development-only decision. Earlier observations below retain their original source and scope.
 
+## Owned-window WGC pixel diagnostic — implementation awaiting native execution
+
+The next development change adds exclusive `--verify-windows-capture` dispatch before normal helpers, argument normalization, repositories, leases, services or Rune startup. It requires package identity, then starts a same-executable helper in an atomic kill-on-close job. The helper also requires identity before opening its borderless fixed-bitmap window. This preserves the production validator's rejection of the caller's own PID: the source is an independently observed helper PID/HWND/executable, never a caller-supplied target. Readiness follows the actual bitmap paint; close acknowledgment, natural exit zero, empty job and bounded pipe EOF are required before successful evidence is published.
+
+The verifier calls the unchanged Windows WGC/OCR/JPEG pipeline through a private optional scalar observer. Ordinary capture supplies no observer and emits no diagnostics. The explicit probe records only fixed stage, HRESULT, support status, frame arrival, dimensions and driver type; source text, paths, image bytes and user data are excluded. Success additionally requires a valid nonblank JPEG and exact fixed-word recognition. The frontend and installed-package contract require the controlled **768×180** result; a differently scaled result fails closed and is not generalized device acceptance. No monitor capture, permission grant, profile access, model call, hardware fallback or production publisher setup is introduced.
+
+Local evidence: **418 Mac workspace tests passed, three ignored**; Windows platform all-target strict Clippy and formatting/diff checks passed. Five CLI tests and direct Mac executable calls verify malformed/mixed flags exit 2, Windows-only diagnostic/helper modes exit 1 on Mac, and ordinary version inspection still exits 0. These calls created no native window. Portable PowerShell report/collector tests check field types, incomplete/false reports, output bounds and EOF. Actual WGC pixels remain **unverified** until identity-enabled debug/release package tests execute the new probe. Their intended evidence files are `identity-debug-native-smoke-window-capture.json` and `identity-release-native-smoke-window-capture.json`.
+
+The Mac availability check during this work again reported the Mac locked; no app was launched, no grant changed and no repeat unlock request was made. The previous verified checkpoint above remains authoritative while the new diagnostic is under native verification. A controlled fixed window will not by itself prove browser WGC pixels or extension delivery.
+
 ## Mac controlled-source session, 22 November 2026 local time
 
 | Item | Observed evidence |

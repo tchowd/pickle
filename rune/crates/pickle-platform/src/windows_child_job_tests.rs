@@ -293,3 +293,42 @@ fn unsupported_command_configuration_fails_before_spawning() {
     command.env("PICKLE_JOB_UNUSED", "test only");
     assert!(spawn(&command).is_err());
 }
+
+#[test]
+fn natural_exit_retains_job_until_empty_and_reports_zero_without_terminating_child() {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command.arg("--list"); // Lists this owned test executable's static tests; runs none.
+    let mut child = spawn(&command).unwrap();
+    assert!(child.id().unwrap() > 0);
+    drop(child.stdin.take());
+    let mut output = child.stdout.take().unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        let mut total = 0;
+        loop {
+            let count = output.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            total += count;
+            assert!(total < 128 * 1024, "Owned test listing exceeded its bound");
+        }
+    });
+    assert!(
+        child
+            .wait_for_exit(Duration::from_secs(5))
+            .unwrap()
+            .success()
+    );
+    assert!(child.job.is_none());
+    assert!(!child.is_running().unwrap());
+    let until = Instant::now() + Duration::from_secs(1);
+    while !drain.is_finished() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        drain.is_finished(),
+        "Owned stdout did not close after natural exit"
+    );
+    drain.join().unwrap();
+}

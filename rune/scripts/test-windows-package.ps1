@@ -73,6 +73,9 @@ if ($hasIdentity) {
   }
   $ocrResult = Get-Content -Raw $ocrReport | ConvertFrom-Json
   if ($ocrResult.test -cne 'windows-ocr-fixed-fixture' -or $ocrResult.passed -ne $true) { throw 'The installed OCR probe did not return its expected evidence.' }
+  . (Join-Path $PSScriptRoot 'windows-capture-smoke.ps1')
+  & (Join-Path $PSScriptRoot 'test-windows-capture-smoke.ps1')
+  Invoke-PickleWindowCaptureProbe $application (Join-Path $PWD "artifacts/identity-$Configuration-native-smoke-window-capture.json")
 }
 if ($Configuration -eq 'debug') {
   $snapshot = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader.png' } else { 'artifacts/unpackaged-installed-reader.png' })

@@ -93,9 +93,9 @@ impl Child {
     }
 }
 
-// Read-only ownership and bounded teardown for hosted, owned-process fixtures.
-// These helpers never expose the job handle and do not exist in shipping code.
-#[cfg(test)]
+// PID and bounded teardown also support the explicit installed-window capture
+// verifier. Enumeration/membership helpers stay test-only; no raw job handle is
+// exposed, and ordinary transcription behavior is unchanged.
 impl Child {
     pub(crate) fn id(&self) -> io::Result<u32> {
         let pid = unsafe { windows::Win32::System::Threading::GetProcessId(raw(&self.process)) };
@@ -105,6 +105,14 @@ impl Child {
             Ok(pid)
         }
     }
+    pub(crate) fn is_running(&self) -> io::Result<bool> {
+        match unsafe { WaitForSingleObject(raw(&self.process), 0) } {
+            WAIT_TIMEOUT => Ok(true),
+            WAIT_OBJECT_0 => Ok(false),
+            _ => Err(io::Error::other("Could not inspect owned fixture process")),
+        }
+    }
+    #[cfg(test)]
     pub(crate) fn contains_pid(&self, pid: u32) -> io::Result<bool> {
         use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
         let job = self
@@ -119,6 +127,7 @@ impl Child {
             .map_err(|error| failure("Check fixture job membership", error))?;
         Ok(belongs.as_bool())
     }
+    #[cfg(test)]
     pub(crate) fn job_pids(&self) -> io::Result<Vec<u32>> {
         use windows::Win32::System::JobObjects::{
             JobObjectBasicProcessIdList, QueryInformationJobObject,
@@ -174,6 +183,16 @@ impl Child {
         Ok(pids)
     }
     pub(crate) fn stop_and_wait(&mut self, timeout: std::time::Duration) -> io::Result<()> {
+        self.drain_job(timeout, true).map(|_| ())
+    }
+    pub(crate) fn wait_for_exit(&mut self, timeout: std::time::Duration) -> io::Result<ExitStatus> {
+        self.drain_job(timeout, false)
+    }
+    fn drain_job(
+        &mut self,
+        timeout: std::time::Duration,
+        terminate: bool,
+    ) -> io::Result<ExitStatus> {
         use windows::Win32::System::JobObjects::{
             JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
             QueryInformationJobObject,
@@ -184,8 +203,10 @@ impl Child {
             .as_ref()
             .ok_or_else(|| io::Error::other("Owned fixture job is closed"))?;
         self.stdin.take();
-        unsafe { TerminateJobObject(raw(job), 1) }
-            .map_err(|error| failure("Stop owned fixture job", error))?;
+        if terminate {
+            unsafe { TerminateJobObject(raw(job), 1) }
+                .map_err(|error| failure("Stop owned fixture job", error))?;
+        }
         loop {
             let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
             unsafe {
@@ -203,9 +224,10 @@ impl Child {
                 return Err(io::Error::other("Could not confirm owned fixture exit"));
             }
             if root == WAIT_OBJECT_0 && accounting.ActiveProcesses == 0 {
+                let status = self.status()?;
                 self.job.take();
                 self.stdout.take();
-                return Ok(());
+                return Ok(status);
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {

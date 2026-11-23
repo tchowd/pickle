@@ -153,6 +153,14 @@ cargo run --locked -p pickle-app -- --permissions
 
 These report native capability/permission state without requesting access or making inference requests. Capabilities may depend on the configured local transcription engine in a running application.
 
+An identity-enabled Windows installation also offers an explicit fixed-window diagnostic:
+
+```powershell
+.\PickleRune.exe --verify-windows-capture
+```
+
+Run it from the exact registered installation. It creates a temporary same-executable helper process displaying a fixed `PICKLE` bitmap, then exercises the normal Windows Graphics Capture → on-device OCR → JPEG pipeline. It accepts no target/window/URL arguments and reads no personal window, profile, credential or model. Success requires real frame arrival, the expected word, valid nonblank image data and confirmed window/thread/process/job/pipe cleanup. No image or OCR text is saved; stdout contains only bounded scalar evidence. An unpackaged build or unsupported platform fails before creating the helper window. The internal painter flag is not a reader startup mode. Identity-enabled package tests run this diagnostic and retain its report; native CI evidence is required before calling the pixel path verified.
+
 On the development Mac, the shell-launched permission probe and the separately launched GUI reported different values after a grant. For native GUI acceptance, use Settings → Support diagnostics in the actual running app and verify the capture workflow. A permission boolean alone does not prove capture or OCR works. See the [native acceptance record](../docs/RUNE-NATIVE-ACCEPTANCE.md).
 
 The original Swift checks remain available independently from the repository root with `swift run PickleChecks`.

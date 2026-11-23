@@ -101,6 +101,8 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 #[cfg(target_os = "windows")]
+mod windows_capture_probe;
+#[cfg(target_os = "windows")]
 mod windows_context;
 #[cfg(target_os = "windows")]
 mod windows_impl;
@@ -124,6 +126,36 @@ pub fn verify_ocr_runtime() -> Result<(), PlatformError> {
     {
         Err(PlatformError(
             "Windows OCR verification is available only on Windows.".into(),
+        ))
+    }
+}
+
+/// Capture only the fixed diagnostic window created by an owned same-executable
+/// helper. No caller-supplied window, application, URL or source is accepted.
+pub fn verify_window_capture_runtime() -> Result<serde_json::Value, PlatformError> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_capture_probe::verify_window_capture_runtime()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(PlatformError(
+            "Windows owned-window capture verification is available only on Windows.".into(),
+        ))
+    }
+}
+
+/// Private fixed painter protocol, dispatched before the reader app starts.
+/// The Windows implementation requires package identity before making a window.
+pub fn run_window_capture_fixture() -> Result<(), PlatformError> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_capture_probe::run_window_capture_fixture()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(PlatformError(
+            "The owned-window capture fixture is available only on Windows.".into(),
         ))
     }
 }

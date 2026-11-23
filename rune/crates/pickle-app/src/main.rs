@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 mod browser_setup;
+mod capture_verify;
 mod context;
 mod controller;
 mod diagnostics;
@@ -35,6 +36,9 @@ use std::sync::Arc;
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(exit_code) = capture_verify::handle(&arguments) {
+        std::process::exit(exit_code);
+    }
     if let Some(exit_code) = startup_presenter::handle_helper(&arguments) {
         std::process::exit(exit_code);
     }

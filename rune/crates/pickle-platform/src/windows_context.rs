@@ -1,7 +1,10 @@
 //! Single-window Windows Graphics Capture, followed by on-device Windows OCR.
 //! Never substitutes a monitor capture or microphone when a source is unavailable.
 use super::*;
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use windows::{
     Foundation::TypedEventHandler,
     Graphics::{
@@ -26,6 +29,59 @@ use windows::{
 fn unavailable() -> PlatformError {
     PlatformError("This source window could not be captured or read locally. Continue with the passage or use the browser extension.".into())
 }
+// Optional content-free observer for the explicit owned-window verifier only.
+// Normal capture passes None and never emits diagnostic output.
+pub(super) struct CaptureDiagnostics(Mutex<CaptureState>);
+struct CaptureState {
+    stage: &'static str,
+    hresult: i32,
+    supported: Option<bool>,
+    frame_arrived: bool,
+    width: u32,
+    height: u32,
+    failed: bool,
+}
+impl CaptureDiagnostics {
+    pub(super) fn new() -> Self {
+        Self(Mutex::new(CaptureState {
+            stage: "start",
+            hresult: 0,
+            supported: None,
+            frame_arrived: false,
+            width: 0,
+            height: 0,
+            failed: false,
+        }))
+    }
+    pub(super) fn snapshot(&self) -> serde_json::Value {
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        serde_json::json!({"stage":state.stage,"hresult":state.hresult,"supported":state.supported,"frame_arrived":state.frame_arrived,"width":state.width,"height":state.height,"driver_type":D3D_DRIVER_TYPE_HARDWARE.0})
+    }
+}
+type Observer = Option<Arc<CaptureDiagnostics>>;
+fn observed(observer: &Observer, update: impl FnOnce(&mut CaptureState)) {
+    if let Some(observer) = observer {
+        let mut state = observer
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.failed {
+            update(&mut state);
+        }
+    }
+}
+fn stage(observer: &Observer, value: &'static str) {
+    observed(observer, |state| state.stage = value);
+}
+fn failed(observer: &Observer, code: i32) {
+    observed(observer, |state| {
+        state.hresult = code;
+        state.failed = true;
+    });
+}
 /// Windows.Media.Ocr requires package identity. A traditional unpackaged NSIS
 /// installation does not gain identity merely from an application manifest.
 pub(super) fn has_package_identity() -> bool {
@@ -40,6 +96,13 @@ pub(super) fn capture_page(source: &CapturedSelection) -> Result<CapturedPage, P
 pub(super) fn capture_page_with_cancel(
     source: &CapturedSelection,
     cancel: tokio_util::sync::CancellationToken,
+) -> Result<CapturedPage, PlatformError> {
+    capture_page_observed(source, cancel, None)
+}
+pub(super) fn capture_page_observed(
+    source: &CapturedSelection,
+    cancel: tokio_util::sync::CancellationToken,
+    observer: Observer,
 ) -> Result<CapturedPage, PlatformError> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -61,6 +124,7 @@ pub(super) fn capture_page_with_cancel(
     let source = source.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let worker_cancel = cancel.clone();
+    let worker_observer = observer.clone();
     let worker = std::thread::Builder::new()
         .name("pickle-window-capture".into())
         .spawn(move || {
@@ -71,18 +135,24 @@ pub(super) fn capture_page_with_cancel(
                 }
             }
             let _active = CaptureGuard;
-            let _ = sender.send(capture(&source, &worker_cancel));
+            let _ = sender.send(capture(&source, &worker_cancel, &worker_observer));
         });
     if worker.is_err() {
+        stage(&observer, "worker-start");
+        failed(&observer, 0);
         CAPTURE_ACTIVE.store(false, Ordering::Release);
         return Err(unavailable());
     }
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if cancel.is_cancelled() {
+            stage(&observer, "caller-cancelled");
+            failed(&observer, 0);
             return Err(PlatformError("Page capture was cancelled.".into()));
         }
         if Instant::now() >= deadline {
+            stage(&observer, "caller-timeout");
+            failed(&observer, 0);
             cancel.cancel();
             return Err(PlatformError(
                 "Page capture timed out. Continue with the selected passage.".into(),
@@ -99,8 +169,13 @@ pub(super) fn capture_page_with_cancel(
 fn capture(
     source: &CapturedSelection,
     cancel: &tokio_util::sync::CancellationToken,
+    observer: &Observer,
 ) -> Result<CapturedPage, PlatformError> {
-    unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(|_| unavailable())?;
+    stage(observer, "runtime-init");
+    unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(|error| {
+        failed(observer, error.code().0);
+        unavailable()
+    })?;
     struct RuntimeGuard;
     impl Drop for RuntimeGuard {
         fn drop(&mut self) {
@@ -108,7 +183,10 @@ fn capture(
         }
     }
     let _runtime = RuntimeGuard;
-    let value = capture_pixels(source, cancel).map_err(|_| unavailable())?;
+    let value = capture_pixels(source, cancel, observer).map_err(|error| {
+        failed(observer, error.code().0);
+        unavailable()
+    })?;
     if cancel.is_cancelled() {
         return Err(PlatformError("Page capture was cancelled.".into()));
     }
@@ -125,7 +203,8 @@ fn capture(
         ((value.1 as f64 * factor) as u32).max(1),
         image::imageops::FilterType::Triangle,
     );
-    let text=recognize(&ocr_image,cancel).map_err(|_|PlatformError("Windows on-device OCR is unavailable. Install a supported OCR language or use the selected passage.".into()))?;
+    stage(observer, "ocr");
+    let text=recognize(&ocr_image,cancel).map_err(|error|{failed(observer,error.code().0);PlatformError("Windows on-device OCR is unavailable. Install a supported OCR language or use the selected passage.".into())})?;
     if cancel.is_cancelled() {
         return Err(PlatformError("Page capture was cancelled.".into()));
     }
@@ -144,6 +223,7 @@ fn capture(
         image::imageops::FilterType::Triangle,
     );
     let rgb = image::DynamicImage::ImageRgba8(retained).to_rgb8();
+    stage(observer, "jpeg");
     for quality in [70, 50, 30] {
         let mut jpeg = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality)
@@ -155,6 +235,7 @@ fn capture(
             )
             .map_err(|_| unavailable())?;
         if jpeg.len() <= 750_000 {
+            stage(observer, "complete");
             return Ok(CapturedPage {
                 jpeg,
                 truncated: bounded.len() < text.len(),
@@ -178,7 +259,9 @@ fn validate_target(hwnd: HWND, pid: u32) -> windows::core::Result<()> {
 fn capture_pixels(
     source: &CapturedSelection,
     cancel: &tokio_util::sync::CancellationToken,
+    observer: &Observer,
 ) -> windows::core::Result<(u32, u32, Vec<u8>)> {
+    stage(observer, "source");
     super::windows_impl::validate_source_window(source)
         .map_err(|_| windows::core::Error::from_thread())?;
     let hwnd = HWND(
@@ -187,9 +270,13 @@ fn capture_pixels(
             .ok_or_else(windows::core::Error::from_thread)? as *mut _,
     );
     validate_target(hwnd, source.source_pid)?;
-    if !GraphicsCaptureSession::IsSupported()? {
+    stage(observer, "support");
+    let supported = GraphicsCaptureSession::IsSupported()?;
+    observed(observer, |state| state.supported = Some(supported));
+    if !supported {
         return Err(windows::core::Error::from_thread());
     }
+    stage(observer, "item");
     let interop: IGraphicsCaptureItemInterop =
         factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
     let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(hwnd) }?;
@@ -199,6 +286,7 @@ fn capture_pixels(
     }
     let mut device: Option<ID3D11Device> = None;
     let mut context: Option<ID3D11DeviceContext> = None;
+    stage(observer, "d3d-device");
     unsafe {
         D3D11CreateDevice(
             None,
@@ -214,15 +302,19 @@ fn capture_pixels(
     }?;
     let device = device.ok_or_else(windows::core::Error::from_thread)?;
     let context = context.ok_or_else(windows::core::Error::from_thread)?;
+    stage(observer, "dxgi-device");
     let dxgi: IDXGIDevice = device.cast()?;
+    stage(observer, "runtime-device");
     let runtime_device: IDirect3DDevice =
         unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi) }?.cast()?;
+    stage(observer, "frame-pool");
     let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         &runtime_device,
         DirectXPixelFormat::B8G8R8A8UIntNormalized,
         1,
         size,
     )?;
+    stage(observer, "session");
     let session = pool.CreateCaptureSession(&item)?;
     struct CaptureGuard(Direct3D11CaptureFramePool, GraphicsCaptureSession);
     impl Drop for CaptureGuard {
@@ -244,14 +336,19 @@ fn capture_pixels(
         }
         Ok(())
     }))?;
+    stage(observer, "start-capture");
     session.StartCapture()?;
+    stage(observer, "frame-wait");
     let deadline = Instant::now() + Duration::from_secs(2);
     let frame = loop {
         if cancel.is_cancelled() || Instant::now() >= deadline {
             return Err(windows::core::Error::from_thread());
         }
         match receiver.recv_timeout(Duration::from_millis(50)) {
-            Ok(frame) => break frame,
+            Ok(frame) => {
+                observed(observer, |state| state.frame_arrived = true);
+                break frame;
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(_) => return Err(windows::core::Error::from_thread()),
         }
@@ -260,10 +357,16 @@ fn capture_pixels(
     validate_target(hwnd, source.source_pid)?;
     super::windows_impl::validate_source_window(source)
         .map_err(|_| windows::core::Error::from_thread())?;
+    stage(observer, "surface");
     let access: IDirect3DDxgiInterfaceAccess = frame.Surface()?.cast()?;
+    stage(observer, "texture");
     let texture: ID3D11Texture2D = unsafe { access.GetInterface() }?;
     let mut descriptor = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&mut descriptor) };
+    observed(observer, |state| {
+        state.width = descriptor.Width;
+        state.height = descriptor.Height;
+    });
     if descriptor.Width == 0
         || descriptor.Height == 0
         || descriptor.Width as u64 * descriptor.Height as u64 > 16_000_000
@@ -275,10 +378,12 @@ fn capture_pixels(
     descriptor.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
     descriptor.MiscFlags = 0;
     let mut staging = None;
+    stage(observer, "staging");
     unsafe { device.CreateTexture2D(&descriptor, None, Some(&mut staging)) }?;
     let staging = staging.ok_or_else(windows::core::Error::from_thread)?;
     unsafe { context.CopyResource(&staging, &texture) };
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    stage(observer, "map");
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if cancel.is_cancelled() || Instant::now() >= deadline {
@@ -309,6 +414,7 @@ fn capture_pixels(
         }
     }
     let _mapped = MapGuard(&context, &staging);
+    stage(observer, "pixels");
     if mapped.pData.is_null() || mapped.RowPitch < descriptor.Width * 4 {
         return Err(windows::core::Error::from_thread());
     }
@@ -387,4 +493,33 @@ pub(super) fn recognize_software_bitmap(
     let result = operation.GetResults()?;
     let text = result.Text()?.to_string_lossy();
     Ok(text)
+}
+
+#[cfg(test)]
+mod observer_tests {
+    use super::*;
+    #[test]
+    fn first_native_failure_stays_latched_after_late_worker_progress() {
+        let sink = Arc::new(CaptureDiagnostics::new());
+        let observer = Some(sink.clone());
+        stage(&observer, "d3d-device");
+        failed(&observer, 0x887a0004u32 as i32);
+        stage(&observer, "complete");
+        observed(&observer, |state| {
+            state.frame_arrived = true;
+            state.width = 100;
+        });
+        failed(&observer, 123);
+        let snapshot = sink.snapshot();
+        assert_eq!(snapshot["stage"], "d3d-device");
+        assert_eq!(snapshot["hresult"], 0x887a0004u32 as i32);
+        assert_eq!(snapshot["frame_arrived"], false);
+        assert_eq!(snapshot["width"], 0);
+    }
+    #[test]
+    fn ordinary_capture_has_no_observer_side_effects() {
+        observed(&None, |_| {
+            panic!("No diagnostic callback is admitted for normal capture")
+        });
+    }
 }

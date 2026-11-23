@@ -317,7 +317,7 @@ fn compare_owned_fixture(
     }
 }
 
-fn fixture_image() -> Result<image::RgbaImage, PlatformError> {
+pub(super) fn fixture_image() -> Result<image::RgbaImage, PlatformError> {
     // Keep the owned canvas at 768x180; only the controlled GDI font is 48px.
     fixture_image_with_font(OCR_FIXTURE_FONT_HEIGHT)
 }
