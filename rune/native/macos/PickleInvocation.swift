@@ -9,9 +9,48 @@ private struct InvocationSettings: Decodable {
     shortcut: "ctrl+alt+p", modifier_gesture: true, automatic_menu: false)
 }
 private enum InvocationError: Error { case message(String) }
+// Private adapters let the rollback fixture exercise real configuration control
+// flow without installing observers, registering keys, or creating application UI.
+private struct InvocationOperations {
+  var globalMonitor: (NSEvent.EventTypeMask, @escaping (NSEvent) -> Void) -> Any?
+  var localMonitor: (NSEvent.EventTypeMask, @escaping (NSEvent) -> Void) -> Any?
+  var removeMonitor: (Any) -> Void
+  var registerHotkey: (UInt32, UInt32, UInt32, Bool) throws -> EventHotKeyRef
+  var unregisterHotkey: (EventHotKeyRef) -> Void
+
+  static let native = InvocationOperations(
+    globalMonitor: { mask, handler in
+      NSEvent.addGlobalMonitorForEvents(matching: mask, handler: handler)
+    },
+    localMonitor: { mask, handler in
+      NSEvent.addLocalMonitorForEvents(matching: mask) { event in
+        handler(event)
+        return event
+      }
+    },
+    removeMonitor: { NSEvent.removeMonitor($0) },
+    registerHotkey: { key, modifiers, identifier, hasHandler in
+      guard hasHandler else {
+        throw InvocationError.message(
+          "The macOS shortcut service is unavailable. Try the Control + Option gesture.")
+      }
+      var next: EventHotKeyRef?
+      let result = RegisterEventHotKey(
+        key, modifiers, EventHotKeyID(signature: 0x5049_434B, id: identifier),
+        GetApplicationEventTarget(), 0, &next)
+      guard result == noErr, let next else {
+        if let next { UnregisterEventHotKey(next) }
+        throw InvocationError.message(
+          "This shortcut is already in use or unavailable. Choose a different combination.")
+      }
+      return next
+    },
+    unregisterHotkey: { UnregisterEventHotKey($0) })
+}
 private final class NativeShell: NSObject {
   let callback: @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
   let context: UnsafeMutableRawPointer?
+  let operations: InvocationOperations
   var status: NSStatusItem?
   var monitors: [Any] = []
   var hotkey: EventHotKeyRef?
@@ -25,11 +64,15 @@ private final class NativeShell: NSObject {
 
   init(
     _ callback: @escaping @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void,
-    _ context: UnsafeMutableRawPointer?
+    _ context: UnsafeMutableRawPointer?,
+    operations: InvocationOperations = .native,
+    installSystemUI: Bool = true
   ) {
     self.callback = callback
     self.context = context
+    self.operations = operations
     super.init()
+    guard installSystemUI else { return }
     status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     status?.button?.image = NSImage(systemSymbolName: "leaf", accessibilityDescription: "Pickle")
     let menu = NSMenu()
@@ -68,7 +111,8 @@ private final class NativeShell: NSObject {
         }
         return noErr
       }, 1, &event, Unmanaged.passUnretained(self).toOpaque(), &eventHandler)
-    restartMonitors()
+    // Rust configures immediately after installation. Keep this menu-only shell
+    // usable if the initial observer registration fails, so settings can recover.
   }
   @objc func pick(_ sender: NSMenuItem) { callback(context, Int32(sender.tag)) }
   func cancelAutomatic() {
@@ -78,31 +122,29 @@ private final class NativeShell: NSObject {
   }
   func removeMonitors() {
     cancelAutomatic()
-    for monitor in monitors { NSEvent.removeMonitor(monitor) }
+    for monitor in monitors { operations.removeMonitor(monitor) }
     monitors = []
   }
-  func restartMonitors() {
-    removeMonitors()
-    guard !paused else { return }
+  func stageMonitors(_ value: InvocationSettings) throws -> [Any] {
     var mask: NSEvent.EventTypeMask = [.keyDown]
-    if settings.modifier_gesture {
+    if value.modifier_gesture {
       mask.formUnion([.flagsChanged, .leftMouseDown, .rightMouseDown])
     }
-    if settings.automatic_menu { mask.formUnion([.leftMouseDown, .leftMouseUp, .rightMouseDown]) }
-    if let monitor = NSEvent.addGlobalMonitorForEvents(
-      matching: mask, handler: { [weak self] in self?.event($0, external: true) })
-    {
-      monitors.append(monitor)
+    if value.automatic_menu { mask.formUnion([.leftMouseDown, .leftMouseUp, .rightMouseDown]) }
+    guard let global = operations.globalMonitor(
+      mask, { [weak self] in self?.event($0, external: true) })
+    else {
+      throw InvocationError.message(
+        "Could not register the macOS global invocation observer. Review selection access in Settings, then try again.")
     }
-    if let monitor = NSEvent.addLocalMonitorForEvents(
-      matching: mask,
-      handler: { [weak self] event in
-        self?.event(event, external: false)
-        return event
-      })
-    {
-      monitors.append(monitor)
+    guard let local = operations.localMonitor(
+      mask, { [weak self] in self?.event($0, external: false) })
+    else {
+      operations.removeMonitor(global)
+      throw InvocationError.message(
+        "Could not register the macOS local invocation observer. Try again or restart Pickle.")
     }
+    return [global, local]
   }
   func event(_ event: NSEvent, external: Bool) {
     guard !paused else { return }
@@ -143,35 +185,40 @@ private final class NativeShell: NSObject {
     // Validate a dormant conventional binding too, so pausing cannot save a key
     // that is only discovered to be unsupported when the user resumes.
     let binding = value.modifier_gesture ? nil : try shortcut(value.shortcut)
+    // Stage both required observers before touching the active binding. These
+    // main-thread APIs do not pump the event loop, so staged observers cannot
+    // deliver between staging and the commit below.
+    let nextMonitors = paused ? [] : try stageMonitors(value)
+    var committed = false
+    defer {
+      if !committed {
+        for monitor in nextMonitors { operations.removeMonitor(monitor) }
+        if let next, next != hotkey { operations.unregisterHotkey(next) }
+      }
+    }
     if !paused && !value.modifier_gesture {
       if value.shortcut == settings.shortcut, let hotkey {
         next = hotkey
         nextID = activeHotkeyID
       } else {
-        guard let (key, modifiers) = binding else { return }
-        guard eventHandler != nil else {
-          throw InvocationError.message(
-            "The macOS shortcut service is unavailable. Try the Control + Option gesture.")
+        guard let (key, modifiers) = binding else {
+          throw InvocationError.message("Choose a valid shortcut.")
         }
         guard hotkeyGeneration < UInt32.max else {
           throw InvocationError.message("Restart Pickle before changing its shortcut again.")
         }
         hotkeyGeneration += 1
         nextID = hotkeyGeneration
-        let result = RegisterEventHotKey(
-          key, modifiers, EventHotKeyID(signature: 0x5049_434B, id: nextID), GetApplicationEventTarget(),
-          0, &next)
-        guard result == noErr else {
-          throw InvocationError.message(
-            "This shortcut is already in use or unavailable. Choose a different combination.")
-        }
+        next = try operations.registerHotkey(key, modifiers, nextID, eventHandler != nil)
       }
     }
-    if let hotkey, hotkey != next { UnregisterEventHotKey(hotkey) }
+    removeMonitors()
+    if let hotkey, hotkey != next { operations.unregisterHotkey(hotkey) }
     hotkey = next
     activeHotkeyID = nextID
     settings = value
-    restartMonitors()
+    monitors = nextMonitors
+    committed = true
   }
   func setPaused(_ value: Bool) throws {
     guard value != paused else { return }
@@ -180,7 +227,7 @@ private final class NativeShell: NSObject {
       activeHotkeyID = 0
       removeMonitors()
       if let hotkey {
-        UnregisterEventHotKey(hotkey)
+        operations.unregisterHotkey(hotkey)
         self.hotkey = nil
       }
     } else {
@@ -199,7 +246,7 @@ private final class NativeShell: NSObject {
     activeHotkeyID = 0
     removeMonitors()
     if let hotkey {
-      UnregisterEventHotKey(hotkey)
+      operations.unregisterHotkey(hotkey)
       self.hotkey = nil
     }
     if let eventHandler {
@@ -282,3 +329,114 @@ private func shortcut(_ source: String) throws -> (UInt32, UInt32) {
   let shell = Unmanaged<NativeShell>.fromOpaque(handle).takeRetainedValue()
   shell.stop()
 }
+
+#if PICKLE_INVOCATION_FIXTURE
+private final class InvocationFixtureOperations {
+  var failGlobal = false
+  var failLocal = false
+  var failHotkey = false
+  var serial = 0
+  var removed: [Int] = []
+  var unregistered: [EventHotKeyRef] = []
+  var masks: [NSEvent.EventTypeMask] = []
+
+  func monitor(_ mask: NSEvent.EventTypeMask, fail: Bool) -> Any? {
+    masks.append(mask)
+    guard !fail else { return nil }
+    serial += 1
+    return serial
+  }
+  var operations: InvocationOperations {
+    InvocationOperations(
+      globalMonitor: { mask, _ in self.monitor(mask, fail: self.failGlobal) },
+      localMonitor: { mask, _ in self.monitor(mask, fail: self.failLocal) },
+      removeMonitor: { self.removed.append($0 as! Int) },
+      registerHotkey: { _, _, _, _ in
+        if self.failHotkey { throw InvocationError.message("Fixed registration failure.") }
+        self.serial += 1
+        return EventHotKeyRef(bitPattern: self.serial)!
+      },
+      unregisterHotkey: { self.unregistered.append($0) })
+  }
+}
+
+func runInvocationTransactionFixture() throws {
+  func require(_ condition: Bool, _ message: String) throws {
+    if !condition { throw InvocationError.message(message) }
+  }
+  func expectFailure(_ action: () throws -> Void) throws {
+    do { try action() } catch InvocationError.message { return }
+    throw InvocationError.message("Expected a configuration failure.")
+  }
+  let operations = InvocationFixtureOperations()
+  let shell = NativeShell({ _, _ in }, nil, operations: operations.operations, installSystemUI: false)
+  let gesture = InvocationSettings.defaults
+  let conventional = InvocationSettings(
+    shortcut: "ctrl+alt+p", modifier_gesture: false, automatic_menu: true)
+
+  // Initial failure retains a usable menu-only shell; retry can configure it.
+  operations.failGlobal = true
+  try expectFailure { try shell.configure(gesture) }
+  try require(shell.monitors.isEmpty && shell.hotkey == nil, "Initial failure installed resources.")
+  operations.failGlobal = false
+  try shell.configure(gesture)
+  let original = shell.monitors.map { $0 as! Int }
+  try require(original.count == 2, "Required observers were not both installed.")
+  try require(operations.masks.last!.contains(.flagsChanged), "Gesture observer mask is incomplete.")
+
+  // A failed global or local observer must preserve every old token and setting.
+  operations.failGlobal = true
+  try expectFailure { try shell.configure(conventional) }
+  try require(shell.monitors.map { $0 as! Int } == original, "Global failure replaced observers.")
+  try require(operations.removed.isEmpty, "Global failure removed active observers.")
+  operations.failGlobal = false
+  operations.failLocal = true
+  try expectFailure { try shell.configure(conventional) }
+  try require(shell.monitors.map { $0 as! Int } == original, "Local failure replaced observers.")
+  try require(operations.removed.count == 1, "Local failure leaked its staged global observer.")
+  try require(!operations.removed.contains(where: original.contains), "Local failure removed active observers.")
+  try require(shell.settings.modifier_gesture && shell.hotkey == nil, "Failure committed configuration.")
+
+  // Failed Carbon registration removes only newly staged observers.
+  operations.failLocal = false
+  operations.failHotkey = true
+  let beforeKeyFailure = operations.removed.count
+  try expectFailure { try shell.configure(conventional) }
+  try require(operations.removed.count == beforeKeyFailure + 2, "Hotkey failure leaked observers.")
+  try require(shell.monitors.map { $0 as! Int } == original, "Hotkey failure replaced observers.")
+  try require(shell.settings.modifier_gesture, "Hotkey failure changed the active mode.")
+
+  operations.failHotkey = false
+  try shell.configure(conventional)
+  let active = shell.monitors.map { $0 as! Int }
+  let oldHotkey = shell.hotkey!
+  try require(original.allSatisfy(operations.removed.contains), "Commit leaked replaced observers.")
+  try require(!shell.settings.modifier_gesture && shell.settings.automatic_menu, "Commit lost settings.")
+  try require(operations.masks.last!.contains(.leftMouseUp), "Automatic observer mask is incomplete.")
+
+  // Failure while changing an active conventional key retains that key and ID.
+  let oldID = shell.activeHotkeyID
+  operations.failHotkey = true
+  try expectFailure {
+    try shell.configure(InvocationSettings(
+      shortcut: "ctrl+alt+q", modifier_gesture: false, automatic_menu: false))
+  }
+  try require(shell.hotkey == oldHotkey && shell.activeHotkeyID == oldID, "Failure replaced the active hotkey.")
+  try require(shell.monitors.map { $0 as! Int } == active, "Failure replaced active conventional observers.")
+  try require(operations.unregistered.isEmpty, "Failure unregistered the active hotkey.")
+
+  // Pause unregisters resources; failed resume remains paused without leaks.
+  try shell.setPaused(true)
+  try require(shell.monitors.isEmpty && shell.hotkey == nil, "Pause retained invocation resources.")
+  try require(operations.unregistered == [oldHotkey], "Pause did not unregister exactly its hotkey.")
+  operations.failHotkey = false
+  operations.failLocal = true
+  try expectFailure { try shell.setPaused(false) }
+  try require(shell.paused && shell.monitors.isEmpty && shell.hotkey == nil, "Failed resume became active.")
+  operations.failLocal = false
+  try shell.setPaused(false)
+  try require(!shell.paused && shell.monitors.count == 2 && shell.hotkey != nil, "Resume did not recover.")
+  shell.stop()
+  try require(shell.monitors.isEmpty && shell.hotkey == nil, "Stop leaked invocation resources.")
+}
+#endif

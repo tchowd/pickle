@@ -54,8 +54,19 @@ if ($hasIdentity -and !$report.window_capture_ocr) { throw 'The signed external 
 Copy-Item -LiteralPath $capabilities -Destination (Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-capabilities.json' } else { 'artifacts/unpackaged-capabilities.json' }))
 if ($hasIdentity) {
   $ocrReport = Join-Path $PWD 'artifacts/identity-ocr-result.json'
-  $ocr = Start-Process -FilePath $application -ArgumentList @('--verify-windows-ocr') -RedirectStandardOutput $ocrReport -Wait -PassThru
-  if ($ocr.ExitCode -ne 0) { throw 'Installed Windows OCR could not recognize the fixed in-memory fixture.' }
+  $ocrErrors = Join-Path $PWD 'artifacts/identity-native-ocr-stderr.log'
+  $ocr = Start-Process -FilePath $application -ArgumentList @('--verify-windows-ocr') -RedirectStandardOutput $ocrReport -RedirectStandardError $ocrErrors -Wait -PassThru
+  if ($ocr.ExitCode -ne 0) {
+    # Only this fixed owned-image probe writes this log; it never contains source/window OCR.
+    $reader = [IO.File]::OpenText($ocrErrors)
+    try {
+      $buffer = New-Object char[] 16384
+      $read = $reader.Read($buffer,0,$buffer.Length)
+      $controlledDiagnostic = if ($read -gt 0) { -join $buffer[0..($read-1)] } else { '' }
+    } finally { $reader.Dispose() }
+    Write-Host $controlledDiagnostic
+    throw 'Installed Windows OCR could not recognize the fixed in-memory fixture. See the controlled OCR stderr evidence.'
+  }
   $ocrResult = Get-Content -Raw $ocrReport | ConvertFrom-Json
   if ($ocrResult.test -cne 'windows-ocr-fixed-fixture' -or $ocrResult.passed -ne $true) { throw 'The installed OCR probe did not return its expected evidence.' }
 }

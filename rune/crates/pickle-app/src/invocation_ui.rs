@@ -134,6 +134,9 @@ impl AppState {
         }
         let result = config.validate().and_then(|()| match &self.native_shell {
             Some(shell) => shell.configure_invocation(config),
+            None if self.native_enabled => Err(pickle_platform::PlatformError(
+                "The native invocation service is unavailable. Restart Pickle before changing its invocation settings.".into(),
+            )),
             None => Ok(()),
         });
         if let Err(error) = result {
@@ -174,6 +177,36 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_without_native_shell_rejects_invocation_changes() {
+        let mut state = AppState {
+            native_enabled: true,
+            ..AppState::default()
+        };
+        let original = state.settings.invocation_config();
+        state.set_modifier_gesture(!original.modifier_gesture);
+        assert_eq!(state.settings.invocation_config(), original);
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("native invocation service")
+        );
+        state.set_automatic_menu(!original.automatic_menu);
+        assert_eq!(state.settings.invocation_config(), original);
+        assert!(!state.settings_pending);
+    }
+    #[test]
+    fn isolated_fixtures_can_validate_invocation_without_native_shell() {
+        let mut state = AppState::default();
+        assert!(state.apply_invocation(InvocationConfig::default()));
+        assert!(state.notice.is_none());
+        assert!(!state.apply_invocation(InvocationConfig {
+            shortcut: "invalid".into(),
+            ..InvocationConfig::default()
+        }));
+    }
     fn capture(text: &str) -> CapturedSelection {
         CapturedSelection {
             text: text.into(),

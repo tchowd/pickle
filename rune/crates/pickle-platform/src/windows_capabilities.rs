@@ -10,9 +10,59 @@ pub(crate) fn ocr_fixture_matches(text: &str) -> bool {
         .any(|word| word.eq_ignore_ascii_case("PICKLE"))
 }
 
+/// Diagnostics for the owned fixed-word runtime probe only. Never pass captured user text here.
+pub(crate) fn ocr_fixture_diagnostic(
+    recognized: &str,
+    language: &str,
+    width: u32,
+    height: u32,
+    dark_pixels: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": 1,
+        "test": "windows-ocr-fixed-fixture-diagnostics",
+        "expected": "PICKLE",
+        "matched": ocr_fixture_matches(recognized),
+        "recognized_text": recognized.chars().take(128).collect::<String>(),
+        "recognized_truncated": recognized.chars().count() > 128,
+        "recognizer_language": language.chars().take(64).collect::<String>(),
+        "width": width,
+        "height": height,
+        "dark_pixels": dark_pixels,
+        "font": "Segoe UI",
+        "font_height": 96,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fixed_fixture_diagnostic_is_bounded_escaped_and_never_changes_the_match() {
+        let diagnostic = ocr_fixture_diagnostic("P1CKLE\n\"\\", "en-US", 768, 180, 240);
+        assert_eq!(diagnostic["matched"], false);
+        assert_eq!(diagnostic["recognized_text"], "P1CKLE\n\"\\");
+        let serialized = diagnostic.to_string();
+        assert!(!serialized.contains('\n'));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&serialized).unwrap(),
+            diagnostic
+        );
+        let diagnostic = ocr_fixture_diagnostic(&"語".repeat(500), &"e".repeat(100), 768, 180, 240);
+        assert_eq!(
+            diagnostic["recognized_text"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            128
+        );
+        assert_eq!(
+            diagnostic["recognizer_language"].as_str().unwrap().len(),
+            64
+        );
+        assert_eq!(diagnostic["recognized_truncated"], true);
+    }
     #[test]
     fn ocr_probe_requires_the_exact_known_fixture_word() {
         assert!(ocr_fixture_matches("PICKLE\n"));

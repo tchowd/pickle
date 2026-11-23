@@ -82,6 +82,27 @@ fn verify_on_mta(cancel: &CancellationToken) -> Result<(), PlatformError> {
     .map_err(|_| {
         error("Windows OCR could not recognize the controlled local fixture within its deadline.")
     })?;
+    // This text comes only from fixture_image(), never the source/window OCR capture path.
+    // Emit escaped, bounded evidence before the strict comparison so a failed CI probe is diagnosable.
+    let language = engine
+        .RecognizerLanguage()
+        .and_then(|language| language.LanguageTag())
+        .map(|tag| tag.to_string_lossy())
+        .unwrap_or_else(|_| "unavailable".into());
+    let dark_pixels = fixture
+        .pixels()
+        .filter(|pixel| pixel[0] < 32 && pixel[1] < 32 && pixel[2] < 32)
+        .count();
+    eprintln!(
+        "{}",
+        super::windows_capabilities::ocr_fixture_diagnostic(
+            &text,
+            &language,
+            fixture.width(),
+            fixture.height(),
+            dark_pixels
+        )
+    );
     if !super::windows_capabilities::ocr_fixture_matches(&text) {
         return Err(error(
             "Windows OCR did not recognize the expected controlled fixture word.",

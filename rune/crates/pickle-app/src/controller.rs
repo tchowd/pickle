@@ -797,7 +797,9 @@ impl AppState {
             self.notice = Some("Local storage is unavailable.".into());
             return;
         };
-        if commit && !self.apply_invocation(settings.invocation_config()) {
+        let invocation_changed =
+            commit && settings.invocation_config() != self.settings.invocation_config();
+        if invocation_changed && !self.apply_invocation(settings.invocation_config()) {
             return;
         }
         if commit {
@@ -841,7 +843,7 @@ impl AppState {
                         s.notice = Some("Settings saved on this device.".into());
                     }
                     Err(error) => {
-                        if commit && !s.apply_invocation(previous.invocation_config()) {
+                        if invocation_changed && !s.apply_invocation(previous.invocation_config()) {
                             let rollback = s.notice.take().unwrap_or_default();
                             s.notice = Some(format!(
                                 "{error} The previous shortcut could not be restored: {rollback}"
@@ -1246,6 +1248,70 @@ async fn make_pipeline(settings: &Settings, demo: bool) -> std::result::Result<P
         );
     }
     Ok(Pipeline::new(provider, evaluator, settings.strict_offline))
+}
+
+#[cfg(test)]
+mod invocation_settings_tests {
+    use super::*;
+
+    fn desktop_without_shell(directory: &std::path::Path) -> (AppState, Arc<Services>) {
+        let repository = Arc::new(Repository::new(directory.to_owned()).unwrap());
+        let services = Arc::new(Services::new(Some(repository), &Settings::default()));
+        // Construct only a handle queue; never start Rune's native event loop.
+        let app = rune::App::new(rune::AppSpec::new(
+            "Settings fixture",
+            (560.0, 540.0),
+            AppState::default,
+            |_, _| rune::el(),
+        ));
+        (
+            AppState {
+                native_enabled: true,
+                services: Some(services.clone()),
+                handle: Some(app.handle()),
+                ..AppState::default()
+            },
+            services,
+        )
+    }
+
+    #[test]
+    fn unrelated_connection_save_can_queue_when_native_shell_is_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut state, services) = desktop_without_shell(directory.path());
+        // Keep this admission regression free of native transcriber cache writes:
+        // invalidate the queued revision before allowing the worker to proceed.
+        let writer = services.settings_writer.lock().unwrap();
+        state.local_model = TextEdit::new("downloaded-fixture-model");
+        state.save_settings();
+        assert!(state.settings_pending);
+        assert!(services.policy_pending.load(Ordering::Acquire));
+        assert_eq!(services.settings_revision.load(Ordering::Acquire), 1);
+        assert!(state.notice.is_none());
+        services.settings_revision.fetch_add(1, Ordering::AcqRel);
+        drop(writer);
+    }
+
+    #[test]
+    fn changed_shortcut_save_rejects_before_storage_when_native_shell_is_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut state, services) = desktop_without_shell(directory.path());
+        let original = state.settings.invocation_config();
+        state.shortcut = TextEdit::new("ctrl+alt+q");
+        state.save_settings();
+        assert!(!state.settings_pending);
+        assert!(!services.policy_pending.load(Ordering::Acquire));
+        assert_eq!(services.settings_revision.load(Ordering::Acquire), 0);
+        assert_eq!(state.settings.invocation_config(), original);
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("native invocation service")
+        );
+        assert!(!directory.path().join("settings.json").exists());
+    }
 }
 
 #[cfg(test)]

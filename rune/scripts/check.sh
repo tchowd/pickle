@@ -17,6 +17,7 @@ python3 packaging/test_windows_runtime.py
   if [[ "$(uname -s)" == "Darwin" ]]; then
     python3 Tests/BrowserExtensionTests/host_test.py
     bash rune/native/macos/tests/run-page-fixture.sh
+    bash rune/native/macos/tests/run-invocation-fixture.sh
   fi
 )
 mkdir -p artifacts
