@@ -20,7 +20,7 @@ cargo run --locked -p pickle-app
 
 If an installed `stable` toolchain reports the same Rust version, `cargo +stable` can select it without downloading a separately named toolchain. Use the pinned toolchain in CI/release builds.
 
-The app opens a reader and stays running after its window closes. Use the menu-bar/system-tray menu to reopen it or quit. A second normal launch forwards Reopen to the first process. If the reader cannot initialize its graphics/window, a native error dialog explains the next steps. Quit waits for background work and window preferences to finish; an unsafe shutdown deadline exits with a fixed failure code instead of releasing the instance lease while writers remain.
+The app opens a reader and stays running after its window closes. Use the menu-bar/system-tray menu to reopen it or quit. A second normal launch forwards Reopen to the first process. If the reader cannot initialize its graphics/window, a native error dialog explains the next steps. On macOS, a minimal helper shows that dialog independently of Rune; the parent keeps its instance lock until acknowledgment. Quit waits for background work and window preferences to finish; an unsafe shutdown deadline exits with a fixed failure code instead of releasing the instance lease while writers remain.
 
 ### macOS bundle
 

@@ -20,6 +20,7 @@ mod review_tests;
 mod scenes;
 mod service_runtime;
 mod shell;
+mod startup_presenter;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -32,7 +33,11 @@ use rune::{App, AppSpec, Key, KeyEvent, MacWindowOptions, Tx, WindowOptions};
 use std::sync::Arc;
 
 fn main() {
-    let arguments = scenes::normalize_arguments(std::env::args().skip(1).collect());
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(exit_code) = startup_presenter::handle_helper(&arguments) {
+        std::process::exit(exit_code);
+    }
+    let arguments = scenes::normalize_arguments(arguments);
     if let Some(exit_code) = release_verify::handle(&arguments) {
         std::process::exit(exit_code);
     }
@@ -125,8 +130,8 @@ fn main() {
             // No app jobs or geometry worker exist yet. Keep the lease through
             // the dialog so installers still see this loaded executable.
             eprintln!("Pickle could not start background services (E_RUNTIME_START).");
-            if interactive_failure {
-                let _ = pickle_platform::present_reader_failure();
+            if interactive_failure && !startup_presenter::present() {
+                eprintln!("Pickle could not show its startup error (E_ERROR_PRESENTER).");
             }
             drop(instance.take());
             std::process::exit(1);
@@ -301,7 +306,9 @@ fn main() {
         interactive_failure,
         cleaned,
         || {
-            let _ = pickle_platform::present_reader_failure();
+            if !startup_presenter::present() {
+                eprintln!("Pickle could not show its startup error (E_ERROR_PRESENTER).");
+            }
         },
         || {
             drop(instance.take());
