@@ -1,8 +1,8 @@
 # Pickle: Rune rebuild and cross-platform shipping plan
 
-Date: November 22, 2026
+Design baseline: November 22, 2026. Development status reviewed November 23, 2026.
 
-Status: Proposed implementation plan; the production rebuild has not started.
+Status: **Development rebuild implemented and under native verification.** The user chose development-only delivery on November 23; production signing/notarization, update hosting and publication are deferred. The [implementation status](RUNE-IMPLEMENTATION-STATUS.md) and [native acceptance record](RUNE-NATIVE-ACCEPTANCE.md) distinguish current source, verified artifacts, failed attempts and remaining gates. The public shipping requirements below remain the contract for a later release; they are not all satisfied by the development build.
 
 ## 1. Objective and recommendation
 
@@ -551,38 +551,46 @@ Use atomic replacement plus an explicit single-writer or locking strategy. File 
 
 ## 11. Implementation phases and exit gates
 
-Each phase produces reviewable artifacts and explicit pass/fail evidence. Unchecked tasks below describe future work, not work already completed.
+Each phase produces reviewable artifacts and explicit pass/fail evidence. Checked items below identify implemented deliverables with the scoped evidence stated alongside them; they do **not** pass a phase's native or release exit gate. Unchecked items can contain implemented portions whose full required validation remains open. See the current execution records linked above for exact revisions and outcomes. Section 15 remains the unpassed public-release checklist.
 
 ### Phase 0: Workspace and release foundation
 
 Deliverables:
 
-- [ ] Add the Rust workspace beside the Swift implementation.
-- [ ] Pin Rune, patches, toolchain, and lockfile.
-- [ ] Add platform interfaces and fake implementations for deterministic tests.
-- [ ] Add a network-free Rune sample scene and headless export commands.
-- [ ] Add native Mac and Windows build jobs.
-- [ ] Create separate development application identities and data directories.
-- [ ] Produce minimal launchable application bundles/artifacts for both systems.
-- [ ] Record proposed OS/architecture support and the machines used to validate it.
+- [x] Add the Rust workspace beside the Swift implementation.
+- [x] Pin Rune, patches, toolchain, and lockfile.
+- [x] Add platform interfaces and fake implementations for deterministic tests.
+- [x] Add a network-free Rune sample scene and headless export commands.
+- [x] Add native Mac and Windows build jobs.
+- [x] Create separate development application identities and data directories.
+- [x] Produce minimal launchable application bundles/artifacts for both systems.
+- [x] Record proposed OS/architecture support and the machines used to validate it.
+
+Implementation evidence: the [workspace manifest](../rune/Cargo.toml), [toolchain](../rune/rust-toolchain.toml) and lockfile pin the application and Rune patches. [Platform boundaries](../rune/crates/pickle-platform/src/lib.rs), [fake invocation resources](../rune/native/macos/tests/InvocationFixture.swift), injected browser observations and owned synthetic UIA providers exercise native contracts without personal inputs. [Scenes](../rune/crates/pickle-app/src/scenes.rs) isolate headless startup from live services and archives. [Packaging and CI](../.github/workflows/rune.yml) produced both development and optimized artifacts at the [verified `a4b4b93` checkpoint](RUNE-NATIVE-ACCEPTANCE.md#current-verified-development-checkpoint--23-november-2026). The Mac bundle identity and `PickleRune` data directory are separate from Swift Pickle. The [build requirements](../rune/README.md#build-and-run) and native record distinguish proposed macOS 14/Windows 11 targets from observed Apple Silicon macOS 26 and hosted Windows Server execution.
 
 Exit gate: a clean checkout builds on both operating systems, the sample renders headlessly, and packaged prototypes open on clean test systems. No cross-app permissions or live AI are needed for the sample.
+
+Exit status: **open for the declared device matrix**. Build/render/package evidence and observed development launches do not establish oldest-supported macOS or clean Windows 11 standard-user acceptance.
 
 ### Phase 1: Native shell and cross-app proof of feasibility
 
 Deliverables:
 
-- [ ] Implement menu-bar/system-tray actions and background lifetime.
-- [ ] Implement supported-source selection capture on both systems.
-- [ ] Implement native invocation, source capture before focus, and immutable snapshots.
-- [ ] Implement compact chooser and in-place expansion into a reader.
-- [ ] Demonstrate a fixed-fixture or mock-stream answer through the actual application path.
-- [ ] Implement close, cancel, pause, reopen, and single-instance behavior.
+- [x] Implement menu-bar/system-tray actions and background lifetime.
+- [x] Implement supported-source selection capture on both systems.
+- [x] Implement native invocation, source capture before focus, and immutable snapshots.
+- [x] Implement compact chooser and in-place expansion into a reader.
+- [x] Demonstrate a fixed-fixture or mock-stream answer through the actual application path.
+- [x] Implement close, cancel, pause, reopen, and single-instance behavior.
 - [ ] Validate real keyboard and mouse interaction, including follow-up text entry.
 - [ ] Test supported browsers, a native editor, mixed-DPI displays, and full-screen behavior.
-- [ ] Record unsupported sources and their paste/extension fallback.
+- [x] Record unsupported sources and their paste/extension fallback.
+
+Implementation evidence: [native shell/invocation integration](../rune/crates/pickle-app/src/shell.rs), [selection/context admission](../rune/crates/pickle-app/src/context.rs), [request control](../rune/crates/pickle-app/src/controller.rs), [single-instance ownership](../rune/crates/pickle-app/src/instance.rs) and lifecycle fixtures implement these paths. The [native record](RUNE-NATIVE-ACCEPTANCE.md) preserves scoped Mac selection, conventional invocation, follow-up entry, dragging/reopen observations and hosted Windows selected-source → shortcut → chooser → consent → fixed loopback answer → ordinary quit evidence. [Setup guidance](../rune/README.md) records protected/elevated-source limits and manual passage/extension alternatives. These observations do not complete the unchecked interaction/application/display matrix.
 
 Exit gate: installable Mac and Windows prototypes complete select → invoke → choose → read → dismiss/reopen without losing source identity, modifying the document, or leaking stale output. No unresolved framework issue may prevent that core interaction on either platform.
+
+Exit status: **open**. Narrow native flows passed, but the complete keyboard/mouse, source-application, focus/full-screen, mixed-DPI and supported-client matrix is not accepted. Current Mac GUI/grants and Windows 11 standard-user execution remain separate from hosted component evidence.
 
 Go/no-go decision: continue with Rune only after reviewing native evidence from both systems. If a blocker appears, isolate it with a minimal reproduction, determine whether a bounded adapter or pinned framework patch resolves it, and revisit the framework decision if it does not. A Mac-only success is not a pass.
 
@@ -590,40 +598,52 @@ Go/no-go decision: continue with Rune only after reviewing native evidence from 
 
 Deliverables:
 
-- [ ] Port models, budgets, errors, session/request identity, and policy revisions.
-- [ ] Port Ollama and one complete streaming Simplify workflow.
-- [ ] Add Expand, follow-ups, adjustments, and contextual word explanation.
-- [ ] Port Cloudflare, Jev, typed evaluator responses, and bounded repair/recheck.
-- [ ] Port bar/flow validation and Rune renderers with accessible alternatives.
-- [ ] Preserve provider choice, strict offline, local prompt budgeting, and no-fallback behavior.
+- [x] Port models, budgets, errors, session/request identity, and policy revisions.
+- [x] Port Ollama and one complete streaming Simplify workflow.
+- [x] Add Expand, follow-ups, adjustments, and contextual word explanation.
+- [x] Port Cloudflare, Jev, typed evaluator responses, and bounded repair/recheck.
+- [x] Port bar/flow validation and Rune renderers with accessible alternatives.
+- [x] Preserve provider choice, strict offline, local prompt budgeting, and no-fallback behavior.
 - [ ] Translate existing behavioral fixtures into Rust tests and document intentional differences.
 
+Implementation evidence: [core pipeline fixtures](../rune/crates/pickle-core/tests/pipeline.rs) exercise typed checking, one repair/full recheck, checker outages, cancellation and chart refusal; core chart/markup fixtures and Rune scenes cover source evidence and text alternatives. [Provider implementations/tests](../rune/crates/pickle-providers/src/) cover bounded HTTP streams and local budgets. Controller/Runtime tests cover word explanation, follow-ups, immutable source and policy revisions. The [implementation status](RUNE-IMPLEMENTATION-STATUS.md#reading-providers-and-validation) separates those deterministic contracts from real-provider integration; the native record also contains completed Local Simplify/follow-up/bar flows. Exhaustive one-by-one equivalence with all Swift fixtures is **not** established. Model-generated factual fidelity is not implied by a successful request or quality label.
+
 Exit gate: the same deterministic input/provider fixtures produce equivalent policy outcomes on both platforms; cancellation, malformed streams, evaluator outages, and unsupported charts cannot become accepted success states.
+
+Exit status: **not signed off as exhaustive legacy parity**. Shared Rust fixtures pass on both CI targets at the verified checkpoint, but they do not substitute for the still-open complete Swift-fixture equivalence audit or native/model compatibility testing.
 
 ### Phase 3: Complete reader, storage, and migration
 
 Deliverables:
 
-- [ ] Finish settings, consent, error/retry, source preview, theme, and window persistence.
-- [ ] Add explicit bookmarks and opt-in knowledge-base history.
-- [ ] Implement platform credentials and endpoint scoping.
-- [ ] Implement and test Mac legacy-data migration.
+- [x] Finish settings, consent, error/retry, source preview, theme, and window persistence.
+- [x] Add explicit bookmarks and opt-in knowledge-base history.
+- [x] Implement platform credentials and endpoint scoping.
+- [x] Implement and test Mac legacy-data migration.
 - [ ] Validate first-run and returning-user flows on both systems.
 - [ ] Complete keyboard, screen-reader, text selection, and copy workflows.
 
+Implementation evidence: [versioned storage](../rune/crates/pickle-app/src/storage.rs), [window-frame storage](../rune/crates/pickle-app/src/geometry_store.rs), reader/settings Runtime tests and archive/library regressions cover atomic writes, capacity/corruption refusal, consent, optional history and explicit Save. Credential tests exercise account/endpoint binding and staged-operation guards without reading a real vault. [Migration fixtures](../rune/crates/pickle-app/src/migration.rs) import JSON history and XML/binary-plist bookmarks, preserve source files, reject damaged/unknown data, deduplicate and exclude secrets/consent. These are implemented and tested contracts, not proof of arbitrary real-user upgrades. The native record preserves bounded Mac copy/selection/geometry and hosted Windows reading/keyboard observations; VoiceOver/Narrator, full keyboard coverage, real saved-data restart and cross-version device acceptance remain open.
+
 Exit gate: ordinary reading and saved-answer workflows work on both systems; upgrade, corruption, capacity, denied-credential, and rollback fixtures pass without data loss or implicit consent expansion.
+
+Exit status: **open**. Portable archive/migration tests and scoped native reading evidence do not complete both-platform first/returning-user, vault-denial, upgrade/rollback, saved-answer restart or assistive-technology acceptance.
 
 ### Phase 4: Context and feature parity
 
 Deliverables:
 
 - [ ] Implement bounded source-window capture and OCR on both systems.
-- [ ] Implement public reference fetching/extraction under the existing safety contract.
+- [x] Implement public reference fetching/extraction under the existing safety contract.
 - [ ] Package browser-native messaging hosts and validate Chrome/Edge installation.
 - [ ] Validate loaded-page and available-caption workflows on real sites.
-- [ ] Implement explicit visual analysis and destination-accurate consent.
-- [ ] Implement or explicitly classify source-app audio/transcription capabilities on each system.
-- [ ] Maintain a feature matrix with supported, unavailable, experimental, and deferred states.
+- [x] Implement explicit visual analysis and destination-accurate consent.
+- [x] Implement or explicitly classify source-app audio/transcription capabilities on each system.
+- [x] Maintain a feature matrix with supported, unavailable, experimental, and deferred states.
+
+Implementation evidence: [public article policy/extraction](../rune/crates/pickle-providers/src/article.rs), [explicit image request and model checks](../rune/crates/pickle-providers/src/vision.rs), [context actions and cancellation](../rune/crates/pickle-app/src/context.rs), [provider fixtures](../rune/crates/pickle-providers/src/tests.rs), and [destination-consent fixtures](../rune/crates/pickle-app/src/tests.rs). The extractor is a bounded Rust heuristic, not Mozilla Readability equivalence. [Development setup](../rune/README.md#context-tools) describes on-device Speech on Mac versus a separately configured trusted local whisper executable/model on Windows. The [feature matrix](RUNE-IMPLEMENTATION-STATUS.md#4-feature-and-behavior-matrix) keeps device/runtime acceptance and platform differences explicit; implemented audio adapters do not establish working hardware compatibility.
+
+Native gate remains open: fixed-memory Windows OCR has installed-package evidence, but the owned-window diagnostic currently fails before WGC at helper `CreateProcessW` with `0x80070005`. Mac grants/current-bundle capture, actual extension delivery, browser pixels and real-site caption workflows remain unverified at the required scope. Packaged hosts and controlled browser document components do not prove an installed extension connection. The [native record](RUNE-NATIVE-ACCEPTANCE.md#native-diagnostic-attempts-and-startup-investigation) retains the failed attempts and limits.
 
 Exit gate: every advertised feature has device evidence on its advertised OS. Any temporary scope reduction is explicitly approved and reflected in the interface and release notes; it is not treated as full migration completion.
 
@@ -638,6 +658,8 @@ Deliverables:
 - [ ] Complete performance, compatibility, accessibility, privacy, and license reviews.
 - [ ] Remove stale current-versus-historical documentation contradictions.
 - [ ] Publish support boundaries, privacy behavior, setup instructions, and recovery steps.
+
+Development scope: both platform packaging paths, fixture-based failure recovery, notice inventory, signed-manifest verification and bounded verified downloads exist. Their evidence is recorded in the [status report](RUNE-IMPLEMENTATION-STATUS.md#7-remaining-packaging-and-operational-gates) and [release runbook](RUNE-RELEASE-RUNBOOK.md). They do not establish a production publisher, published update channels, clean supported-client installation, screen-reader acceptance, sleep/wake/display behavior or the full performance matrix. Production distribution and public publication are deferred by the user's scope decision; these boxes remain open rather than treating CI test signing as public-release trust.
 
 Exit gate: the release checklist in Section 15 passes on both operating systems and the remaining known issues are explicitly accepted for the declared release scope.
 
