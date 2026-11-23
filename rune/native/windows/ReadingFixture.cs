@@ -200,6 +200,9 @@ public static class ReadingFixtureProgram {
                     form.StartPosition=FormStartPosition.CenterScreen;
                     edit.Dock=DockStyle.Fill; edit.Text=contract.Document; edit.HideSelection=false; edit.ReadOnly=true;
                     edit.AccessibleName="Controlled selected passage"; form.Controls.Add(edit);
+                    // Restore only this fixture's edit on its own STA when the
+                    // installed app's initial window has temporarily taken focus.
+                    form.Activated+=delegate { if (!form.IsDisposed && !edit.IsDisposed) { form.ActiveControl=edit; edit.Focus(); } };
                     form.Shown+=delegate {
                         stage="fixture-shown";
                         form.Activate(); edit.Focus();
@@ -282,6 +285,55 @@ public static class ReadingFixtureProgram {
         if (!value.TryGetValue("rejected",out field) || !(field is bool) || (bool)field) Fail("provider-rejected-input");
         if (!value.TryGetValue("source_verified",out field) || !(field is bool) || (bool)field!=complete) Fail("provider-source-unverified");
     }
+    static void SourceOracle(Contract contract,IntPtr fixture,int fixturePid,Process source) {
+        int attempts=0;
+        Wait(()=> {
+            var state=new Dictionary<string,object> {{"attempts",++attempts},{"status","native-foreground"},
+                {"uia_checked",false},{"uia_present",false},{"uia_pid",0},{"uia_native_hwnd","0x0"},
+                {"password_checked",false},{"password",false},{"text_pattern",false},
+                {"selection_exact",false},{"document_exact",false}};
+            evidence["source_focus"]=state;
+            if (source.HasExited || !Owned(fixture,fixturePid)) Fail("source-exited-during-oracle");
+            IntPtr foreground=Native.GetForegroundWindow(); uint foregroundPid;
+            Native.GetWindowThreadProcessId(foreground,out foregroundPid);
+            state["foreground_hwnd"]=Hex(foreground); state["foreground_pid"]=foregroundPid;
+            bool foregroundOwned=foreground==fixture && Owned(foreground,fixturePid);
+            state["foreground_owned"]=foregroundOwned;
+            IntPtr nativeFocus;
+            bool nativeFocusAvailable=Native.FocusedWindow(fixture,out nativeFocus);
+            uint nativePid; Native.GetWindowThreadProcessId(nativeFocus,out nativePid);
+            bool nativeEditOwned=nativeFocusAvailable && Owned(nativeFocus,fixturePid) && Native.IsChild(fixture,nativeFocus);
+            state["gui_thread_available"]=nativeFocusAvailable; state["gui_focus_hwnd"]=Hex(nativeFocus);
+            state["gui_focus_pid"]=nativePid; state["gui_focus_owned_child"]=nativeEditOwned;
+            state["uia_checked"]=true; state["status"]="uia-query";
+            var focus=AutomationElement.FocusedElement;
+            state["uia_present"]=focus!=null;
+            if (focus==null) { state["status"]="uia-no-element"; return false; }
+            int focusedPid=focus.Current.ProcessId;
+            IntPtr uiaHandle=new IntPtr(focus.Current.NativeWindowHandle);
+            state["uia_pid"]=focusedPid; state["uia_native_hwnd"]=Hex(uiaHandle);
+            if (!foregroundOwned) return false;
+            if (!nativeEditOwned) { state["status"]="native-edit-focus"; return false; }
+            if (focusedPid!=fixturePid) { state["status"]="uia-wrong-pid"; return false; }
+            // A virtual UIA element may have no HWND. Its provider PID, native
+            // focused edit, full document and selected range must still agree.
+            if (uiaHandle!=IntPtr.Zero && (!Owned(uiaHandle,fixturePid) || !Native.IsChild(fixture,uiaHandle))) {
+                state["status"]="uia-native-not-owned"; return false;
+            }
+            state["password_checked"]=true; bool password=focus.Current.IsPassword; state["password"]=password;
+            if (password) { state["status"]="uia-protected"; return false; }
+            object pattern;
+            if (!focus.TryGetCurrentPattern(TextPattern.Pattern,out pattern)) { state["status"]="text-pattern-unavailable"; return false; }
+            state["text_pattern"]=true; var text=(TextPattern)pattern;
+            var ranges=text.GetSelection(); state["selection_count"]=ranges.Length;
+            if (ranges.Length!=1) { state["status"]="selection-count"; return false; }
+            bool selection=ranges[0].GetText(2048)==contract.Selected; state["selection_exact"]=selection;
+            if (!selection) { state["status"]="selection-mismatch"; return false; }
+            bool document=ReadingFixturePredicates.NormalizeDocument(text.DocumentRange.GetText(4096))==contract.Document;
+            state["document_exact"]=document; state["status"]=document ? "ready" : "document-mismatch";
+            return document;
+        },5,"source-focus-readiness-timeout");
+    }
     static void Drive(Contract contract,Dictionary<string,string> options) {
         int appPid=Pid(options["--application-pid"]), fixturePid=Pid(options["--fixture-pid"]);
         if (appPid==fixturePid || appPid==Process.GetCurrentProcess().Id || fixturePid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
@@ -306,14 +358,7 @@ public static class ReadingFixtureProgram {
             evidence["initial_compose_ready"]=true;
             stage="source-oracle";
             Focus(fixture,fixturePid);
-            var focus=AutomationElement.FocusedElement;
-            if (focus==null || focus.Current.ProcessId!=fixturePid || focus.Current.IsPassword) Fail("source-focused-element-invalid");
-            object pattern;
-            if (!focus.TryGetCurrentPattern(TextPattern.Pattern,out pattern)) Fail("source-text-pattern-unavailable");
-            var text=(TextPattern)pattern;
-            var ranges=text.GetSelection();
-            if (ranges.Length!=1 || ranges[0].GetText(2048)!=contract.Selected) Fail("source-selection-mismatch");
-            if (ReadingFixturePredicates.NormalizeDocument(text.DocumentRange.GetText(4096))!=contract.Document) Fail("source-document-mismatch");
+            SourceOracle(contract,fixture,fixturePid,source);
             if (application.HasExited || source.HasExited || !Owned(fixture,fixturePid) || Native.GetForegroundWindow()!=fixture) Fail("source-changed-before-shortcut");
             Server(options["--server-state"],false); evidence["fixture_selection_verified"]=true;
             stage="shortcut";
@@ -351,6 +396,11 @@ public static class ReadingFixtureProgram {
     }
     static class Native {
         [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left,Top,Right,Bottom; }
+        [StructLayout(LayoutKind.Sequential)] struct GuiThreadInfo {
+            public uint Size,Flags;
+            public IntPtr Active,Focus,Capture,MenuOwner,MoveSize,Caret;
+            public Rect CaretRect;
+        }
         [StructLayout(LayoutKind.Sequential)] struct Keyboard { public ushort Key,Scan; public uint Flags,Time; public UIntPtr Extra; }
         [StructLayout(LayoutKind.Sequential)] struct Mouse { public int X,Y; public uint Data,Flags,Time; public UIntPtr Extra; }
         [StructLayout(LayoutKind.Explicit)] struct Union { [FieldOffset(0)] public Keyboard Keyboard; [FieldOffset(0)] public Mouse Mouse; }
@@ -361,11 +411,19 @@ public static class ReadingFixtureProgram {
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint pid);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool IsChild(IntPtr parent,IntPtr child);
+        [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread,ref GuiThreadInfo info);
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd,out Rect rect);
         [DllImport("user32.dll")] static extern bool EnumWindows(WindowCallback callback,IntPtr parameter);
         [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd,uint attribute,out int value,int size);
         [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
         [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
+        public static bool FocusedWindow(IntPtr owner,out IntPtr focus) {
+            uint pid; uint thread=GetWindowThreadProcessId(owner,out pid);
+            var info=new GuiThreadInfo { Size=(uint)Marshal.SizeOf(typeof(GuiThreadInfo)) };
+            bool available=thread!=0 && GetGUIThreadInfo(thread,ref info);
+            focus=available ? info.Focus : IntPtr.Zero; return available;
+        }
         static Input Key(ushort key,bool up) { return new Input { Type=1,Data=new Union { Keyboard=new Keyboard { Key=key,Flags=up ? 2U : 0U } } }; }
         public static void Chord(IntPtr hwnd,int pid,ushort key,bool alt) {
             if (!Owned(hwnd,pid) || GetForegroundWindow()!=hwnd) Fail("input-target-not-owned");
