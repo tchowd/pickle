@@ -146,6 +146,21 @@ fn boolean(ok: i32) -> io::Result<()> {
 fn invalid(message: &'static str) -> io::Error {
     io::Error::other(message)
 }
+fn trace(stage: &'static str, win32: Option<i32>, scalar: Option<u64>) {
+    use std::io::Write as _;
+    // Direct stderr writes bypass libtest's per-test print capture, including
+    // when a native fast-fail or an unwind prevents the harness printing it.
+    // Stages are literals; only numeric status/flags and booleans are emitted.
+    let line = format!(
+        "{{\"test\":\"windows-owned-storage-denial\",\"stage\":\"{stage}\",\"win32\":{},\"scalar\":{},\"unwinding\":{}}}\n",
+        win32.map_or_else(|| "null".into(), |value| value.to_string()),
+        scalar.map_or_else(|| "null".into(), |value| value.to_string()),
+        std::thread::panicking(),
+    );
+    let mut stderr = io::stderr().lock();
+    let _ = stderr.write_all(line.as_bytes());
+    let _ = stderr.flush();
+}
 fn open_mutation(directory: &tempfile::TempDir) -> io::Result<File> {
     // Exact MAXIMUM_ALLOWED is intentional: Microsoft documents that a
     // SetSecurityInfo handle opened this way does NOT propagate ACEs to children.
@@ -347,7 +362,7 @@ impl DaclSnapshot {
     fn apply(&self, file: &File, acl: *mut Acl) -> io::Result<()> {
         // SAFETY: the ACL is borrowed for this call. The retained MAXIMUM_ALLOWED
         // handle targets ONLY the owned directory and prevents child propagation.
-        status(unsafe {
+        let code = unsafe {
             SetSecurityInfo(
                 file.as_raw_handle(),
                 1,
@@ -357,7 +372,13 @@ impl DaclSnapshot {
                 acl,
                 null_mut(),
             )
-        })
+        };
+        trace(
+            "set-security-return",
+            Some(code as i32),
+            Some(u64::from(self.information())),
+        );
+        status(code)
     }
 }
 
@@ -374,7 +395,9 @@ impl<'a> RestoreAcl<'a> {
         observer: &File,
         expected_dacl: &DaclSnapshot,
     ) -> io::Result<Self> {
+        trace("mutation-open-enter", None, None);
         let file = open_mutation(directory)?;
+        trace("mutation-open-complete", None, None);
         let id = identity(&file)?;
         if id.2 & DIRECTORY == 0
             || id.2 & REPARSE_POINT != 0
@@ -385,12 +408,18 @@ impl<'a> RestoreAcl<'a> {
                 "ACL target is not the exact owned non-reparse directory",
             ));
         }
+        trace("precheck-identity-complete", None, None);
         let original = DaclSnapshot::read(&file)?;
         if original != *expected_dacl || DaclSnapshot::read(observer)? != original {
             return Err(invalid(
                 "Owned ACL observer and mutation snapshots differ before denial",
             ));
         }
+        trace(
+            "precheck-snapshot-complete",
+            None,
+            Some(u64::from(original.control)),
+        );
         let mut guard = Self {
             directory,
             file,
@@ -401,7 +430,9 @@ impl<'a> RestoreAcl<'a> {
         let mut sid = [0u32; 17]; // SECURITY_MAX_SID_SIZE, aligned for SID writes
         let mut size = size_of_val(&sid) as u32;
         // WinWorldSid = Everyone; no account lookup, user SID or privilege change.
+        trace("sid-create-enter", None, None);
         boolean(unsafe { CreateWellKnownSid(1, null_mut(), sid.as_mut_ptr().cast(), &mut size) })?;
+        trace("sid-create-complete", None, Some(u64::from(size)));
         let entry = ExplicitAccess {
             permissions: 2, // FILE_ADD_FILE; never GENERIC_WRITE or child inheritance
             mode: 3,        // DENY_ACCESS
@@ -416,7 +447,9 @@ impl<'a> RestoreAcl<'a> {
         };
         let mut denied = null_mut();
         // SAFETY: SID/entry/original aligned ACL outlive the native merge call.
+        trace("acl-merge-enter", None, None);
         status(unsafe { SetEntriesInAclW(1, &entry, guard.original.pointer(), &mut denied) })?;
+        trace("acl-merge-complete", None, None);
         let allocation = LocalMemory(denied.cast());
         if denied.is_null() {
             return Err(invalid("No owned denial ACL was returned"));
@@ -428,11 +461,15 @@ impl<'a> RestoreAcl<'a> {
         let sid_bytes =
             unsafe { std::slice::from_raw_parts(sid.as_ptr().cast::<u8>(), size as usize) };
         only_added_directory_deny(&guard.original, denied, sid_bytes)?;
+        trace("acl-merge-verified", None, None);
         // Arm BEFORE the first mutation, so any failure/unwind attempts restore.
         guard.armed = true;
+        trace("deny-apply-enter", None, None);
         guard.original.apply(&guard.file, denied)?;
+        trace("deny-apply-complete", None, None);
         drop(allocation);
         guard.assert_identity()?;
+        trace("deny-identity-complete", None, None);
         Ok(guard)
     }
     fn assert_identity(&self) -> io::Result<()> {
@@ -449,22 +486,46 @@ impl<'a> RestoreAcl<'a> {
         if self.armed {
             // Restore through the pre-denial handle, not a path reopened under
             // a modified ACL. Borrowing TempDir also enforces cleanup order.
+            trace("restore-apply-enter", None, None);
             self.original.apply(&self.file, self.original.pointer())?;
-            if DaclSnapshot::read(&self.file)? != self.original {
+            trace("restore-apply-complete", None, None);
+            let restored = DaclSnapshot::read(&self.file)?;
+            trace(
+                "restore-control-pair",
+                None,
+                Some((u64::from(self.original.control) << 16) | u64::from(restored.control)),
+            );
+            trace(
+                "restore-acl-bytes-equal",
+                None,
+                Some(u64::from(
+                    restored.words == self.original.words
+                        && restored.length == self.original.length,
+                )),
+            );
+            if restored != self.original {
                 return Err(invalid(
                     "Original owned directory DACL/control was not restored exactly",
                 ));
             }
             self.assert_identity()?;
             self.armed = false;
+            trace("restore-verified", None, None);
         }
         Ok(())
     }
 }
 impl Drop for RestoreAcl<'_> {
     fn drop(&mut self) {
-        self.restore()
-            .expect("Restore exact ACL on the owned fixture directory before cleanup");
+        if let Err(error) = self.restore() {
+            trace("drop-restore-failed", error.raw_os_error(), None);
+            // Preserve the primary denial/store/explicit-restore assertion on
+            // unwind. A second panic here would abort libtest and hide both.
+            // Normal failed cleanup remains a failing test, never a silent pass.
+            if !std::thread::panicking() {
+                panic!("Could not restore the owned fixture ACL; see fixed diagnostic stages");
+            }
+        }
     }
 }
 fn child_acls(directory: &Path) -> Vec<DaclSnapshot> {
@@ -484,6 +545,7 @@ fn child_acls(directory: &Path) -> Vec<DaclSnapshot> {
 #[test]
 fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_acl() {
     for bookmark in [false, true] {
+        trace("case-start", None, Some(u64::from(bookmark)));
         let directory = tempfile::tempdir().unwrap();
         let repo = Repository::new(directory.path().into()).unwrap();
         let untouched = seed_other_store_and_settings(&repo, bookmark);
@@ -500,6 +562,7 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
         let before_handle = open_observer(directory.path()).unwrap();
         let before = DaclSnapshot::read(&before_handle).unwrap();
         let before_identity = identity(&before_handle).unwrap();
+        trace("setup-complete", None, None);
 
         let mut restore = RestoreAcl::deny_create(&directory, &before_handle, &before).unwrap();
         assert!(DaclSnapshot::read(&before_handle).unwrap() != before);
@@ -507,6 +570,8 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
             child_acls(directory.path()) == children_before,
             "Directory denial must not change child ACLs"
         );
+        trace("denial-child-acls-verified", None, None);
+        trace("probe-enter", None, None);
         let probe = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -514,19 +579,26 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
             .expect_err(
                 "FILE_ADD_FILE must really be denied, including on an administrator runner",
             );
+        trace("probe-return", probe.raw_os_error(), None);
         assert_eq!(probe.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(probe.raw_os_error(), Some(5));
-        assert_eq!(
-            repo.append(bookmark, entry(3)).unwrap_err(),
-            "Could not stage local data."
+        trace("store-append-enter", None, None);
+        let failure = repo.append(bookmark, entry(3)).unwrap_err();
+        trace(
+            "store-append-refused",
+            None,
+            Some(u64::from(failure == "Could not stage local data.")),
         );
+        assert_eq!(failure, "Could not stage local data.");
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(
             read(&repo, bookmark).as_slice(),
             std::slice::from_ref(&original)
         );
         assert_eq!(other_bytes(&repo, bookmark), untouched);
+        trace("denial-data-verified", None, None);
 
+        trace("explicit-restore-enter", None, None);
         restore.restore().unwrap();
         drop(restore);
         assert!(DaclSnapshot::read(&before_handle).unwrap() == before);
@@ -539,11 +611,13 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
             child_acls(directory.path()) == children_before,
             "Restoration must not change child ACLs"
         );
+        trace("post-restore-security-verified", None, None);
         // Exact restoration is proven before reopening or TempDir cleanup.
         drop((before_handle, repo));
         let reopened = Repository::new(directory.path().into()).unwrap();
         assert_eq!(read(&reopened, bookmark), [original]);
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(other_bytes(&reopened, bookmark), untouched);
+        trace("case-complete", None, Some(u64::from(bookmark)));
     }
 }
