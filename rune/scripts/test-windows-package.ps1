@@ -4,6 +4,32 @@ param(
   [ValidateSet('debug','release')][string]$Configuration = 'debug',
   [string]$ExpectedVersion
 )
+function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCapture,[string]$Configuration) {
+  if (($Evidence.schema -isnot [int] -and $Evidence.schema -isnot [long]) -or $Evidence.schema -ne 1 -or $Evidence.test -cne 'windows-installed-reading-workflow' -or $Evidence.configuration -cne $Configuration) { throw 'The package reading evidence did not match this acceptance run.' }
+  foreach ($key in @('passed','ordinary_exit','lease_released','control_removed','restart_ordinary_exit','restart_lease_released','restart_control_removed','saved_archive_verified','saved_archive_unchanged','profile_restored','owned_children_stopped')) {
+    if ($Evidence.$key -isnot [bool] -or !$Evidence.$key) { throw 'The installed reading, Save, restart and cleanup workflow did not pass completely.' }
+  }
+  foreach ($item in @(@($Evidence,'require_window_capture'),@($Evidence,'marker_in_context'),@($Evidence.server,'window_capture_required'),@($Evidence.server,'marker_in_context'))) {
+    if ($item[0].($item[1]) -isnot [bool] -or $item[0].($item[1]) -ne $RequireWindowCapture) { throw 'The package reading evidence did not prove the required OCR presence or screen-off absence.' }
+  }
+  foreach ($key in @('source_verified','context_verified')) {
+    if ($Evidence.server.$key -isnot [bool] -or !$Evidence.server.$key) { throw 'The owned provider did not verify the selected source and context boundary.' }
+  }
+  if ($Evidence.server.rejected -isnot [bool] -or $Evidence.server.rejected) { throw 'The owned provider rejected a request.' }
+  foreach ($item in @(@('total_requests',2),@('show_count',1),@('chat_count',1))) {
+    $value=$Evidence.server.($item[0])
+    if (($value -isnot [int] -and $value -isnot [long]) -or $value -ne $item[1]) { throw 'The owned provider request count differed.' }
+  }
+  foreach ($key in @('passed','initial_compose_ready','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','source_retained_verified','window_marker_painted','window_marker_absent_from_accessibility','completed_answer_verified','saved_answer_verified','ordinary_quit_verified')) {
+    if ($Evidence.driver.$key -isnot [bool] -or !$Evidence.driver.$key) { throw 'The native reading driver omitted a required acceptance step.' }
+  }
+  foreach ($key in @('passed','application_identity_verified','saved_entry_verified','saved_detail_verified','saved_metadata_absence_verified','ordinary_quit_verified')) {
+    if ($Evidence.restart_driver.$key -isnot [bool] -or !$Evidence.restart_driver.$key) { throw 'The native saved-answer restart driver did not pass completely.' }
+  }
+  foreach ($driver in @($Evidence.driver,$Evidence.restart_driver)) {
+    if (($driver.app_exit_code -isnot [int] -and $driver.app_exit_code -isnot [long]) -or $driver.app_exit_code -ne 0) { throw 'The installed reading application did not quit normally.' }
+  }
+}
 $ErrorActionPreference = 'Stop'
 $uiMode = if ($Configuration -eq 'release') { 'native-window' } else { 'headless-render-and-native-window' }
 Set-Location (Join-Path $PSScriptRoot '..')
@@ -88,11 +114,15 @@ $uninstaller = Join-Path $testDirectory 'Uninstall.exe'
 $supportRoot = Get-PickleReadingDataDirectory
 Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-startup-failure.json") $Configuration
 . (Join-Path $PSScriptRoot 'windows-reading-delegate.ps1')
-Invoke-PickleReadingCore $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json") $Configuration -RequireWindowCapture:$hasIdentity
+$readingEvidence=Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json"
+Invoke-PickleReadingCore $application $supportRoot $readingEvidence $Configuration -RequireWindowCapture:$hasIdentity
+Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $readingEvidence) $hasIdentity $Configuration
 if ($hasIdentity) {
+  # The installed user workflow above is the package capture gate. Retain the
+  # isolated self-launch diagnostic's portable collector/protocol regressions;
+  # its native command remains available explicitly for manual diagnosis.
   . (Join-Path $PSScriptRoot 'windows-capture-smoke.ps1')
   & (Join-Path $PSScriptRoot 'test-windows-capture-smoke.ps1')
-  Invoke-PickleWindowCaptureProbe $application (Join-Path $PWD "artifacts/identity-$Configuration-native-smoke-window-capture.json")
 }
 $background = $null
 try {

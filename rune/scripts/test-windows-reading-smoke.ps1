@@ -15,6 +15,57 @@ $root=Join-Path ([IO.Path]::GetTempPath()) ('pickle-reading-tests-'+[guid]::NewG
 if ($root.StartsWith('/var/') -and (Test-Path -LiteralPath '/private/var')) { $root='/private'+$root }
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
+  # Import only the pure evidence predicate, never the package installer body.
+  # Execute its actual two production call sites against owned non-UI stubs;
+  # a removed/incorrect switch or assertion must fail the positive identity case.
+  $packageTokens=$null;$packageErrors=$null
+  $packageAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'test-windows-package.ps1'),[ref]$packageTokens,[ref]$packageErrors)
+  if ($packageErrors.Count) { throw 'The package acceptance script did not parse.' }
+  $predicate=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-PicklePackageReadingEvidence'},$true))
+  $readingCall=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-PickleReadingCore'},$true))
+  $reportCall=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Assert-PicklePackageReadingEvidence'},$true))
+  $oldProbe=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-PickleWindowCaptureProbe'},$true))
+  if ($predicate.Count -ne 1 -or $readingCall.Count -ne 1 -or $reportCall.Count -ne 1 -or $oldProbe.Count) { throw 'The actual reading gate or explicit-only legacy capture diagnostic wiring differed.' }
+  . ([scriptblock]::Create($predicate[0].Extent.Text))
+  $actualPackageCalls=[scriptblock]::Create($readingCall[0].Extent.Text+"`n"+$reportCall[0].Extent.Text)
+  foreach ($required in @($false,$true)) {
+    $validReport=[ordered]@{schema=1;test='windows-installed-reading-workflow';configuration='release';require_window_capture=$required;marker_in_context=$required;
+      passed=$true;ordinary_exit=$true;lease_released=$true;control_removed=$true;restart_ordinary_exit=$true;restart_lease_released=$true;restart_control_removed=$true;saved_archive_verified=$true;saved_archive_unchanged=$true;profile_restored=$true;owned_children_stopped=$true;
+      server=@{total_requests=2;show_count=1;chat_count=1;source_verified=$true;context_verified=$true;window_capture_required=$required;marker_in_context=$required;rejected=$false};
+      driver=@{passed=$true;initial_compose_ready=$true;fixture_selection_verified=$true;chooser_source_verified=$true;consent_before_network_verified=$true;provider_source_verified=$true;source_retained_verified=$true;window_marker_painted=$true;window_marker_absent_from_accessibility=$true;completed_answer_verified=$true;saved_answer_verified=$true;ordinary_quit_verified=$true;app_exit_code=0};
+      restart_driver=@{passed=$true;application_identity_verified=$true;saved_entry_verified=$true;saved_detail_verified=$true;saved_metadata_absence_verified=$true;ordinary_quit_verified=$true;app_exit_code=0}}
+    $report=($validReport | ConvertTo-Json -Depth 5 | ConvertFrom-Json)
+    & {
+      param($Calls,$Report,[bool]$Mode)
+      $application='owned-fixture-app.exe';$supportRoot='owned-fixture-profile';$readingEvidence='owned-fixture-report.json';$hasIdentity=$Mode;$Configuration='release'
+      $observed=[pscustomobject]@{called=$false;required=$null;read=$false}
+      function Invoke-PickleReadingCore([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture) {
+        if ($Application -cne 'owned-fixture-app.exe' -or $DataDirectory -cne 'owned-fixture-profile' -or $EvidencePath -cne 'owned-fixture-report.json' -or $Configuration -cne 'release') { throw 'The package did not call the exact installed reading workflow.' }
+        $observed.called=$true;$observed.required=[bool]$RequireWindowCapture
+      }
+      function Read-PickleReadingJson([string]$Path) {
+        if (!$observed.called -or $Path -cne 'owned-fixture-report.json') { throw 'The package did not read its actual reading evidence after the workflow.' }
+        $observed.read=$true;return $Report
+      }
+      & $Calls
+      if (!$observed.called -or !$observed.read -or $observed.required -ne $Mode) { throw 'The actual package call skipped its identity capture requirement or report gate.' }
+    } $actualPackageCalls $report $required
+    foreach ($change in @(
+      @('schema',1.0),@('schema','1'),@('passed',$false),@('require_window_capture',(!$required)),@('marker_in_context',(!$required)),@('profile_restored',$false),@('saved_archive_verified',$false),@('saved_archive_unchanged',$false),@('restart_ordinary_exit',$false),
+      @('server.window_capture_required',(!$required)),@('server.marker_in_context',(!$required)),@('server.context_verified',$false),@('server.total_requests',1),@('server.chat_count',2),@('server.rejected',$true),
+      @('driver.passed',$false),@('driver.fixture_selection_verified',$false),@('driver.chooser_source_verified',$false),@('driver.consent_before_network_verified',$false),@('driver.source_retained_verified',$false),@('driver.window_marker_painted',$false),@('driver.window_marker_absent_from_accessibility',$false),@('driver.saved_answer_verified',$false),@('driver.app_exit_code',1),
+      @('restart_driver.passed',$false),@('restart_driver.saved_detail_verified',$false),@('restart_driver.saved_metadata_absence_verified',$false),@('restart_driver.app_exit_code',1),@('marker_in_context','true')
+    )) {
+      $bad=$validReport | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+      $parts=$change[0].Split('.')
+      if ($parts.Count -eq 2) { $bad.($parts[0]).($parts[1])=$change[1] } else { $bad.($parts[0])=$change[1] }
+      Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $bad $required 'release' }
+    }
+    $missing=$validReport | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    $missing.driver.PSObject.Properties.Remove('window_marker_painted')
+    Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $missing $required 'release' }
+    if (!$required) { Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $report $true 'release' } }
+  }
   foreach ($case in @(
     @('', '""'),
     @('plain', '"plain"'),
