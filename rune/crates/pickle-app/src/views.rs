@@ -1,10 +1,14 @@
-use crate::controller::{Activity, AppState, Panel, Route};
+use crate::controller::{Activity, AppState, Panel, READER_SCROLL, READER_STATUS, Route};
 use pickle_core::{ChartKind, ReadingAction, ValidatedChart};
 use rune::{
     Color, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, spacer, text, text_input,
     tok::{TextStyle, type_},
 };
 use rune_kit::{Markdown, MarkdownStyle};
+
+#[cfg(test)]
+#[path = "reader_scroll_tests.rs"]
+mod reader_scroll_tests;
 
 // Rune stores linear RGB. These decode the original Pickle sRGB palette.
 const PAPER: Color = Color {
@@ -216,6 +220,7 @@ pub fn view(s: &AppState, _: &mut Cx<AppState>) -> El {
         )
         .child(action(s, "open-saved", "Saved", false, |s, tx| {
             s.dismiss_auto_preview();
+            s.stop_reader_follow();
             s.route = Route::Library(true);
             s.library_selected = None;
             s.library_page = 0;
@@ -223,6 +228,7 @@ pub fn view(s: &AppState, _: &mut Cx<AppState>) -> El {
         }))
         .child(action(s, "open-settings", "Settings", false, |s, tx| {
             s.dismiss_auto_preview();
+            s.stop_reader_follow();
             s.route = Route::Settings;
             s.expand(tx, 720.0);
         }))
@@ -299,10 +305,12 @@ fn reader(s: &AppState) -> El {
             },
             false,
             |s, tx| {
+                s.stop_reader_follow();
                 s.source_expanded = !s.source_expanded;
                 if s.source_expanded {
                     s.expand(tx, 680.0);
                 }
+                tx.scroll_key_to("source-preview", 0.0);
             },
         ));
     }
@@ -367,8 +375,16 @@ fn reader(s: &AppState) -> El {
                 if let Some(selection) = tx.text_selection() { s.explain_term(selection.text().to_owned(), tx); }
                 else { s.notice = Some("Select a word in the passage or answer, then choose Explain selected words.".into()); }
             }).disabled(busy || s.settings_pending).keeps_text_selection()));
+    // Source-bound controls belong beside their source. Keeping them above the
+    // answers prevents a large OCR/reference preview from becoming the live end.
+    if s.auto_preview.is_none()
+        && (s.context_state.has_content()
+            || s.context_state.pending > 0
+            || s.capture_target.is_some())
+    {
+        content = content.child(context_tools(s));
+    }
     if s.panel == Panel::Expanded {
-        content = content.child(activity(s));
         if let Some(result) = &s.result {
             content = content.child(
                 text(match result.action {
@@ -425,6 +441,7 @@ fn reader(s: &AppState) -> El {
                 content = content.child(note(label));
             }
         }
+        content = content.child(activity(s).key(READER_STATUS));
         if !s.draft.is_empty() {
             content = content.child(answer(&s.draft, s.settings.text_size, true));
         }
@@ -440,7 +457,7 @@ fn reader(s: &AppState) -> El {
                     }))
                     .child(action(s, "retry", "Retry", false, |s, tx| {
                         if let Some(pending) = s.last.clone() {
-                            s.start(pending, tx);
+                            s.start_user_request(pending, tx);
                         }
                     })),
             );
@@ -478,13 +495,6 @@ fn reader(s: &AppState) -> El {
             }
         }
     }
-    if s.auto_preview.is_none()
-        && (s.context_state.has_content()
-            || s.context_state.pending > 0
-            || s.capture_target.is_some())
-    {
-        content = content.child(context_tools(s));
-    }
     if let Some(notice) = &s.notice {
         content = content.child(note(notice));
     }
@@ -493,14 +503,28 @@ fn reader(s: &AppState) -> El {
     } else {
         "History is off · answers are saved only when you choose Save"
     }));
-    col()
+    let viewport = col()
+        .key(READER_SCROLL)
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec {
-            stick_bottom: false,
+            stick_bottom: s.reader_following,
         })
-        .child(content)
+        .child(content);
+    // Keep one viewport throughout a reading, but give a newly captured/pasted
+    // source (including an automatic preview) its own fresh top position.
+    col()
+        .key(format!(
+            "reader-session-{}",
+            s.display_snapshot()
+                .map(|snapshot| snapshot.id)
+                .unwrap_or_default()
+        ))
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(viewport)
 }
 fn compose(s: &AppState) -> El {
     let field = text_input(&s.source, TextStyle::new(16.0, 400.0).lh(25.0))
@@ -527,6 +551,7 @@ fn compose(s: &AppState) -> El {
         content = content.child(note(notice));
     }
     col()
+        .key("compose-scroll")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
@@ -557,8 +582,8 @@ fn activity(s: &AppState) -> El {
         Activity::Running { progress, .. } => row().gap(12.0).center_y().child(text(progress).font(type_::BODY).color(GREEN)).child(spacer()).child(action(s, "cancel-request", "Cancel", false, |s, _| s.cancel())),
         Activity::Failed(error) => col().w_full().gap(12.0).padding(14.0).radius(10.0).fill(SURFACE)
             .child(text(error).font(TextStyle::new(14.0, 400.0).lh(21.0)).color(WARNING))
-            .child(row().gap(8.0).child(action(s, "retry-error", "Retry", true, |s, tx| if let Some(p) = s.last.clone() { s.start(p, tx); }))
-                .child(action(s, "error-settings", "Connection settings", false, |s, _| s.route = Route::Settings))),
+            .child(row().gap(8.0).child(action(s, "retry-error", "Retry", true, |s, tx| if let Some(p) = s.last.clone() { s.start_user_request(p, tx); }))
+                .child(action(s, "error-settings", "Connection settings", false, |s, _| { s.stop_reader_follow(); s.route = Route::Settings; }))),
         Activity::Consent(_) => {
             let destination = if s.settings.mode == "Online" { if s.settings.jev_enabled { "Cloudflare for writing, and TypeSafe Jev through Cloudflare for answer checks".to_owned() } else { "Cloudflare for writing".into() } }
                 else { format!("your configured Ollama server at {}{}", s.settings.local_address, if s.settings.same_device { " on this device" } else { " (which may run on another computer)" }) };
@@ -570,13 +595,13 @@ fn activity(s: &AppState) -> El {
         Activity::ChooseChart(_) => section("Choose a source-backed visual")
             .child(paragraph("Bar charts need explicit quantities with matching units. Flow diagrams need relationships stated in the passage."))
             .child(row().gap(8.0)
-                .child(action(s, "choose-bar", "Bar chart", true, |s, tx| if let Activity::ChooseChart(p) = &s.activity { let mut p = p.clone(); p.chart = Some(ChartKind::Bar); s.start(p, tx); }))
-                .child(action(s, "choose-flow", "Flow diagram", false, |s, tx| if let Activity::ChooseChart(p) = &s.activity { let mut p = p.clone(); p.chart = Some(ChartKind::Flow); s.start(p, tx); }))),
+                .child(action(s, "choose-bar", "Bar chart", true, |s, tx| if let Activity::ChooseChart(p) = &s.activity { let mut p = p.clone(); p.chart = Some(ChartKind::Bar); s.start_user_request(p, tx); }))
+                .child(action(s, "choose-flow", "Flow diagram", false, |s, tx| if let Activity::ChooseChart(p) = &s.activity { let mut p = p.clone(); p.chart = Some(ChartKind::Flow); s.start_user_request(p, tx); }))),
         Activity::NeedsContext(_, flags) => section("A little more context may help")
             .child(paragraph(flags.join(", ").replace('_', " ")))
             .child(input("additional-context", "Add surrounding text", &s.context, |s| &mut s.context, false))
-            .child(row().gap(8.0).child(action(s, "retry-context", "Use this context", true, |s, tx| if let Activity::NeedsContext(p, _) = &s.activity { let p = p.clone(); s.start(p, tx); }))
-                .child(action(s, "limited-context", "Explain with limits", false, |s, tx| if let Activity::NeedsContext(p, _) = &s.activity { let mut p = p.clone(); p.limited = true; s.start(p, tx); }))),
+            .child(row().gap(8.0).child(action(s, "retry-context", "Use this context", true, |s, tx| if let Activity::NeedsContext(p, _) = &s.activity { let p = p.clone(); s.start_user_request(p, tx); }))
+                .child(action(s, "limited-context", "Explain with limits", false, |s, tx| if let Activity::NeedsContext(p, _) = &s.activity { let mut p = p.clone(); p.limited = true; s.start_user_request(p, tx); }))),
     }
 }
 fn chart_view(chart: &ValidatedChart) -> El {
@@ -707,6 +732,7 @@ fn settings(s: &AppState) -> El {
                 )
                 .child(spacer())
                 .child(action(s, "back-reader", "Back", false, |s, _| {
+                    s.stop_reader_follow();
                     s.route = Route::Reader
                 })),
         )
@@ -795,7 +821,7 @@ fn settings(s: &AppState) -> El {
             .child(note("Import saved answers and knowledge-base history from the original Mac app. Original files, credentials, and privacy consents are preserved."))
             .child(action(s, "import-legacy", "Import original Pickle history", false, |s, _| s.import_legacy()).disabled(!cfg!(target_os = "macos"))))
         .child(row().gap(8.0).child(action(s, "save-settings", "Save settings", true, |s, _| s.save_settings()))
-            .child(action(s, "open-history", "Knowledge base", false, |s, _| s.route = Route::Library(false)))
+            .child(action(s, "open-history", "Knowledge base", false, |s, _| { s.stop_reader_follow(); s.route = Route::Library(false); }))
             .child(action(s, "pause", if s.paused { "Resume" } else { "Pause" }, false, |s, _| s.toggle_pause())));
     if let Some(notice) = &s.notice {
         content = content.child(note(notice));
@@ -881,6 +907,7 @@ fn update_tools(s: &AppState) -> El {
 }
 fn context_tools(s: &AppState) -> El {
     let mut context = section("Session context")
+        .key("session-context")
         .padding(14.0)
         .radius(10.0)
         .fill(SURFACE);
@@ -897,7 +924,11 @@ fn context_tools(s: &AppState) -> El {
                 "Preview full context"
             },
             false,
-            |s, _| s.context_state.preview_full = !s.context_state.preview_full,
+            |s, tx| {
+                s.stop_reader_follow();
+                s.context_state.preview_full = !s.context_state.preview_full;
+                tx.scroll_key_to("session-context", 0.0);
+            },
         ));
     }
     if let Some(page) = &s.context_state.page {
@@ -990,6 +1021,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
                 )
                 .child(spacer())
                 .child(action(s, "library-back", "Back", false, |s, _| {
+                    s.stop_reader_follow();
                     s.route = Route::Reader
                 })),
         )

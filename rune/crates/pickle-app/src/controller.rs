@@ -12,6 +12,8 @@ use tokio_util::sync::CancellationToken;
 
 pub const SAMPLE: &str = "The treatment may reduce symptoms in some patients, but the evidence remains limited. Larger studies are needed before the findings can be applied more broadly.";
 pub const SAMPLE_ANSWER: &str = "The treatment **might help some people**, but there is not enough evidence yet.\n\nLarger studies are needed to find out how well it works and who could benefit.\n\nThis is a fixed demonstration. Your passage stays on this device.";
+pub const READER_SCROLL: &str = "reader-scroll";
+pub const READER_STATUS: &str = "reader-status";
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Route {
@@ -94,6 +96,7 @@ pub struct AppState {
     pub route: Route,
     pub panel: Panel,
     pub activity: Activity,
+    pub reader_following: bool,
     pub settings: Settings,
     pub source: TextEdit,
     pub question: TextEdit,
@@ -156,6 +159,7 @@ impl Default for AppState {
             route: Route::Reader,
             panel: Panel::Compose,
             activity: Activity::Idle,
+            reader_following: false,
             local_address: TextEdit::new(&settings.local_address),
             local_model: TextEdit::new(&settings.local_model),
             local_connection: crate::local_connection::LocalConnectionState::new(&settings),
@@ -349,6 +353,7 @@ impl AppState {
         self.settings = settings;
     }
     pub fn cancel(&mut self) {
+        self.stop_reader_follow();
         self.cancel_local_connection_test();
         if let Some(services) = &self.services {
             services.invocation_revision.fetch_add(1, Ordering::AcqRel);
@@ -512,7 +517,33 @@ impl AppState {
         if self.reading_busy() {
             return;
         }
-        self.start(Pending::action(action), tx);
+        self.start_user_request(Pending::action(action), tx);
+    }
+    pub fn stop_reader_follow(&mut self) {
+        self.reader_following = false;
+    }
+    /// Only an explicit reading action may rearm the viewport. Internal context
+    /// completion continues through `start` without overriding a user's scroll.
+    pub fn start_user_request(&mut self, pending: Pending, tx: &mut Tx) {
+        if self.reading_busy() {
+            return;
+        }
+        if self.settings_pending {
+            self.start(pending, tx);
+            return;
+        }
+        self.start(pending, tx);
+        if matches!(
+            self.activity,
+            Activity::Running { .. } | Activity::WaitingContext
+        ) || (self.demo && matches!(self.activity, Activity::Idle) && self.result.is_some())
+        {
+            self.reader_following = true;
+            tx.scroll_to_bottom(READER_SCROLL);
+        } else if self.route == Route::Reader && self.panel == Panel::Expanded {
+            self.stop_reader_follow();
+            tx.scroll_into_view(READER_STATUS);
+        }
     }
     pub fn reading_busy(&self) -> bool {
         matches!(
@@ -527,6 +558,7 @@ impl AppState {
         // Invalidate a consent/retry for a deleted turn without recapturing or
         // cancelling the source context retained by this reading.
         self.cancel_request();
+        self.stop_reader_follow();
         self.conversation.clear();
         self.last = self.result.as_ref().map(|result| Pending {
             chart: result.chart.as_ref().map(ValidatedChart::kind),
@@ -579,7 +611,7 @@ impl AppState {
         if question.trim().is_empty() {
             return;
         }
-        self.start(
+        self.start_user_request(
             Pending {
                 question,
                 label,
@@ -793,7 +825,7 @@ impl AppState {
             self.settings.context_consent_destination = self.settings.context_destination();
         }
         self.persist_settings();
-        self.start(pending, tx);
+        self.start_user_request(pending, tx);
     }
     pub fn change_mode(&mut self, mode: &str) {
         if self.settings_pending {

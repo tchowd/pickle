@@ -71,6 +71,7 @@ impl AppState {
             width: b.width,
             height: b.height,
         });
+        self.stop_reader_follow();
         self.auto_preview = Some(AutoPreview {
             capture,
             snapshot,
@@ -332,6 +333,20 @@ mod tests {
         assert_eq!(state.panel, Panel::Expanded);
         assert_eq!(state.display_snapshot().unwrap().id, id);
         assert!(!state.show_auto_capture(capture("A different passage.")));
+    }
+    #[test]
+    fn accepted_automatic_preview_stops_following_after_dismissal() {
+        let mut state = AppState::default();
+        state.sample_result();
+        state.settings.automatic_menu = true;
+        state.reader_following = true;
+        assert!(!state.show_auto_capture(capture("  ")));
+        assert!(state.reader_following);
+        assert!(state.show_auto_capture(capture("A different passage.")));
+        assert!(!state.reader_following);
+        state.dismiss_auto_preview();
+        assert_eq!(state.panel, Panel::Expanded);
+        assert!(!state.reader_following);
     }
     #[test]
     fn chooser_commit_rechecks_policy_and_never_runs_against_old_source() {

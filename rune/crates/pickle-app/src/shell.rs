@@ -117,11 +117,13 @@ pub fn setup(s: &mut AppState, waker: rune::Waker) {
                 }
                 PlatformEvent::Settings => {
                     s.dismiss_auto_preview();
+                    s.stop_reader_follow();
                     s.route = Route::Settings;
                     s.expand(tx, 720.0);
                 }
                 PlatformEvent::History => {
                     s.dismiss_auto_preview();
+                    s.stop_reader_follow();
                     s.route = Route::Library(false);
                     s.expand(tx, 680.0);
                 }

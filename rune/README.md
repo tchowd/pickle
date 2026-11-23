@@ -74,6 +74,10 @@ If initial shortcut registration fails, Settings shows **Retry shortcut** after 
 
 Automatic chooser previews preserve your current reading session until you choose an action. **Pin** keeps the reader on top and suppresses automatic previews. Settings also exposes reading levels, text size, opacity and green-accent intensity. Reader window geometry is stored separately from connection settings and clamped to a current display when restored.
 
+Ask a follow-up with Return, or explain a word or phrase before requesting a full answer. **Clear follow-ups (keep passage)** removes the conversation while retaining the passage, base answer and unsent question. Copy produces readable text rather than Markdown syntax.
+
+New answers come into view as they arrive. Scroll back during an answer to read earlier text without being pulled to the end; returning to the bottom resumes following. A new source starts at the top. Opening the full passage, context preview, Settings or saved answers stops automatic following until you start another request.
+
 ### AI locations
 
 - **Local** calls a configured Ollama server and does not silently fall back to Cloudflare. The default address is `http://127.0.0.1:11434`, with `llama3.2:1b`; install/configure your own model. A server can be on another computer, including behind a loopback SSH tunnel.

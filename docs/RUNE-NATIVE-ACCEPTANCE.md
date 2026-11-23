@@ -307,3 +307,21 @@ Using only the explicitly labeled network-free demonstration:
 5. **New** cleared the generated test session back to the empty reader. Pin remained off. Independently read stored switches confirmed OCR off, original modifier gesture on, automatic chooser off and history off.
 
 No OS Copy, Save, export, inference, browser, OCR, audio or visual-sharing action was submitted. The rebuilt app was left running on its empty reader. This closes these bounded native word/clear/Return checks on this Mac; it does not certify actual OS clipboard output, stored-data restart, VoiceOver/Narrator, Windows 11 interaction, current source capture or the remaining device matrix. Automatic arrival scrolling remains a concrete separate source task.
+
+
+## Native Mac clipboard roundtrip at `2689466`
+
+Starting from the empty reader, the fixed network-free demonstration was simplified, its **Copy** action invoked, and **New** used to open a blank passage input. A real Cmd+V pasted exactly the expected two-paragraph demonstration answer. The generated draft was then selected and cleared, returning to the empty reader. No passage was committed, provider request made, bookmark saved or private clipboard value read during this roundtrip; Copy placed only the generated answer on the OS clipboard.
+
+The live `SampleProvider::ANSWER` at this artifact was already plain text. This verifies the real Mac Copy/paste plumbing and paragraph preservation, not Markdown stripping at the OS boundary. Existing cross-platform Runtime tests separately exercise formatted answers with an in-memory clipboard. The subsequent fixed-demo source now emphasizes **might help some people** while keeping its displayed/copied words unchanged, so a later native check can exercise that formatting boundary as well.
+
+
+## Reader arrival scrolling: source and Runtime verification
+
+The source now follows arriving answers after an explicit reading request, using a stable reader viewport inside a source-session key. The new session key starts a captured, pasted or accepted automatic-preview source at the top. Rune's bottom pin follows later draft/turn growth while the reader stays at the end; manually scrolling away releases it. Draft, completion and asynchronous context callbacks issue no new bottom commands. A new explicit request, consent continuation or retry can resume following.
+
+Full-passage/context disclosures, accepted source previews, Settings/library routes, cancel/close and Clear follow-ups stop following. Rejected previews preserve the existing reading. Source-bound context controls now precede answers; activity/recovery/consent status follows prior answers and precedes the arriving draft, keeping the live end useful. Explicit status reveal remains cancellable by manual scrolling. Missing-key scroll requests are discarded by the pinned Rune Runtime and cannot replay into another route.
+
+Eight focused Runtime regressions cover long draft/final-turn following, actual wheel-away during a focused Return submission through completion/input remount, explicit retry/consent, asynchronous context continuation, source/context disclosures, routes/reset, new-source top placement, and Online + Jev consent visibility at 480×640 without services or continuation. A ninth source-preview regression covers accepted versus rejected previews. The complete local app suite passed **158 tests, zero failed, one ignored**, with formatting and strict all-target app Clippy green. Independent reviews found no concrete remaining blocker.
+
+The active running fixture seed now follows the end, and its headless streaming PNG was visually inspected with the latest draft and fixed header visible. A static Online consent scene represents its initial viewport; the actual explicit-request reveal is checked separately by Runtime tests for Local and minimum-width Online + Jev. No cloud consent was granted or cloud request submitted. Updated native execution and complete two-platform CI are still required for the new source batch.

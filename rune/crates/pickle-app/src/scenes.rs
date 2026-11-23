@@ -127,6 +127,7 @@ fn connection_error(state: &mut AppState) {
 }
 fn running(state: &mut AppState, progress: &str, draft: &str) {
     fixture(state, SAMPLE);
+    state.reader_following = true;
     state.activity = Activity::Running {
         id: 1,
         cancel: CancellationToken::new(),
