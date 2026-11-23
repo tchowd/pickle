@@ -11,7 +11,7 @@ use ::windows::{
     core::PWSTR,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     io::Write,
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
@@ -41,14 +41,14 @@ impl Trace {
         trace
     }
     fn append(&self, error: Option<&'static str>) -> std::io::Result<()> {
-        if std::fs::metadata(&self.path)?.len() > 16000 {
-            return Ok(());
-        }
         let line = if let Some(error) = error {
             format!("mode={} stage={} error={error}\n", self.mode, self.stage)
         } else {
             format!("mode={} stage={}\n", self.mode, self.stage)
         };
+        if std::fs::metadata(&self.path)?.len() + line.len() as u64 > 16 * 1024 {
+            return Ok(());
+        }
         std::fs::OpenOptions::new()
             .append(true)
             .open(&self.path)?
@@ -58,6 +58,56 @@ impl Trace {
         self.mode = mode;
         self.stage = stage;
         self.append(None).unwrap();
+    }
+    fn metadata(&self, stage: &'static str, values: serde_json::Value) {
+        // Only typed scalar diagnostics from this owned provider are retained.
+        // Even an accidental future diagnostic string cannot log source text.
+        let mut safe = serde_json::Map::new();
+        safe.insert("mode".into(), serde_json::json!(self.mode));
+        safe.insert("stage".into(), serde_json::json!(stage));
+        for key in [
+            "observation_index",
+            "capture_count",
+            "accepted",
+            "elapsed_ms",
+            "remaining_ms",
+            "cancelled",
+            "hresult",
+            "nodes",
+            "documents",
+            "last_control_type",
+            "control_type",
+            "custom_variant_type",
+            "custom_variant_bool",
+            "document_reads",
+            "nested_reads",
+            "edit_reads",
+            "link_reads",
+            "url_matches_expected",
+            "pid_matches_source",
+            "window_matches_source",
+            "identity_present",
+            "url_utf8_bytes",
+        ] {
+            if let Some(value) = values
+                .get(key)
+                .filter(|value| value.is_number() || value.is_boolean())
+            {
+                safe.insert(key.into(), value.clone());
+            }
+        }
+        let mut bytes = serde_json::to_vec(&safe).unwrap();
+        assert!(bytes.len() < 4096);
+        bytes.push(b'\n');
+        if std::fs::metadata(&self.path).unwrap().len() + bytes.len() as u64 > 16 * 1024 {
+            return;
+        }
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
     }
 }
 impl Drop for Trace {
@@ -290,10 +340,17 @@ fn compile_provider(directory: &Path) -> PathBuf {
     executable
 }
 
-fn verify(
-    source: CapturedSelection,
-    phase: &'static str,
-) -> Result<(bool, usize, usize), PlatformError> {
+struct ObservationDiagnostic {
+    stage: &'static str,
+    values: serde_json::Value,
+}
+struct Verification {
+    accepted: bool,
+    captures: usize,
+    reads: usize,
+    diagnostics: Vec<ObservationDiagnostic>,
+}
+fn verify(source: CapturedSelection, phase: &'static str) -> Result<Verification, PlatformError> {
     let cancel = CancellationToken::new();
     let worker_cancel = cancel.clone();
     on_document_worker(cancel, move || {
@@ -306,6 +363,7 @@ fn verify(
         }
         let captured = Cell::new(0usize);
         let reads = Cell::new(0usize);
+        let diagnostics = RefCell::new(Vec::new());
         let outcome = verified_capture(
             &source,
             EXPECTED,
@@ -320,7 +378,27 @@ fn verify(
                         command(&source, 2)?;
                     }
                 }
-                reader.observe()
+                let result = reader.observe();
+                let mut values = reader.failure_diagnostics();
+                values["observation_index"] = serde_json::json!(reads.get());
+                values["capture_count"] = serde_json::json!(captured.get());
+                values["accepted"] = serde_json::json!(result.is_ok());
+                if let Ok(observation) = &result {
+                    values["url_matches_expected"] =
+                        serde_json::json!(document_urls_match(EXPECTED, &observation.url));
+                    values["pid_matches_source"] =
+                        serde_json::json!(observation.pid == source.source_pid);
+                    values["window_matches_source"] =
+                        serde_json::json!(Some(observation.window) == source.source_window);
+                    values["identity_present"] =
+                        serde_json::json!(!observation.identity.is_empty());
+                    values["url_utf8_bytes"] = serde_json::json!(observation.url.len());
+                }
+                diagnostics.borrow_mut().push(ObservationDiagnostic {
+                    stage: reader.failure_stage(),
+                    values,
+                });
+                result
             },
             || {
                 captured.set(captured.get() + 1);
@@ -330,7 +408,12 @@ fn verify(
                 Ok(()) // No pixels, capture permissions, OCR or package identity.
             },
         );
-        Ok((outcome.is_ok(), captured.get(), reads.get()))
+        Ok(Verification {
+            accepted: outcome.is_ok(),
+            captures: captured.get(),
+            reads: reads.get(),
+            diagnostics: diagnostics.into_inner(),
+        })
     })
 }
 
@@ -396,10 +479,29 @@ fn owned_native_document_provider() {
             trace.step(trace_mode, "adapter-unavailable");
         }
         let outcome = result.unwrap();
-        trace.step(trace_mode, if outcome.0 { "accepted" } else { "rejected" });
-        assert_eq!(outcome.0, success, "{mode}/{phase}");
-        assert_eq!(outcome.1, captures, "{mode}/{phase}");
-        let counts = fixture.command(3).unwrap();
+        trace.step(
+            trace_mode,
+            if outcome.accepted {
+                "accepted"
+            } else {
+                "rejected"
+            },
+        );
+        for observation in &outcome.diagnostics {
+            trace.metadata(observation.stage, observation.values.clone());
+        }
+        let provider_counts = fixture.command(3);
+        if provider_counts.is_err() {
+            trace.step(trace_mode, "provider-counters-unavailable");
+        }
+        let counts = provider_counts.unwrap();
+        trace.metadata("provider-counters",serde_json::json!({"observation_index":outcome.reads,"capture_count":outcome.captures,"document_reads":counts&0xff,"nested_reads":(counts>>8)&0xff,"edit_reads":(counts>>16)&0xff,"link_reads":(counts>>24)&0xff}));
+        assert_eq!(
+            outcome.accepted, success,
+            "{mode}/{phase}, observations={}, captures={}",
+            outcome.reads, outcome.captures
+        );
+        assert_eq!(outcome.captures, captures, "{mode}/{phase}");
         assert_eq!(
             (counts >> 8) & 0xff,
             0,
@@ -416,7 +518,7 @@ fn owned_native_document_provider() {
                 counts & 0xff >= 3,
                 "Accepted capture needs first,pre,post document Value reads"
             );
-            assert_eq!(outcome.2, 3);
+            assert_eq!(outcome.reads, 3);
         }
         trace.step(trace_mode, "closing");
         fixture.close();

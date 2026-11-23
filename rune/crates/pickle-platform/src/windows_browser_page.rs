@@ -116,6 +116,19 @@ struct DocumentReader {
     first_document: RefCell<Option<IUIAutomationElement>>,
     deadline: Instant,
     cancel: CancellationToken,
+    #[cfg(test)]
+    diagnostic: std::cell::Cell<ReaderDiagnostic>,
+}
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct ReaderDiagnostic {
+    stage: &'static str,
+    hresult: i32,
+    nodes: usize,
+    documents: usize,
+    control_type: i32,
+    variant_type: u16,
+    variant_bool: i16,
 }
 impl DocumentReader {
     fn new(source: &CapturedSelection, cancel: CancellationToken) -> Result<Self, PlatformError> {
@@ -156,16 +169,59 @@ impl DocumentReader {
             first_document: RefCell::new(None),
             deadline,
             cancel,
+            #[cfg(test)]
+            diagnostic: std::cell::Cell::new(ReaderDiagnostic {
+                stage: "constructed",
+                hresult: 0,
+                nodes: 0,
+                documents: 0,
+                control_type: 0,
+                variant_type: 0,
+                variant_bool: 0,
+            }),
         })
+    }
+    fn stage(&self, stage: &'static str) {
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.stage = stage;
+            value
+        });
+        #[cfg(not(test))]
+        let _ = stage;
+    }
+    fn rpc<T>(&self, result: ::windows::core::Result<T>) -> Result<T, PlatformError> {
+        result.map_err(|error| {
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.hresult = error.code().0;
+                value
+            });
+            #[cfg(not(test))]
+            let _ = error;
+            unavailable()
+        })
+    }
+    #[cfg(test)]
+    fn failure_stage(&self) -> &'static str {
+        self.diagnostic.get().stage
+    }
+    #[cfg(test)]
+    fn failure_diagnostics(&self) -> serde_json::Value {
+        let value = self.diagnostic.get();
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        let elapsed = (self.deadline - Duration::from_millis(1800)).elapsed();
+        serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool})
     }
     fn check(&self) -> Result<(), PlatformError> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         if self.cancel.is_cancelled() || remaining.is_zero() {
+            self.stage("budget-or-cancelled");
             return Err(unavailable());
         }
         let millis = remaining.as_millis().clamp(1, 80) as u32;
-        unsafe { self.settings.SetConnectionTimeout(millis) }.map_err(|_| unavailable())?;
-        unsafe { self.settings.SetTransactionTimeout(millis) }.map_err(|_| unavailable())?;
+        self.rpc(unsafe { self.settings.SetConnectionTimeout(millis) })?;
+        self.rpc(unsafe { self.settings.SetTransactionTimeout(millis) })?;
         Ok(())
     }
     fn same(
@@ -174,9 +230,8 @@ impl DocumentReader {
         right: &IUIAutomationElement,
     ) -> Result<bool, PlatformError> {
         self.check()?;
-        unsafe { self.ui.CompareElements(left, right) }
+        self.rpc(unsafe { self.ui.CompareElements(left, right) })
             .map(|same| same.as_bool())
-            .map_err(|_| unavailable())
     }
     fn next(
         &self,
@@ -185,82 +240,107 @@ impl DocumentReader {
         match value {
             Ok(element) => Ok(Some(element)),
             Err(error) if error.code() == HRESULT(0x80004003u32 as i32) => Ok(None),
-            Err(_) => Err(unavailable()),
+            Err(error) => self.rpc(Err(error)),
         }
     }
     fn web_root(&self, element: &IUIAutomationElement) -> Result<bool, PlatformError> {
         self.check()?;
-        let mut value = unsafe { element.GetCurrentPropertyValueEx(self.property, true) }
-            .map_err(|_| unavailable())?;
+        let mut value =
+            self.rpc(unsafe { element.GetCurrentPropertyValueEx(self.property, true) })?;
+        #[cfg(test)]
+        self.diagnostic.update(|mut diagnostic| {
+            diagnostic.variant_type = unsafe { value.Anonymous.Anonymous.vt.0 };
+            diagnostic.variant_bool = if unsafe { value.Anonymous.Anonymous.vt } == VT_BOOL {
+                unsafe { value.Anonymous.Anonymous.Anonymous.boolVal.0 }
+            } else {
+                0
+            };
+            diagnostic
+        });
         let supported = unsafe {
             value.Anonymous.Anonymous.vt == VT_BOOL
                 && value.Anonymous.Anonymous.Anonymous.boolVal == VARIANT_TRUE
         };
-        unsafe { VariantClear(&mut value) }.map_err(|_| unavailable())?;
+        self.rpc(unsafe { VariantClear(&mut value) })?;
         Ok(supported)
     }
     fn observe(&self) -> Result<DocumentObservation, PlatformError> {
+        self.stage("source-owner");
         self.check()?;
         crate::windows_impl::validate_source_window(&self.source)?;
+        self.stage("source-foreground-visible");
         let hwnd = HWND(self.source.source_window.ok_or_else(unavailable)? as *mut _);
         if unsafe { GetForegroundWindow() } != hwnd || !unsafe { IsWindowVisible(hwnd) }.as_bool() {
             return Err(unavailable());
         }
-        let fresh = unsafe { self.ui.ElementFromHandle(hwnd) }.map_err(|_| unavailable())?;
+        self.stage("root-from-handle");
+        let fresh = self.rpc(unsafe { self.ui.ElementFromHandle(hwnd) })?;
+        self.stage("root-identity");
         if !self.same(&self.root, &fresh)? {
             return Err(unavailable());
         }
         self.check()?;
-        if unsafe { fresh.CurrentProcessId() }.map_err(|_| unavailable())? as u32
-            != self.source.source_pid
-        {
+        self.stage("root-pid");
+        if self.rpc(unsafe { fresh.CurrentProcessId() })? as u32 != self.source.source_pid {
             return Err(unavailable());
         }
         // A secure focused field is refused without reading any field value.
         self.check()?;
-        let mut focused = unsafe { self.ui.GetFocusedElement() }.map_err(|_| unavailable())?;
+        self.stage("focused-element");
+        let mut focused = self.rpc(unsafe { self.ui.GetFocusedElement() })?;
         let mut reached = false;
         for _ in 0..16 {
             self.check()?;
-            if unsafe { focused.CurrentIsPassword() }
-                .map_err(|_| unavailable())?
-                .as_bool()
-            {
+            self.stage("focus-password");
+            if self.rpc(unsafe { focused.CurrentIsPassword() })?.as_bool() {
                 return Err(unavailable());
             }
+            self.stage("focus-root-identity");
             if self.same(&focused, &fresh)? {
                 reached = true;
                 break;
             }
             self.check()?;
-            focused =
-                unsafe { self.walker.GetParentElement(&focused) }.map_err(|_| unavailable())?;
+            self.stage("focus-parent");
+            focused = self.rpc(unsafe { self.walker.GetParentElement(&focused) })?;
         }
         if !reached {
+            self.stage("focus-ancestry-limit");
             return Err(unavailable());
         }
         let mut queue = VecDeque::from([(fresh, 0usize)]);
         let mut count = 1usize;
         let mut documents = Vec::new();
         while let Some((node, depth)) = queue.pop_front() {
+            self.stage("traversal-limit");
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.nodes = count;
+                value.documents = documents.len();
+                value
+            });
             if depth > 12 || count > 192 {
                 return Err(unavailable());
             }
             self.check()?;
-            if unsafe { node.CurrentProcessId() }.map_err(|_| unavailable())? as u32
-                != self.source.source_pid
-            {
+            self.stage("traversal-pid");
+            if self.rpc(unsafe { node.CurrentProcessId() })? as u32 != self.source.source_pid {
                 return Err(unavailable());
             }
             self.check()?;
-            let control = unsafe { node.CurrentControlType() }.map_err(|_| unavailable())?;
+            self.stage("traversal-control-type");
+            let control = self.rpc(unsafe { node.CurrentControlType() })?;
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.control_type = control.0;
+                value
+            });
             if control == UIA_DocumentControlTypeId {
+                self.stage("document-custom-web-root");
                 if self.web_root(&node)? {
                     self.check()?;
-                    if !unsafe { node.CurrentIsOffscreen() }
-                        .map_err(|_| unavailable())?
-                        .as_bool()
-                    {
+                    self.stage("document-visible");
+                    if !self.rpc(unsafe { node.CurrentIsOffscreen() })?.as_bool() {
                         documents.push(node);
                     }
                 }
@@ -270,6 +350,7 @@ impl DocumentReader {
                 continue;
             }
             self.check()?;
+            self.stage("traversal-first-child");
             let mut child = self.next(unsafe { self.walker.GetFirstChildElement(&node) })?;
             while let Some(element) = child {
                 count += 1;
@@ -277,15 +358,23 @@ impl DocumentReader {
                     return Err(unavailable());
                 }
                 self.check()?;
+                self.stage("traversal-next-sibling");
                 child = self.next(unsafe { self.walker.GetNextSiblingElement(&element) })?;
                 queue.push_back((element, depth + 1));
             }
         }
+        self.stage("document-count");
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.documents = documents.len();
+            value
+        });
         if documents.len() != 1 {
             return Err(unavailable());
         }
         let document = documents.pop().ok_or_else(unavailable)?;
         {
+            self.stage("document-identity");
             let baseline = self.first_document.borrow();
             if let Some(first) = baseline.as_ref()
                 && !self.same(first, &document)?
@@ -294,14 +383,16 @@ impl DocumentReader {
             }
         }
         self.check()?;
+        self.stage("document-value-pattern");
         // Chromium exposes document URL through ValuePattern; generic Value on
         // an Edit/Hyperlink instead denotes user text or a link target.
         // ui/accessibility/platform/ax_platform_node_delegate_utils_win.cc
         let pattern: IUIAutomationValuePattern =
-            unsafe { document.GetCurrentPatternAs(UIA_ValuePatternId) }
-                .map_err(|_| unavailable())?;
+            self.rpc(unsafe { document.GetCurrentPatternAs(UIA_ValuePatternId) })?;
         self.check()?;
-        let value = unsafe { pattern.CurrentValue() }.map_err(|_| unavailable())?;
+        self.stage("document-value-read");
+        let value = self.rpc(unsafe { pattern.CurrentValue() })?;
+        self.stage("document-url-bound");
         if value.len() > 4096 {
             return Err(unavailable());
         }
@@ -314,6 +405,7 @@ impl DocumentReader {
         if first_observation {
             *self.first_document.borrow_mut() = Some(document);
         }
+        self.stage("observation-complete");
         // CompareElements above owns the real opaque identity comparison. This
         // token is merely local to this retained reader, never a tab identifier.
         Ok(DocumentObservation {
