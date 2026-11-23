@@ -313,9 +313,134 @@ fn reader<'a>(ui: &IUIAutomation, source: &'a CapturedSelection) -> NativeSelect
         deadline: Instant::now() + Duration::from_secs(2),
     }
 }
+// The HWND host provider may contribute non-client children (for example a
+// TitleBar) before this fixture's fragment. Inspect only this parent's bounded
+// direct sibling list; never search arbitrary descendants or the desktop.
+fn raw_neighbor(
+    walker: &IUIAutomationTreeWalker,
+    node: &IUIAutomationElement,
+    first: bool,
+) -> ::windows::core::Result<Option<IUIAutomationElement>> {
+    let vtable = Interface::vtable(walker);
+    let mut pointer = std::ptr::null_mut();
+    let status = unsafe {
+        if first {
+            (vtable.GetFirstChildElement)(
+                Interface::as_raw(walker),
+                Interface::as_raw(node),
+                &mut pointer,
+            )
+        } else {
+            (vtable.GetNextSiblingElement)(
+                Interface::as_raw(walker),
+                Interface::as_raw(node),
+                &mut pointer,
+            )
+        }
+    };
+    // Preserve S_OK + NULL as the normal end; retain every real HRESULT error.
+    let element = if pointer.is_null() {
+        None
+    } else {
+        Some(unsafe { IUIAutomationElement::from_raw(pointer) })
+    };
+    status.ok()?;
+    Ok(element)
+}
+fn direct_owned_child(
+    reader: &NativeSelectionReader<'_>,
+    parent: &IUIAutomationElement,
+    expected: &'static str,
+    role: &'static str,
+    window_index: u8,
+    log: &Path,
+) -> IUIAutomationElement {
+    const LIMIT: usize = 32;
+    let mut visited = 0usize;
+    let mut matches = 0usize;
+    let mut controls = Vec::new();
+    let mut pid_matches = None;
+    let mut zero_hwnd = None;
+    let mut parent_matches = None;
+    let found = (|| -> Result<IUIAutomationElement, &'static str> {
+        let mut next = reader
+            .rpc(|| raw_neighbor(&reader.walker, parent, true))
+            .map_err(|_| "first-child-unavailable")?;
+        let mut candidate = None;
+        while let Some(node) = next {
+            if visited == LIMIT {
+                return Err("direct-sibling-limit");
+            }
+            visited += 1;
+            controls.push(
+                reader
+                    .rpc(|| unsafe { node.CurrentControlType() })
+                    .map_err(|_| "control-type-unavailable")?
+                    .0,
+            );
+            let id = reader
+                .rpc(|| unsafe { node.CurrentAutomationId() })
+                .map_err(|_| "automation-id-unavailable")?;
+            if id == expected {
+                matches += 1;
+                if matches != 1 {
+                    return Err("ambiguous-owned-child");
+                }
+                pid_matches = Some(
+                    reader
+                        .rpc(|| unsafe { node.CurrentProcessId() })
+                        .map_err(|_| "pid-unavailable")? as u32
+                        == reader.source.source_pid,
+                );
+                if pid_matches != Some(true) {
+                    return Err("child-pid-mismatch");
+                }
+                zero_hwnd = Some(
+                    reader
+                        .rpc(|| unsafe { node.CurrentNativeWindowHandle() })
+                        .map_err(|_| "native-hwnd-unavailable")?
+                        .0
+                        .is_null(),
+                );
+                if zero_hwnd != Some(true) {
+                    return Err("expected-virtual-child-has-hwnd");
+                }
+                let actual_parent = reader
+                    .rpc(|| unsafe { reader.walker.GetParentElement(&node) })
+                    .map_err(|_| "raw-parent-unavailable")?;
+                parent_matches = Some(
+                    reader
+                        .rpc(|| unsafe { reader.ui.CompareElements(&actual_parent, parent) })
+                        .map_err(|_| "raw-parent-comparison-unavailable")?
+                        .as_bool(),
+                );
+                if parent_matches != Some(true) {
+                    return Err("raw-parent-identity-mismatch");
+                }
+                candidate = Some(node.clone());
+            }
+            next = reader
+                .rpc(|| raw_neighbor(&reader.walker, &node, false))
+                .map_err(|_| "next-sibling-unavailable")?;
+        }
+        candidate.ok_or("expected-owned-child-missing")
+    })();
+    trace(
+        log,
+        "direct-child-discovery",
+        serde_json::json!({"window_index":window_index,"role":role,
+        "visited":visited,"expected_id_matches":matches,"control_types":controls,
+        "candidate_pid_matches_source":pid_matches,"candidate_native_hwnd_zero":zero_hwnd,
+        "raw_parent_identity_matches":parent_matches,"found":found.is_ok(),
+        "failure_stage":found.as_ref().err().copied()}),
+    );
+    found.unwrap_or_else(|stage| panic!("Owned direct-child discovery failed ({stage})"))
+}
 fn leaf(
     reader: &NativeSelectionReader<'_>,
     window: HWND,
+    window_index: u8,
+    log: &Path,
 ) -> (IUIAutomationElement, IUIAutomationElement) {
     let root = reader
         .rpc(|| unsafe { reader.ui.ElementFromHandle(window) })
@@ -336,41 +461,14 @@ fn leaf(
         reader.rpc(|| unsafe { root.CurrentProcessId() }).unwrap() as u32,
         reader.source.source_pid
     );
-    let layout = reader
-        .rpc(|| unsafe { reader.walker.GetFirstChildElement(&root) })
-        .unwrap();
-    assert_eq!(
-        reader
-            .rpc(|| unsafe { layout.CurrentAutomationId() })
-            .unwrap(),
-        "owned-origin-2"
-    );
-    assert_eq!(
-        reader
-            .rpc(|| unsafe { layout.CurrentNativeWindowHandle() })
-            .unwrap()
-            .0,
-        std::ptr::null_mut()
-    );
-    let leaf = reader
-        .rpc(|| unsafe { reader.walker.GetFirstChildElement(&layout) })
-        .unwrap();
-    assert_eq!(
-        reader
-            .rpc(|| unsafe { leaf.CurrentAutomationId() })
-            .unwrap(),
-        "owned-origin-3"
-    );
-    assert_eq!(
-        reader
-            .rpc(|| unsafe { leaf.CurrentNativeWindowHandle() })
-            .unwrap()
-            .0,
-        std::ptr::null_mut()
-    );
-    assert_eq!(
-        reader.rpc(|| unsafe { leaf.CurrentProcessId() }).unwrap() as u32,
-        reader.source.source_pid
+    let layout = direct_owned_child(reader, &root, "owned-origin-2", "layout", window_index, log);
+    let leaf = direct_owned_child(
+        reader,
+        &layout,
+        "owned-origin-3",
+        "selection",
+        window_index,
+        log,
     );
     (root, leaf)
 }
@@ -391,8 +489,8 @@ fn native_checks(source: &CapturedSelection, window_b: u64, log: &Path) -> serde
     let b = HWND(window_b as *mut _);
     let pid = source.source_pid;
     let preflight = reader(&ui, source);
-    let (root_a, leaf_a) = leaf(&preflight, a);
-    let (root_b, leaf_b) = leaf(&preflight, b);
+    let (root_a, leaf_a) = leaf(&preflight, a, 1, log);
+    let (root_b, leaf_b) = leaf(&preflight, b, 2, log);
     assert!(
         !preflight
             .rpc(|| unsafe { ui.CompareElements(&root_a, &root_b) })
