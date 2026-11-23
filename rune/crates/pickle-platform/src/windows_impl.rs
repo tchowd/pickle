@@ -3,7 +3,7 @@
 use super::*;
 use std::{
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use windows::{
     Win32::{
@@ -217,6 +217,7 @@ pub fn capture_selection(exclusions: &[String]) -> Result<CapturedSelection, Pla
         ));
     }
     let excluded = exclusions.to_vec();
+    let deadline = Instant::now() + Duration::from_secs(2);
     let hwnd = foreground.0 as usize;
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let worker = std::thread::Builder::new()
@@ -229,7 +230,8 @@ pub fn capture_selection(exclusions: &[String]) -> Result<CapturedSelection, Pla
                 }
             }
             let _active = CaptureGuard;
-            let result = unsafe { capture_on_worker(HWND(hwnd as *mut _), pid, &excluded) };
+            let result =
+                unsafe { capture_on_worker(HWND(hwnd as *mut _), pid, &excluded, deadline) };
             let _ = sender.send(result);
         });
     if worker.is_err() {
@@ -239,13 +241,14 @@ pub fn capture_selection(exclusions: &[String]) -> Result<CapturedSelection, Pla
         ));
     }
     receiver
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .map_err(|_| error("The source did not answer in time. Try again or paste the passage."))?
 }
 unsafe fn capture_on_worker(
     hwnd: HWND,
     pid: u32,
     exclusions: &[String],
+    deadline: Instant,
 ) -> Result<CapturedSelection, PlatformError> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED)
@@ -278,77 +281,210 @@ unsafe fn capture_on_worker(
         let automation: IUIAutomation =
             CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
                 .map_err(|_| error("Windows UI Automation is unavailable."))?;
-        if let Ok(settings) = automation.cast::<IUIAutomation2>() {
-            let _ = settings.SetConnectionTimeout(500);
-            let _ = settings.SetTransactionTimeout(500);
-        }
-        let focused = automation.GetFocusedElement().map_err(|_| {
-            error("The source does not expose a focused selection. Paste the passage.")
-        })?;
-        if focused.CurrentProcessId().unwrap_or(0) as u32 != pid {
-            return Err(error(
-                "Focus changed during capture. Select the passage again.",
-            ));
-        }
+        let settings = automation
+            .cast::<IUIAutomation2>()
+            .map_err(|_| error("Bounded selection capture is unavailable. Paste the passage."))?;
         let walker = automation
             .RawViewWalker()
             .map_err(|_| error("Could not inspect source protection."))?;
-        let mut ancestor = focused.clone();
-        for _ in 0..12 {
-            if ancestor
-                .CurrentIsPassword()
-                .map_err(|_| error("Could not determine whether this content is protected."))?
-                .as_bool()
-            {
-                return Err(error(
-                    "Pickle does not capture password or protected fields.",
-                ));
-            }
-            match walker.GetParentElement(&ancestor) {
-                Ok(parent) => ancestor = parent,
-                Err(_) => break,
-            }
-        }
-        let pattern:IUIAutomationTextPattern=focused.GetCurrentPatternAs(UIA_TextPatternId).map_err(|_|error("This app does not expose selected text. Use the browser extension or paste the passage."))?;
-        let selected = pattern
-            .GetSelection()
-            .map_err(|_| error("The selection could not be read. Paste the passage."))?;
-        let count = selected
-            .Length()
-            .map_err(|_| error("The selected text is unavailable."))?;
-        if count != 1 {
-            return Err(error("Select one continuous passage, or paste the text."));
-        }
-        let range = selected
-            .GetElement(0)
-            .map_err(|_| error("The selection could not be read."))?;
-        let text = range
-            .GetText(12_001)
-            .map_err(|_| error("The selected text could not be read."))?
-            .to_string();
-        if GetForegroundWindow() != hwnd || focused.CurrentProcessId().unwrap_or(0) as u32 != pid {
-            return Err(error(
-                "The source changed during capture. Select the passage again.",
-            ));
-        }
         let app_name = std::path::Path::new(&executable)
             .file_stem()
             .map(|v| v.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Application".into());
-        validate_selection(
-            CapturedSelection {
-                text,
-                app_name,
-                app_id,
-                bounds: None,
-                source_url: None,
-                source_pid: pid,
-                source_window: Some(hwnd.0 as u64),
-            },
-            exclusions,
-        )
+        let mut source = CapturedSelection {
+            text: String::new(),
+            app_name,
+            app_id,
+            bounds: None,
+            source_url: None,
+            source_pid: pid,
+            source_window: Some(hwnd.0 as u64),
+        };
+        let mut reader = NativeSelectionReader {
+            ui: automation,
+            settings,
+            walker,
+            source: &source,
+            hwnd,
+            deadline,
+        };
+        let text = read_bound_selection(&mut reader)?;
+        source.text = text;
+        validate_selection(source, exclusions)
     }
 }
+
+const SELECTION_ANCESTRY_LIMIT: usize = 16;
+fn selection_request_ms(deadline: Instant, now: Instant) -> Result<u32, PlatformError> {
+    if now >= deadline {
+        return Err(error(
+            "The source did not answer in time. Try again or paste the passage.",
+        ));
+    }
+    Ok(deadline
+        .saturating_duration_since(now)
+        .as_millis()
+        .clamp(1, 500) as u32)
+}
+fn origin_error() -> PlatformError {
+    error(
+        "The selected control could not be bound to the source window. Select the passage again or paste it.",
+    )
+}
+/// Shared production ordering, with a small injectable native boundary for
+/// guard tests. No Name, Value, document text, or HWND on virtual descendants
+/// is required to prove raw ancestry to the retained source-window root.
+trait SelectionReader {
+    type Node: Clone;
+    fn validate_source(&mut self) -> Result<(), PlatformError>;
+    fn root(&mut self) -> Result<Self::Node, PlatformError>;
+    fn focused(&mut self) -> Result<Self::Node, PlatformError>;
+    fn same(&mut self, left: &Self::Node, right: &Self::Node) -> Result<bool, PlatformError>;
+    fn password(&mut self, node: &Self::Node) -> Result<bool, PlatformError>;
+    fn parent(&mut self, node: &Self::Node) -> Result<Self::Node, PlatformError>;
+    fn selected_text(&mut self, node: &Self::Node) -> Result<String, PlatformError>;
+}
+fn prove_selection_root<R: SelectionReader>(
+    reader: &mut R,
+    root: &R::Node,
+    focused: &R::Node,
+) -> Result<(), PlatformError> {
+    let mut ancestor = focused.clone();
+    for index in 0..SELECTION_ANCESTRY_LIMIT {
+        // Password checks include the focused control and exact window root.
+        if reader.password(&ancestor)? {
+            return Err(error(
+                "Pickle does not capture password or protected fields.",
+            ));
+        }
+        if reader.same(&ancestor, root)? {
+            return Ok(());
+        }
+        if index + 1 == SELECTION_ANCESTRY_LIMIT {
+            break;
+        }
+        // An error/null end before reaching this root is a refusal, never an
+        // excuse to proceed. Cycles also fail at the bounded depth limit.
+        ancestor = reader.parent(&ancestor)?;
+    }
+    Err(origin_error())
+}
+fn read_bound_selection<R: SelectionReader>(reader: &mut R) -> Result<String, PlatformError> {
+    reader.validate_source()?;
+    let root = reader.root()?;
+    let focused = reader.focused()?;
+    prove_selection_root(reader, &root, &focused)?;
+    // No TextPattern/GetSelection/GetText request occurs before the proof.
+    let text = reader.selected_text(&focused)?;
+    reader.validate_source()?;
+    let fresh_root = reader.root()?;
+    let fresh_focused = reader.focused()?;
+    if !reader.same(&root, &fresh_root)? || !reader.same(&focused, &fresh_focused)? {
+        return Err(origin_error());
+    }
+    prove_selection_root(reader, &fresh_root, &fresh_focused)?;
+    reader.validate_source()?;
+    Ok(text)
+}
+struct NativeSelectionReader<'a> {
+    ui: IUIAutomation,
+    settings: IUIAutomation2,
+    walker: IUIAutomationTreeWalker,
+    source: &'a CapturedSelection,
+    hwnd: HWND,
+    deadline: Instant,
+}
+impl NativeSelectionReader<'_> {
+    fn check(&self) -> Result<(), PlatformError> {
+        if Instant::now() >= self.deadline {
+            return Err(error(
+                "The source did not answer in time. Try again or paste the passage.",
+            ));
+        }
+        let mut pid = 0;
+        unsafe {
+            GetWindowThreadProcessId(self.hwnd, Some(&mut pid));
+        }
+        if pid == 0
+            || pid != self.source.source_pid
+            || unsafe { GetForegroundWindow() } != self.hwnd
+        {
+            return Err(origin_error());
+        }
+        Ok(())
+    }
+    fn remaining_request_ms(&self) -> Result<u32, PlatformError> {
+        self.check()?;
+        selection_request_ms(self.deadline, Instant::now())
+    }
+    fn rpc<T>(
+        &self,
+        work: impl FnOnce() -> ::windows::core::Result<T>,
+    ) -> Result<T, PlatformError> {
+        unsafe {
+            self.settings
+                .SetConnectionTimeout(self.remaining_request_ms()?)
+        }
+        .map_err(|_| origin_error())?;
+        unsafe {
+            self.settings
+                .SetTransactionTimeout(self.remaining_request_ms()?)
+        }
+        .map_err(|_| origin_error())?;
+        self.check()?;
+        let result = work().map_err(|_| origin_error())?;
+        self.check()?;
+        Ok(result)
+    }
+}
+impl SelectionReader for NativeSelectionReader<'_> {
+    type Node = IUIAutomationElement;
+    fn validate_source(&mut self) -> Result<(), PlatformError> {
+        self.check()?;
+        validate_source_window(self.source)?;
+        self.check()
+    }
+    fn root(&mut self) -> Result<Self::Node, PlatformError> {
+        let root = self.rpc(|| unsafe { self.ui.ElementFromHandle(self.hwnd) })?;
+        if self.rpc(|| unsafe { root.CurrentProcessId() })? as u32 != self.source.source_pid {
+            return Err(origin_error());
+        }
+        Ok(root)
+    }
+    fn focused(&mut self) -> Result<Self::Node, PlatformError> {
+        let focused = self.rpc(|| unsafe { self.ui.GetFocusedElement() })?;
+        if self.rpc(|| unsafe { focused.CurrentProcessId() })? as u32 != self.source.source_pid {
+            return Err(origin_error());
+        }
+        Ok(focused)
+    }
+    fn same(&mut self, left: &Self::Node, right: &Self::Node) -> Result<bool, PlatformError> {
+        self.rpc(|| unsafe { self.ui.CompareElements(left, right) })
+            .map(|same| same.as_bool())
+    }
+    fn password(&mut self, node: &Self::Node) -> Result<bool, PlatformError> {
+        self.rpc(|| unsafe { node.CurrentIsPassword() })
+            .map(|password| password.as_bool())
+    }
+    fn parent(&mut self, node: &Self::Node) -> Result<Self::Node, PlatformError> {
+        self.rpc(|| unsafe { self.walker.GetParentElement(node) })
+    }
+    fn selected_text(&mut self, node: &Self::Node) -> Result<String, PlatformError> {
+        let pattern: IUIAutomationTextPattern =
+            self.rpc(|| unsafe { node.GetCurrentPatternAs(UIA_TextPatternId) })?;
+        let selected = self.rpc(|| unsafe { pattern.GetSelection() })?;
+        if self.rpc(|| unsafe { selected.Length() })? != 1 {
+            return Err(error("Select one continuous passage, or paste the text."));
+        }
+        let range = self.rpc(|| unsafe { selected.GetElement(0) })?;
+        self.rpc(|| unsafe { range.GetText(12_001) })
+            .map(|text| text.to_string())
+    }
+}
+
+#[cfg(test)]
+#[path = "windows_selection_origin_tests.rs"]
+mod selection_origin_tests;
 
 pub(super) fn validate_source_window(source: &CapturedSelection) -> Result<(), PlatformError> {
     let hwnd = HWND(
