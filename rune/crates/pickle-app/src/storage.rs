@@ -79,14 +79,34 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn credential_account(&self) -> String {
-        if self.mode == "Online" {
-            "cloudflare".into()
+        Self::credential_account_for(&self.mode, &self.local_address, &self.account_id)
+    }
+    pub fn credential_account_for(mode: &str, local_address: &str, account_id: &str) -> String {
+        if mode == "Online" {
+            // Never fall back to the old shared `cloudflare` vault item: it has
+            // no verified account binding and must not be reused or deleted.
+            format!("cloudflare:{}", account_id.trim().to_ascii_lowercase())
         } else {
-            format!("local-server:{}", self.local_address.trim())
+            format!("local-server:{}", local_address.trim())
         }
     }
     pub fn destination(&self) -> String {
         format!("{}|{}", self.local_address.trim(), self.same_device)
+    }
+    pub fn reset_consent_for_recipient_change(&mut self, previous: &Self) {
+        if self.destination() != previous.destination() {
+            self.local_consent.clear();
+            self.context_consent_destination.clear();
+        }
+        if !self
+            .account_id
+            .trim()
+            .eq_ignore_ascii_case(previous.account_id.trim())
+        {
+            self.cloud_consent = false;
+            self.jev_consent = false;
+            self.context_consent_destination.clear();
+        }
     }
     pub fn context_destination(&self) -> String {
         if self.mode == "Online" {
@@ -462,5 +482,50 @@ mod tests {
             }
             .destination()
         );
+    }
+
+    #[test]
+    fn online_credentials_are_account_scoped_without_a_legacy_global_fallback() {
+        let mut settings = Settings {
+            mode: "Online".into(),
+            account_id: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            ..Settings::default()
+        };
+        let first = settings.credential_account();
+        assert_eq!(first, "cloudflare:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        settings.account_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+        assert_ne!(settings.credential_account(), first);
+        assert_ne!(settings.credential_account(), "cloudflare");
+    }
+
+    #[test]
+    fn consent_is_invalidated_when_its_account_or_local_destination_changes() {
+        let previous = Settings {
+            mode: "Online".into(),
+            account_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            cloud_consent: true,
+            jev_consent: true,
+            context_consent_destination: "already-granted-context".into(),
+            ..Settings::default()
+        };
+        let mut next = previous.clone();
+        next.account_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+        next.reset_consent_for_recipient_change(&previous);
+        assert!(!next.cloud_consent && !next.jev_consent);
+        assert!(next.context_consent_destination.is_empty());
+        let mut local = Settings {
+            local_consent: "already-granted-local".into(),
+            context_consent_destination: "already-granted-context".into(),
+            ..Settings::default()
+        };
+        let old_local = local.clone();
+        local.local_address = "https://another-server.example".into();
+        local.reset_consent_for_recipient_change(&old_local);
+        assert!(local.local_consent.is_empty());
+        assert!(local.context_consent_destination.is_empty());
+        let mut equivalent = previous.clone();
+        equivalent.account_id.make_ascii_uppercase();
+        equivalent.reset_consent_for_recipient_change(&previous);
+        assert!(equivalent.cloud_consent && equivalent.jev_consent);
     }
 }

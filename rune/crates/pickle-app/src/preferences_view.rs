@@ -21,6 +21,9 @@ fn heading(label: &str) -> El {
 }
 fn note(label: &str) -> El {
     text(label)
+        .wrap()
+        .w_full()
+        .shrink()
         .font(TextStyle::new(12.0, 400.0).lh(18.0))
         .color(MUTED)
 }

@@ -9,11 +9,13 @@ mod diagnostics;
 mod geometry_store;
 mod instance;
 mod invocation_ui;
+mod local_connection;
 mod maintenance;
 mod migration;
 mod preferences_view;
 #[cfg(test)]
 mod review_tests;
+mod scenes;
 mod shell;
 mod storage;
 #[cfg(test)]
@@ -22,12 +24,12 @@ mod update;
 mod update_ui;
 mod views;
 
-use controller::{AppState, Panel, Route, Services};
+use controller::{AppState, Panel, Services};
 use rune::{App, AppSpec, Key, KeyEvent, MacWindowOptions, Tx, WindowOptions};
 use std::sync::Arc;
 
 fn main() {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let arguments = scenes::normalize_arguments(std::env::args().skip(1).collect());
     if arguments.iter().any(|arg| arg == "--verify-windows-ocr") {
         if arguments.len() != 1 {
             eprintln!("The fixed OCR probe cannot be combined with other options.");
@@ -67,9 +69,7 @@ fn main() {
     }
     let sample = arguments.iter().any(|arg| arg == "--sample");
     let background = arguments.iter().any(|arg| arg == "--background");
-    let headless = arguments
-        .iter()
-        .any(|arg| ["--snap", "--tree", "--script", "--video"].contains(&arg.as_str()));
+    let headless = scenes::isolated_startup(&arguments);
     let mut instance = if headless {
         None
     } else {
@@ -134,28 +134,15 @@ fn main() {
     if !headless && let Err(error) = initial.settings.configure_transcriber() {
         startup_error = Some(error);
     }
-    initial.services = Some(services.clone());
+    if !headless {
+        initial.services = Some(services.clone());
+    }
     initial.notice = startup_error;
     if sample {
         initial.sample();
     }
-    type Scene = (&'static str, fn(&mut AppState));
-    let scenes: &'static [Scene] = &[
-        ("sample", AppState::sample_result),
-        ("choosing", AppState::sample),
-        ("settings", |s| s.route = Route::Settings),
-        ("history", |s| s.route = Route::Library(false)),
-        ("error", |s| {
-            s.sample();
-            s.panel = Panel::Expanded;
-            s.activity = controller::Activity::Failed(
-                "Can’t reach the Local server. Check that it’s awake and connected, then retry."
-                    .into(),
-            );
-        }),
-    ];
     let spec = AppSpec {
-        scenes,
+        scenes: scenes::SCENES,
         setup: Some(shell::setup),
         on_key: Some(on_key),
         min_size: Some((480.0, 180.0)),

@@ -119,6 +119,13 @@ Section "Pickle Rune"
   Call EnsureNotRunning
   ClearErrors
   SetOutPath "$INSTDIR"
+  !ifndef PICKLE_HAS_IDENTITY
+    ${If} ${FileExists} "$INSTDIR\PickleIdentity.json"
+    ${OrIf} ${FileExists} "$INSTDIR\PickleIdentity.msix"
+    ${OrIf} ${FileExists} "$INSTDIR\identity-registration.ps1"
+      !insertmacro Fail "This directory contains an identity-bearing Pickle installation. Uninstall it with its existing uninstaller before installing an ordinary distribution. Repair with the original identity installer first if necessary." 1
+    ${EndIf}
+  !endif
   !ifdef PICKLE_HAS_IDENTITY
     StrCpy $0 1
     ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\identity-registration.ps1" -Action Check -InstallDirectory "$INSTDIR" -MetadataPath "$PLUGINSDIR\PickleIdentity.json"' $0
@@ -131,17 +138,23 @@ Section "Pickle Rune"
   ${If} ${Errors}
     !insertmacro Fail "Application files could not all be copied. Check storage and close running copies, then rerun this installer to repair the installation. User data was not removed." 1
   ${EndIf}
+  ; Keep an explicit cleanup path even when certificate trust or identity registration fails.
+  ; Shortcuts and the installed-app entry are committed only after successful registration.
+  ClearErrors
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  ${If} ${Errors}
+    !insertmacro Fail "A recovery uninstaller could not be created. Rerun this installer into the same directory to repair the payload before removing it." 1
+  ${EndIf}
   !ifdef PICKLE_HAS_IDENTITY
     StrCpy $0 1
     ClearErrors
     ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\identity-registration.ps1" -Action Register -InstallDirectory "$INSTDIR"' $0
     ${If} ${Errors}
     ${OrIf} $0 != 0
-      !insertmacro Fail "Windows could not register Pickle's signed identity. Verify certificate trust and Windows 11 support, then rerun this installer to repair. This installer never changes certificate trust." 1
+      !insertmacro Fail "Windows could not register Pickle's signed identity. Verify certificate trust and Windows 11 support, then rerun this installer to repair, or run the retained Uninstall.exe in the installation folder to remove the copied files. This installer never changes certificate trust." 1
     ${EndIf}
   !endif
   ClearErrors
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateDirectory "$SMPROGRAMS\Pickle Rune"
   CreateShortcut "$SMPROGRAMS\Pickle Rune\Pickle Rune.lnk" "$INSTDIR\PickleRune.exe" "" "$INSTDIR\Pickle.ico"
   ${If} ${Errors}
@@ -192,7 +205,6 @@ retry_browser_cleanup:
     ${EndIf}
   ${EndIf}
   ; Only known installed files. Unknown files, user history and credentials are retained.
-  !insertmacro DeleteOwnedFile "PickleRune.exe"
   !insertmacro DeleteOwnedFile "pickle-browser-host.exe"
   !insertmacro DeleteOwnedFile "Pickle.ico"
   !insertmacro DeleteOwnedFile "THIRD-PARTY-NOTICES.md"
@@ -210,6 +222,9 @@ retry_browser_cleanup:
   !insertmacro DeleteOwnedFile "browser-extension\Readability.js"
   !insertmacro DeleteOwnedFile "browser-extension\Readability-LICENSE.md"
   !insertmacro DeleteOwnedFile "browser-extension\README.md"
+  ; Every retry needs this executable for the lease probe and exact browser cleanup.
+  ; A locked auxiliary file must not strand a partial uninstall without its recovery command.
+  !insertmacro DeleteOwnedFile "PickleRune.exe"
   RMDir "$INSTDIR\browser-extension"
   ; An older installation must not remove a newer installation's registry entry or shortcut.
   ReadRegStr $2 HKCU "${UNINSTALL_KEY}" "InstallLocation"

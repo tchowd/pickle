@@ -76,7 +76,8 @@ pub struct CapturedPage {
 }
 mod transcription;
 pub use transcription::{
-    LocalTranscriberConfig, configure_local_transcriber, local_transcriber_config, transcribe_wav,
+    LocalTranscriberConfig, PreparedLocalTranscriber, configure_local_transcriber,
+    install_local_transcriber, local_transcriber_config, prepare_local_transcriber, transcribe_wav,
 };
 
 #[cfg(target_os = "windows")]

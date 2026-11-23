@@ -97,6 +97,9 @@ impl AppState {
         });
     }
     pub fn reveal_update(&mut self) {
+        if !self.native_enabled {
+            return;
+        }
         if let UpdateState::Ready(path) = &self.update_state
             && let Err(error) = crate::browser_setup::reveal(path)
         {

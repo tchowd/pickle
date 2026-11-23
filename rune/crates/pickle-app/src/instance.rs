@@ -527,11 +527,15 @@ mod tests {
         let absent = root.path().join("not-created");
         assert!(!is_running(&absent).unwrap());
         assert!(!absent.exists());
+        // Windows byte-range locks are mandatory, so another handle cannot
+        // read the lease bytes while the primary owns it. Seed the invariant
+        // before acquisition and inspect it after release on every platform.
+        let lock_before = b"pre-existing lease contents";
+        fs::write(root.path().join(LOCK_FILE), lock_before).unwrap();
         let mut guard = primary(root.path());
         let events = guard.take_receiver().unwrap();
         assert!(is_running(root.path()).unwrap());
         assert!(events.try_recv().is_err());
-        let lock_before = fs::read(root.path().join(LOCK_FILE)).unwrap();
         drop(guard);
         assert!(!is_running(root.path()).unwrap());
         assert_eq!(fs::read(root.path().join(LOCK_FILE)).unwrap(), lock_before);

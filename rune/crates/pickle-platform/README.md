@@ -183,6 +183,12 @@ on Windows until configuration succeeds; capability checks do not stat files in 
 view/frame loop. The engine validates again before recording, so removed files fail
 without capturing audio.
 
+Persistent settings transactions should call `prepare_local_transcriber` before
+writing settings, then pass the opaque prepared value to
+`install_local_transcriber` only after the write succeeds. Installation changes only
+the in-memory cache and is infallible: it does not recheck files after a successful
+disk commit. Recording still validates files immediately before using them.
+
 No engine or model is downloaded automatically. The chosen executable is trusted by
 the user and receives recorded audio. Pickle invokes it directly, never through a
 shell, using `-m MODEL -f - -nt -np -l LANGUAGE`. whisper.cpp supports WAV on stdin.

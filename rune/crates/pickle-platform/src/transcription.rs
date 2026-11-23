@@ -87,20 +87,40 @@ fn configuration() -> &'static RwLock<Option<LocalTranscriberConfig>> {
     static VALUE: OnceLock<RwLock<Option<LocalTranscriberConfig>>> = OnceLock::new();
     VALUE.get_or_init(|| RwLock::new(None))
 }
-pub fn configure_local_transcriber(
+/// Validated settings staged before a caller commits its persistent transaction.
+/// Opaque ownership prevents callers from substituting an unvalidated value.
+pub struct PreparedLocalTranscriber(Option<LocalTranscriberConfig>);
+
+pub fn prepare_local_transcriber(
     value: Option<LocalTranscriberConfig>,
-) -> Result<(), PlatformError> {
+) -> Result<PreparedLocalTranscriber, PlatformError> {
     if let Some(value) = &value {
         value.validate()?;
     }
+    Ok(PreparedLocalTranscriber(value))
+}
+
+/// Install an already prepared value after persistence succeeds. This performs
+/// no file I/O or revalidation and cannot make a successful disk commit fail.
+/// Real recording still revalidates engine/model files before capturing audio.
+pub fn install_local_transcriber(value: PreparedLocalTranscriber) {
     *configuration()
         .write()
-        .map_err(|_| error("Transcription settings are unavailable."))? = value;
+        .unwrap_or_else(|poison| poison.into_inner()) = value.0;
+}
+
+pub fn configure_local_transcriber(
+    value: Option<LocalTranscriberConfig>,
+) -> Result<(), PlatformError> {
+    install_local_transcriber(prepare_local_transcriber(value)?);
     Ok(())
 }
 /// Returns cached, explicitly configured settings; no file I/O in a Rune view.
 pub fn local_transcriber_config() -> Option<LocalTranscriberConfig> {
-    configuration().read().ok().and_then(|value| value.clone())
+    configuration()
+        .read()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
 }
 
 #[cfg(any(target_os = "windows", test))]

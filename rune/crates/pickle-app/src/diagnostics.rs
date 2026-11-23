@@ -171,6 +171,12 @@ impl AppState {
     }
 
     pub fn export_diagnostics(&mut self, tx: &mut Tx) {
+        if !self.native_enabled {
+            self.diagnostics.status = Status::Failed(
+                "Export is available in the running desktop application. No report was written.",
+            );
+            return;
+        }
         if self.diagnostics.status.busy() {
             return;
         }
@@ -535,6 +541,9 @@ mod tests {
         runtime.update(|s, tx| s.export_diagnostics(tx));
         assert!(runtime.file_dialog().is_none());
         runtime.update(|s, _| s.review_diagnostics());
+        // Runtime's scripted dialog simulates the native capability boundary;
+        // no OS presenter, services, vault, or filesystem writer is constructed.
+        runtime.update(|s, _| s.native_enabled = true);
         let reviewed = runtime.state.diagnostics.report.as_ref().unwrap().json();
         runtime.update(|s, tx| s.export_diagnostics(tx));
         assert_eq!(runtime.file_dialog().unwrap().0, rune::FileDialogKind::Save);
@@ -566,5 +575,36 @@ mod tests {
         state.diagnostics_destination(state.diagnostics.attempt, report, Ok(Some(path.clone())));
         assert!(matches!(state.diagnostics.status, Status::Failed(_)));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn complete_reviewed_json_remains_accessible_beneath_the_preview_label() {
+        let mut runtime = Runtime::new(
+            AppState::default(),
+            |s, _| crate::views::diagnostics_tools(s),
+            (560.0, 1000.0),
+            Env::new(true, 1.0),
+        );
+        runtime.update(|state, _| state.review_diagnostics());
+        runtime.frame(0.0);
+        let reviewed = runtime.state.diagnostics.report.as_ref().unwrap().json();
+        let tree = runtime.accessibility_json();
+        fn contains(value: &serde_json::Value, text: &str) -> bool {
+            match value {
+                serde_json::Value::String(value) => value.contains(text),
+                serde_json::Value::Array(values) => {
+                    values.iter().any(|value| contains(value, text))
+                }
+                serde_json::Value::Object(values) => {
+                    values.values().any(|value| contains(value, text))
+                }
+                _ => false,
+            }
+        }
+        assert!(contains(&tree, "Complete diagnostics report preview"));
+        assert!(
+            contains(&tree, reviewed.trim_end()),
+            "The report's full JSON must remain accessible: {tree:#}"
+        );
     }
 }

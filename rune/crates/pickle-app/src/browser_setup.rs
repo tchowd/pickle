@@ -41,6 +41,11 @@ fn packaged_paths() -> Result<(PathBuf, PathBuf, PathBuf), String> {
 }
 impl AppState {
     pub fn disconnect_browser(&mut self, edge: bool) {
+        if !self.native_enabled {
+            self.notice =
+                Some("Browser integration is available in the running desktop application.".into());
+            return;
+        }
         let id = self.extension_id.text.trim().to_owned();
         let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
             return;
@@ -71,6 +76,13 @@ impl AppState {
         });
     }
     pub fn reveal_extension(&mut self) {
+        if !self.native_enabled {
+            self.notice = Some(
+                "Opening the extension folder is available in the running desktop application."
+                    .into(),
+            );
+            return;
+        }
         let outcome = packaged_paths().and_then(|(_, _, directory)| {
             if !directory.join("manifest.json").is_file() {
                 return Err(
@@ -84,6 +96,11 @@ impl AppState {
         }
     }
     pub fn connect_browser(&mut self, edge: bool) {
+        if !self.native_enabled {
+            self.notice =
+                Some("Browser integration is available in the running desktop application.".into());
+            return;
+        }
         let id = self.extension_id.text.trim().to_owned();
         if id.len() != 32 || !id.bytes().all(|byte| (b'a'..=b'p').contains(&byte)) {
             self.notice = Some(

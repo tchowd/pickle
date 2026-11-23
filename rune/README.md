@@ -120,7 +120,7 @@ cargo run --locked -p pickle-app -- --scene choosing --snap artifacts/chooser.pn
 cargo run --locked -p pickle-app -- --scene settings --snap artifacts/settings.png
 ```
 
-Other scenes include `history` and `error`. Rendering tests need a supported graphics adapter/backend even though they do not open a native window. CPU-only state/layout tests and local HTTP fixtures are distinct from actual OS capture, focus, permissions, and screen-reader tests.
+Seventeen isolated scenes include `chart-bar`, `chart-flow`, `streaming`, `reviewing`, `repairing`, `consent-local`, `consent-online`, `permission-denied`, `history-empty`, `history-damaged`, and `error`. `scripts/check.sh` renders seven representative states. Fixture startup never loads archives, acquires the normal instance lease, or supplies live provider/vault services; native permission, export and reveal actions are guarded. Rendering still needs a supported graphics adapter/backend. State/layout tests and local HTTP fixtures are distinct from actual OS capture, focus, permissions, and screen-reader tests.
 
 ```sh
 cargo run --locked -p pickle-app -- --capabilities
@@ -128,6 +128,8 @@ cargo run --locked -p pickle-app -- --permissions
 ```
 
 These report native capability/permission state without requesting access or making inference requests. Capabilities may depend on the configured local transcription engine in a running application.
+
+On the development Mac, the shell-launched permission probe and the separately launched GUI reported different values after a grant. For native GUI acceptance, use Settings → Support diagnostics in the actual running app and verify the capture workflow. A permission boolean alone does not prove capture or OCR works. See the [native acceptance record](../docs/RUNE-NATIVE-ACCEPTANCE.md).
 
 The original Swift checks remain available independently from the repository root with `swift run PickleChecks`.
 

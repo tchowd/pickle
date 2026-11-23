@@ -100,6 +100,7 @@ pub struct AppState {
     pub context: TextEdit,
     pub local_address: TextEdit,
     pub local_model: TextEdit,
+    pub local_connection: crate::local_connection::LocalConnectionState,
     pub account_id: TextEdit,
     pub local_vision_model: TextEdit,
     pub transcriber_executable: TextEdit,
@@ -108,6 +109,8 @@ pub struct AppState {
     pub exclusions: TextEdit,
     pub cloud_model: TextEdit,
     pub credential: TextEdit,
+    pub credential_recipient: Option<String>,
+    pub credential_operation: Option<(uuid::Uuid, String)>,
     pub search: TextEdit,
     pub snapshot: Option<SelectionSnapshot>,
     pub result: Option<ReadingResult>,
@@ -153,9 +156,12 @@ impl Default for AppState {
             activity: Activity::Idle,
             local_address: TextEdit::new(&settings.local_address),
             local_model: TextEdit::new(&settings.local_model),
+            local_connection: crate::local_connection::LocalConnectionState::new(&settings),
             account_id: TextEdit::new(""),
             cloud_model: TextEdit::new(&settings.cloud_model),
             credential: TextEdit::new(""),
+            credential_recipient: None,
+            credential_operation: None,
             search: TextEdit::new(""),
             local_vision_model: TextEdit::new(""),
             transcriber_executable: TextEdit::new(""),
@@ -322,6 +328,10 @@ impl AppState {
     }
 
     pub fn load_settings(&mut self, settings: Settings) {
+        if settings.credential_account() != self.settings.credential_account() {
+            self.clear_draft_credential();
+        }
+        self.local_connection.record_saved(&settings);
         self.shortcut = TextEdit::new(&settings.shortcut);
         self.local_address = TextEdit::new(&settings.local_address);
         self.local_model = TextEdit::new(&settings.local_model);
@@ -335,6 +345,7 @@ impl AppState {
         self.settings = settings;
     }
     pub fn cancel(&mut self) {
+        self.cancel_local_connection_test();
         if let Some(services) = &self.services {
             services.invocation_revision.fetch_add(1, Ordering::AcqRel);
         }
@@ -689,6 +700,9 @@ impl AppState {
             return;
         }
         self.cancel();
+        if self.settings.mode != mode {
+            self.clear_draft_credential();
+        }
         self.settings.mode = mode.into();
         self.persist_settings();
     }
@@ -729,8 +743,11 @@ impl AppState {
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
             .collect();
-        if draft.destination() != self.settings.destination() {
-            draft.local_consent.clear();
+        draft.reset_consent_for_recipient_change(&self.settings);
+        // A rejected draft must not leave a masked key apparently associated
+        // with a different visible endpoint/account.
+        if draft.credential_account() != self.settings.credential_account() {
+            self.clear_draft_credential();
         }
         if let Err(error) = draft.validate() {
             self.notice = Some(error);
@@ -799,13 +816,7 @@ impl AppState {
             if worker.settings_revision.load(Ordering::Acquire) != version {
                 return;
             }
-            let outcome = settings.transcriber_config().and_then(|config| {
-                if let Some(config) = &config {
-                    config.validate().map_err(|e| e.to_string())?;
-                }
-                repo.save_settings(&settings)?;
-                pickle_platform::configure_local_transcriber(config).map_err(|e| e.to_string())
-            });
+            let outcome = save_settings_transaction(&repo, &settings);
             let outcome_services = worker.clone();
             handle.update(move |s, _| {
                 if outcome_services.settings_revision.load(Ordering::Acquire) != version {
@@ -819,9 +830,10 @@ impl AppState {
                 }
                 match outcome {
                     Ok(()) => {
+                        s.local_connection.record_saved(&settings);
                         if commit && s.settings == previous {
                             s.cancel();
-                            s.settings = settings;
+                            s.apply_saved_settings(settings);
                         }
                         if let Ok(mut exclusions) = outcome_services.exclusions.lock() {
                             *exclusions = s.settings.exclusions.clone();
@@ -842,6 +854,88 @@ impl AppState {
             });
         });
     }
+    fn visible_credential_account(&self) -> String {
+        Settings::credential_account_for(
+            &self.settings.mode,
+            self.local_address.text.trim(),
+            self.account_id.text.trim(),
+        )
+    }
+    pub fn edit_credential(&mut self) -> &mut TextEdit {
+        let recipient = self.visible_credential_account();
+        if self.credential_recipient.as_ref() != Some(&recipient) {
+            self.credential.clear();
+        }
+        self.credential_recipient = Some(recipient);
+        &mut self.credential
+    }
+    fn clear_draft_credential(&mut self) {
+        self.credential.clear();
+        self.credential_recipient = None;
+    }
+    fn apply_saved_settings(&mut self, mut settings: Settings) {
+        settings.reset_consent_for_recipient_change(&self.settings);
+        if settings.credential_account() != self.settings.credential_account() {
+            self.clear_draft_credential();
+        }
+        self.settings = settings;
+    }
+    fn saved_credential_account(&self) -> std::result::Result<String, &'static str> {
+        if self.credential_busy() {
+            return Err("Wait for the current system credential operation to finish.");
+        }
+        if self.settings_pending {
+            return Err(
+                "Wait for the connection settings to finish saving before changing its credential.",
+            );
+        }
+        let account = self.settings.credential_account();
+        if account != self.visible_credential_account() {
+            return Err("Save your connection settings before changing its credential.");
+        }
+        if self.settings.mode == "Online"
+            && (self.settings.account_id.trim().len() != 32
+                || !self
+                    .settings
+                    .account_id
+                    .trim()
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err("Save a valid Cloudflare account ID before using its credential.");
+        }
+        Ok(account)
+    }
+    pub fn credential_busy(&self) -> bool {
+        self.credential_operation.is_some()
+    }
+    fn begin_credential_operation(
+        &mut self,
+        recipient: &str,
+    ) -> std::result::Result<uuid::Uuid, &'static str> {
+        if self.credential_busy() {
+            return Err("Wait for the current system credential operation to finish.");
+        }
+        let id = uuid::Uuid::new_v4();
+        self.credential_operation = Some((id, recipient.to_owned()));
+        Ok(id)
+    }
+    fn finish_credential_operation(&mut self, id: uuid::Uuid, recipient: &str) -> bool {
+        if !self
+            .credential_operation
+            .as_ref()
+            .is_some_and(|(current, target)| *current == id && target == recipient)
+        {
+            return false;
+        }
+        self.credential_operation = None;
+        let current = self.settings.credential_account() == recipient
+            && self.visible_credential_account() == recipient;
+        if current {
+            self.cancel_local_connection_test();
+        }
+        current
+    }
     pub fn save_credential(&mut self, remove: bool) {
         if self.settings_pending {
             self.notice = Some(
@@ -850,21 +944,36 @@ impl AppState {
             );
             return;
         }
-        if (self.settings.mode == "Local"
-            && self.settings.local_address != self.local_address.text.trim())
-            || (self.settings.mode == "Online"
-                && self.settings.account_id != self.account_id.text.trim())
-        {
+        let account = match self.saved_credential_account() {
+            Ok(account) => account,
+            Err(message) => {
+                self.notice = Some(message.into());
+                return;
+            }
+        };
+        if !remove && self.credential_recipient.as_ref() != Some(&account) {
+            self.clear_draft_credential();
             self.notice =
-                Some("Save your connection settings before changing its credential.".into());
+                Some("Re-enter the access key for this saved connection before saving it.".into());
             return;
         }
+        if !remove && self.credential.text.is_empty() {
+            self.notice = Some("Enter an access key, or choose Remove saved credential.".into());
+            return;
+        }
+        self.cancel_local_connection_test();
         let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
             return;
         };
-        let account = self.settings.credential_account();
+        let operation = match self.begin_credential_operation(&account) {
+            Ok(operation) => operation,
+            Err(message) => {
+                self.notice = Some(message.into());
+                return;
+            }
+        };
         let secret = self.credential.text.clone();
-        self.credential.clear();
+        self.clear_draft_credential();
         services.runtime.spawn_blocking(move || {
             let result = if remove {
                 pickle_platform::credential_remove(&account)
@@ -872,6 +981,9 @@ impl AppState {
                 pickle_platform::credential_set(&account, &secret)
             };
             handle.update(move |s, _| {
+                if !s.finish_credential_operation(operation, &account) {
+                    return;
+                }
                 s.notice = Some(
                     result
                         .map(|_| {
@@ -888,14 +1000,31 @@ impl AppState {
         });
     }
     pub fn authorize_credential(&mut self) {
+        let account = match self.saved_credential_account() {
+            Ok(account) => account,
+            Err(message) => {
+                self.notice = Some(message.into());
+                return;
+            }
+        };
+        self.cancel_local_connection_test();
         let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
             return;
         };
-        let account = self.settings.credential_account();
+        let operation = match self.begin_credential_operation(&account) {
+            Ok(operation) => operation,
+            Err(message) => {
+                self.notice = Some(message.into());
+                return;
+            }
+        };
         services.runtime.spawn_blocking(move || {
             let result =
                 pickle_platform::credential_get(&account, true).map(|token| token.is_some());
             handle.update(move |s, _| {
+                if !s.finish_credential_operation(operation, &account) {
+                    return;
+                }
                 s.notice = Some(match result {
                     Ok(true) => "Saved credential authorized by the system.".into(),
                     Ok(false) => "No credential is saved for this connection.".into(),
@@ -1015,6 +1144,28 @@ impl AppState {
         });
     }
 }
+fn save_settings_transaction(
+    repo: &Repository,
+    settings: &Settings,
+) -> std::result::Result<(), String> {
+    let prepared = pickle_platform::prepare_local_transcriber(settings.transcriber_config()?)
+        .map_err(|error| error.to_string())?;
+    commit_prepared_settings(repo, settings, prepared)
+}
+
+fn commit_prepared_settings(
+    repo: &Repository,
+    settings: &Settings,
+    transcriber: pickle_platform::PreparedLocalTranscriber,
+) -> std::result::Result<(), String> {
+    // Preparing does not mutate the native cache. A failed atomic write leaves
+    // both active destinations intact; after success installation is infallible
+    // and does not revalidate files that could disappear during disk I/O.
+    repo.save_settings(settings)?;
+    pickle_platform::install_local_transcriber(transcriber);
+    Ok(())
+}
+
 pub(crate) fn should_record_result(
     result: &ReadingResult,
     record_at_start: bool,
@@ -1155,5 +1306,339 @@ mod geometry_tests {
         assert_eq!(state.panel, Panel::Expanded);
         assert_eq!(state.window_geometry, Some(frame()));
         assert!(state.geometry_close_prepared);
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    const ACCOUNT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const ACCOUNT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn online() -> AppState {
+        AppState {
+            settings: Settings {
+                mode: "Online".into(),
+                account_id: ACCOUNT_A.into(),
+                cloud_consent: true,
+                jev_consent: true,
+                ..Settings::default()
+            },
+            account_id: TextEdit::new(ACCOUNT_A),
+            ..AppState::default()
+        }
+    }
+    fn type_key(state: &mut AppState) {
+        *state.edit_credential() = TextEdit::new("private-fixture-access-key");
+    }
+
+    #[test]
+    fn cloud_token_draft_cannot_be_reused_after_switching_to_a_local_recipient() {
+        let mut state = online();
+        type_key(&mut state);
+        assert_eq!(
+            state.credential_recipient,
+            Some(format!("cloudflare:{ACCOUNT_A}"))
+        );
+        state.change_mode("Local");
+        assert!(state.credential.text.is_empty());
+        assert!(state.credential_recipient.is_none());
+        state.save_credential(false);
+        assert!(state.notice.as_deref().unwrap().contains("Re-enter"));
+        assert!(state.services.is_none());
+    }
+
+    #[test]
+    fn endpoint_drafts_bind_new_input_and_clear_old_input_on_rejected_save() {
+        let mut state = AppState::default();
+        type_key(&mut state);
+        state.local_address = TextEdit::new("http://untrusted.example");
+        state.save_credential(false);
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Save your connection")
+        );
+        let previous = state.settings.clone();
+        state.save_settings();
+        assert_eq!(state.settings, previous);
+        assert!(!state.settings_pending);
+        assert!(state.credential.text.is_empty());
+        assert!(state.credential_recipient.is_none());
+        *state.edit_credential() = TextEdit::new("new-recipient-fixture-key");
+        assert_eq!(
+            state.credential_recipient,
+            Some("local-server:http://untrusted.example".into())
+        );
+        assert!(!state.credential.text.contains("private-fixture"));
+    }
+
+    #[test]
+    fn a_successful_staged_recipient_change_clears_draft_and_prior_cloud_consents() {
+        let mut state = online();
+        type_key(&mut state);
+        state.settings.context_consent_destination = state.settings.context_destination();
+        let mut committed = state.settings.clone();
+        committed.account_id = ACCOUNT_B.into();
+        state.apply_saved_settings(committed);
+        assert_eq!(
+            state.settings.credential_account(),
+            format!("cloudflare:{ACCOUNT_B}")
+        );
+        assert!(!state.settings.cloud_consent);
+        assert!(!state.settings.jev_consent);
+        assert!(state.settings.context_consent_destination.is_empty());
+        assert!(state.credential.text.is_empty());
+        assert!(state.credential_recipient.is_none());
+        state.account_id = TextEdit::new(ACCOUNT_B);
+        state.snapshot = Some(SelectionSnapshot::new(
+            "A private passage.",
+            "Fixture",
+            "fixture",
+        ));
+        let mut runtime = rune::Runtime::new(
+            state,
+            crate::views::view,
+            (560.0, 720.0),
+            rune::Env::new(true, 1.0),
+        );
+        runtime.update(|state, tx| state.run_action(ReadingAction::Simplify, tx));
+        assert!(matches!(runtime.state.activity, Activity::Consent(_)));
+        assert!(runtime.state.services.is_none());
+    }
+
+    #[test]
+    fn pending_or_unsaved_recipients_cannot_authorize_or_remove_another_key() {
+        let mut state = online();
+        state.account_id = TextEdit::new(ACCOUNT_B);
+        state.authorize_credential();
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Save your connection")
+        );
+        state.save_credential(true);
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Save your connection")
+        );
+        state.account_id = TextEdit::new(ACCOUNT_A);
+        state.settings_pending = true;
+        state.authorize_credential();
+        assert!(state.notice.as_deref().unwrap().contains("finish saving"));
+        assert!(state.services.is_none());
+    }
+
+    #[test]
+    fn programmatically_unbound_keys_fail_before_services_or_vault_access() {
+        let mut state = online();
+        state.credential = TextEdit::new("unbound-fixture-key");
+        state.save_credential(false);
+        assert!(state.credential.text.is_empty());
+        assert!(state.notice.as_deref().unwrap().contains("Re-enter"));
+        assert!(state.services.is_none());
+        state.account_id.clear();
+        state.settings.account_id.clear();
+        state.authorize_credential();
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("valid Cloudflare account")
+        );
+    }
+
+    #[test]
+    fn unchanged_recipient_preferences_retain_bound_input_and_granted_consent() {
+        let mut state = online();
+        type_key(&mut state);
+        let mut committed = state.settings.clone();
+        committed.text_size = 20.0;
+        state.apply_saved_settings(committed);
+        assert!(state.settings.cloud_consent && state.settings.jev_consent);
+        assert!(!state.credential.text.is_empty());
+        assert_eq!(
+            state.saved_credential_account().unwrap(),
+            format!("cloudflare:{ACCOUNT_A}")
+        );
+    }
+
+    #[test]
+    fn settings_transaction_does_not_revalidate_after_commit_or_mutate_on_failure() {
+        use fs2::FileExt;
+        let directory = tempfile::tempdir().unwrap();
+        let repo = Arc::new(Repository::new(directory.path().join("store")).unwrap());
+        let executable = directory.path().join(if cfg!(windows) {
+            "whisper-cli.exe"
+        } else {
+            "whisper-cli"
+        });
+        let model = directory.path().join("fixture-model.bin");
+        std::fs::write(&executable, b"fixture executable").unwrap();
+        std::fs::write(&model, b"fixture model").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let next = Settings {
+            local_address: "https://new-recipient.example".into(),
+            transcriber_executable: executable.to_string_lossy().into_owned(),
+            transcriber_model: model.to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        let prepared =
+            pickle_platform::prepare_local_transcriber(next.transcriber_config().unwrap()).unwrap();
+        let reset = pickle_platform::prepare_local_transcriber(None).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(repo.directory().join("store.lock"))
+            .unwrap();
+        FileExt::lock_exclusive(&lock).unwrap();
+        let worker_repo = repo.clone();
+        let worker_settings = next.clone();
+        let worker = std::thread::spawn(move || {
+            commit_prepared_settings(&worker_repo, &worker_settings, prepared)
+        });
+        // Files disappear after preparation while another writer holds the
+        // same transaction lock. Installation must not fail after disk commit.
+        std::fs::remove_file(&executable).unwrap();
+        std::fs::remove_file(&model).unwrap();
+        drop(lock);
+        worker.join().unwrap().unwrap();
+        assert_eq!(repo.settings().unwrap(), next);
+        assert_eq!(
+            pickle_platform::local_transcriber_config().unwrap().model,
+            model
+        );
+        pickle_platform::install_local_transcriber(reset);
+
+        // An archive rejection leaves the native cache and active endpoint
+        // untouched; no rollback can itself fail by revalidating old files.
+        std::fs::write(repo.directory().join("settings.json"), b"damaged archive").unwrap();
+        std::fs::write(&executable, b"fixture executable").unwrap();
+        std::fs::write(&model, b"fixture model").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let candidate = Settings {
+            local_address: "https://rejected-recipient.example".into(),
+            ..next
+        };
+        assert!(save_settings_transaction(&repo, &candidate).is_err());
+        assert_eq!(
+            std::fs::read(repo.directory().join("settings.json")).unwrap(),
+            b"damaged archive"
+        );
+        assert!(pickle_platform::local_transcriber_config().is_none());
+    }
+
+    #[test]
+    fn vault_mutations_and_authorization_are_serialized_before_any_native_call() {
+        let mut state = online();
+        type_key(&mut state);
+        let recipient = state.saved_credential_account().unwrap();
+        let first = state.begin_credential_operation(&recipient).unwrap();
+        for remove in [false, true] {
+            state.save_credential(remove);
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .contains("current system credential operation")
+            );
+            assert_eq!(state.credential_operation, Some((first, recipient.clone())));
+        }
+        state.authorize_credential();
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("current system credential operation")
+        );
+        assert!(state.begin_credential_operation(&recipient).is_err());
+        assert!(!state.finish_credential_operation(uuid::Uuid::new_v4(), &recipient));
+        assert!(state.credential_busy());
+        assert!(state.finish_credential_operation(first, &recipient));
+        let remove = state.begin_credential_operation(&recipient).unwrap();
+        assert_ne!(remove, first);
+        assert!(!state.finish_credential_operation(first, &recipient));
+        assert_eq!(
+            state.credential_operation,
+            Some((remove, recipient.clone()))
+        );
+        assert!(state.finish_credential_operation(remove, &recipient));
+        assert!(!state.credential_busy());
+        assert!(state.services.is_none());
+    }
+
+    #[test]
+    fn old_recipient_completion_unblocks_operations_without_claiming_new_target_success() {
+        let mut state = online();
+        let recipient = state.saved_credential_account().unwrap();
+        let first = state.begin_credential_operation(&recipient).unwrap();
+        state.change_mode("Local");
+        assert!(state.credential_busy());
+        assert!(!state.finish_credential_operation(first, &recipient));
+        assert!(!state.credential_busy());
+        assert!(
+            state
+                .begin_credential_operation(&state.settings.credential_account())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn credential_buttons_expose_busy_disabled_state_to_accessibility() {
+        let mut state = online();
+        state.route = Route::Settings;
+        let recipient = state.saved_credential_account().unwrap();
+        state.begin_credential_operation(&recipient).unwrap();
+        let mut runtime = rune::Runtime::new(
+            state,
+            crate::views::view,
+            (560.0, 720.0),
+            rune::Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        fn find<'a>(node: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+            if node["key"] == key {
+                return Some(node);
+            }
+            node["children"]
+                .as_array()?
+                .iter()
+                .find_map(|child| find(child, key))
+        }
+        let tree = runtime.accessibility_json();
+        for key in [
+            "save-credential",
+            "remove-credential",
+            "authorize-credential",
+        ] {
+            let node = find(&tree, key).unwrap_or_else(|| panic!("Missing {key}"));
+            assert!(
+                node["states"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|state| state == "disabled")
+            );
+        }
     }
 }

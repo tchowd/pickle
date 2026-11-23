@@ -95,11 +95,15 @@ fn accent(s: &AppState) -> Color {
 }
 fn note(value: impl Into<String>) -> El {
     text(value)
+        .wrap()
+        .shrink()
         .font(TextStyle::new(12.0, 400.0).lh(18.0))
         .color(MUTED)
 }
 fn paragraph(value: impl Into<String>) -> El {
     text(value)
+        .wrap()
+        .shrink()
         .font(TextStyle::new(15.0, 400.0).lh(23.0))
         .color(INK)
 }
@@ -162,7 +166,6 @@ pub fn view(s: &AppState, _: &mut Cx<AppState>) -> El {
         .w_full()
         .h_full()
         .min_h(0.0)
-        .system_material(rune::SystemMaterial::Popover)
         .fill(PAPER.alpha(s.settings.background_opacity))
         .radius(16.0)
         .border(1.0, HAIR);
@@ -213,7 +216,16 @@ pub fn view(s: &AppState, _: &mut Cx<AppState>) -> El {
         Route::Settings => settings(s),
         Route::Library(bookmark) => library(s, bookmark),
     });
-    root
+    // A native system material replaces its own fill. Paint the adjustable tint
+    // on a separate content child so it remains present above the native view.
+    col()
+        .key("pickle-material")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .radius(16.0)
+        .system_material(rune::SystemMaterial::Popover)
+        .child(root)
 }
 fn reader(s: &AppState) -> El {
     if s.panel == Panel::Compose {
@@ -236,6 +248,9 @@ fn reader(s: &AppState) -> El {
             .collect()
     })
     .font(TextStyle::new(14.0, 400.0).lh(21.0))
+    .wrap()
+    .w_full()
+    .shrink()
     .color(INK)
     .selectable(true);
     if !s.source_expanded {
@@ -344,6 +359,21 @@ fn reader(s: &AppState) -> El {
             }
             if let Some(label) = result.quality.visible_label() {
                 content = content.child(note(label));
+            }
+            if !s.demo {
+                let model = pickle_core::bounded_utf8(&result.model, 160);
+                let model = if model.is_empty() {
+                    "Unreported"
+                } else {
+                    model
+                };
+                let timing = if result.elapsed.is_finite() && result.elapsed >= 0.0 {
+                    format!(" · {:.1}s total", result.elapsed)
+                } else {
+                    String::new()
+                };
+                content = content
+                    .child(note(format!("Answer model: {model}{timing}")).key("answer-provenance"));
             }
             for (i, turn) in s.conversation.iter().enumerate() {
                 content = content.child(
@@ -637,6 +667,8 @@ fn settings(s: &AppState) -> El {
         content.child(section("Local connection")
             .child(input("local-address", "Ollama server address", &s.local_address, |s| &mut s.local_address, false))
             .child(input("local-model", "Downloaded model", &s.local_model, |s| &mut s.local_model, false))
+            .child(crate::local_connection::controls(s))
+            .child(note("Review factual claims against the passage. Local prose does not receive the optional answer checks."))
             .child(input("local-vision-model", "Downloaded vision model (optional)", &s.local_vision_model, |s| &mut s.local_vision_model, false))
             .child(toggle(s, "same-device", "This server runs on this device", s.settings.same_device, |s, _| { s.cancel(); s.settings.same_device = !s.settings.same_device; s.settings.local_consent.clear(); }))
             .child(note("A loopback SSH tunnel can lead to another computer. Enable this only for inference actually running on this device.")))
@@ -648,10 +680,11 @@ fn settings(s: &AppState) -> El {
             .child(note("Jev sends the source and candidate answer to TypeSafe through Cloudflare. Checks are model judgments, not fact verification.")))
     };
     content = content.child(section("Credentials")
-        .child(input("credential", if s.settings.mode == "Online" { "Cloudflare API token" } else { "Local server access key (if required)" }, &s.credential, |s| &mut s.credential, true))
-        .child(row().gap(8.0).child(action(s, "save-credential", "Save credential", false, |s, _| s.save_credential(false)))
-            .child(action(s, "remove-credential", "Remove saved credential", false, |s, _| s.save_credential(true))))
-        .child(action(s, "authorize-credential", "Authorize saved credential…", false, |s, _| s.authorize_credential())))
+        .child(input("credential", if s.settings.mode == "Online" { "Cloudflare API token" } else { "Local server access key (if required)" }, &s.credential, |s| s.edit_credential(), true))
+        .child(row().gap(8.0).child(action(s, "save-credential", "Save credential", false, |s, _| s.save_credential(false)).disabled(s.credential_busy()))
+            .child(action(s, "remove-credential", "Remove saved credential", false, |s, _| s.save_credential(true)).disabled(s.credential_busy())))
+        .child(action(s, "authorize-credential", "Authorize saved credential…", false, |s, _| s.authorize_credential()).disabled(s.credential_busy()))
+        .child(note(if s.credential_busy() { "Waiting for the system credential operation to finish…" } else { "Keys belong to this saved endpoint or Cloudflare account. Older unscoped cloud keys require re-entry; they are never reused or removed automatically." })))
         .child(section("Privacy and reading")
             .child(toggle(s, "strict-offline", "Strict offline mode", s.settings.strict_offline, |s, _| { s.cancel(); s.cancel_update(); s.settings.strict_offline = !s.settings.strict_offline; }))
             .child(note("Blocks cloud AI and inference on another computer, including tunneled servers."))
@@ -670,8 +703,8 @@ fn settings(s: &AppState) -> El {
             .child(note("Automatic previews do not replace your answer until you choose an action. Pin the reader to suppress them.")))
         .child(section("Selection capture")
             .child(note("Pickle reads selections exposed by the source application. Protected fields and excluded applications are blocked."))
-            .child(action(s, "accessibility-permission", "Request selection access", false, |s, _| { pickle_platform::request_accessibility(); s.notice = Some("Review Pickle's selection permission in system settings, then try the shortcut again.".into()); }))
-            .child(action(s, "screen-permission", "Allow screen capture", false, |s, _| { pickle_platform::request_screen_capture(); s.notice = Some("Review the system's screen-capture permission, then invoke Pickle again.".into()); }))
+            .child(action(s, "accessibility-permission", "Request selection access", false, |s, _| { if s.native_enabled { pickle_platform::request_accessibility(); s.notice = Some("Review Pickle's selection permission in system settings, then try the shortcut again.".into()); } }).disabled(!s.native_enabled))
+            .child(action(s, "screen-permission", "Allow screen capture", false, |s, _| { if s.native_enabled { pickle_platform::request_screen_capture(); s.notice = Some("Review the system's screen-capture permission, then invoke Pickle again.".into()); } }).disabled(!s.native_enabled))
             .child(note("Excluded application IDs or Windows executable names, one per line"))
             .child(el().w_full().h(80.0).padding(10.0).radius(7.0).fill(PAPER).border(1.0, HAIR).child(text_input(&s.exclusions, type_::BODY).key("excluded-apps").label("Excluded application IDs or Windows executable names").color(INK).on_edit(|s: &mut AppState| &mut s.exclusions))))
         .child(section("Local audio transcription on Windows")
@@ -719,6 +752,8 @@ pub(crate) fn diagnostics_tools(s: &AppState) -> El {
             .child(
                 col()
                     .key("diagnostics-preview")
+                    .role("group")
+                    .label("Complete diagnostics report preview")
                     .w_full()
                     .h(260.0)
                     .padding(12.0)
@@ -731,8 +766,7 @@ pub(crate) fn diagnostics_tools(s: &AppState) -> El {
                         text(report.json())
                             .font(TextStyle::new(12.0, 400.0).lh(18.0))
                             .color(INK)
-                            .selectable(true)
-                            .label("Complete diagnostics report preview"),
+                            .selectable(true),
                     ),
             )
             .child(
@@ -1042,4 +1076,93 @@ fn library(s: &AppState, bookmark: bool) -> El {
             stick_bottom: false,
         })
         .child(content)
+}
+
+#[cfg(test)]
+mod layout_regressions {
+    use super::*;
+    use rune::{Env, Runtime};
+
+    #[test]
+    fn settings_notes_wrap_inside_the_minimum_window_width() {
+        let state = AppState {
+            route: Route::Settings,
+            ..AppState::default()
+        };
+        let mut runtime = Runtime::new(state, view, (480.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        for prefix in [
+            "Review a report containing",
+            "A loopback SSH tunnel",
+            "Checks the saved server",
+            "Choose how Pickle explains",
+        ] {
+            let item = runtime
+                .elements()
+                .into_iter()
+                .find(|element| {
+                    element
+                        .text
+                        .as_deref()
+                        .is_some_and(|value| value.starts_with(prefix))
+                })
+                .unwrap_or_else(|| panic!("Missing explanatory text {prefix}"));
+            assert!(
+                item.rect[0] >= 20.0 && item.rect[0] + item.rect[2] <= 460.0,
+                "Explanatory text overflowed: {prefix}, {:?}",
+                item.rect
+            );
+            assert!(
+                item.rect[3] >= 35.0,
+                "Explanatory text did not wrap: {prefix}, {:?}",
+                item.rect
+            );
+        }
+    }
+
+    #[test]
+    fn adjustable_forest_tint_is_a_separate_child_of_the_material_host() {
+        let mut runtime = Runtime::new(
+            AppState::default(),
+            view,
+            (480.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        for opacity in [1.0, 0.4] {
+            runtime.update(|state, _| state.settings.background_opacity = opacity);
+            for _ in 0..120 {
+                runtime.frame(1.0 / 60.0);
+            }
+            let elements = runtime.elements();
+            let tint = elements
+                .iter()
+                .find(|element| element.key.as_deref() == Some("pickle-window"))
+                .unwrap();
+            let host = &elements[tint.parent.unwrap()];
+            assert_eq!(host.key.as_deref(), Some("pickle-material"));
+            assert!((tint.fill.a - opacity).abs() < 0.001);
+            assert!((tint.fill.r - PAPER.r).abs() < 0.00001);
+            assert!((tint.fill.g - PAPER.g).abs() < 0.00001);
+            assert!((tint.fill.b - PAPER.b).abs() < 0.00001);
+            assert_eq!(host.fill.a, 0.0);
+            assert!((tint.rect[2] - 480.0).abs() < 0.1 && (tint.rect[3] - 720.0).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn expanded_source_remains_readable_at_the_minimum_width() {
+        let mut state = AppState::default();
+        state.sample_result();
+        state.source_expanded = true;
+        let mut runtime = Runtime::new(state, view, (480.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let item = runtime
+            .elements()
+            .into_iter()
+            .find(|element| element.text.as_deref() == Some(crate::controller::SAMPLE))
+            .unwrap();
+        assert!(item.rect[2] <= 410.0 && item.rect[0] + item.rect[2] <= 460.0);
+        assert!(item.rect[3] > 42.0);
+    }
 }

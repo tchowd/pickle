@@ -24,6 +24,22 @@ function Assert-Refused([scriptblock]$Work) {
   try { & $Work } catch { $refused = $true }
   if (!$refused) { throw 'Expected a safe refusal.' }
 }
+$incomingPath = Join-Path $root 'incoming-identity.json'
+$incoming = $metadata.Clone()
+$incoming.name = 'Pickle.Other.Identity'
+$incoming.family = 'Pickle.Other.Identity_123456789abcd'
+$incoming | ConvertTo-Json | Set-Content $incomingPath
+Assert-Refused { Invoke-PickleIdentity Check $root $incomingPath }
+if ($script:addCount -or $script:removed.Count) { throw 'Identity migration reached deployment.' }
+$incoming = $metadata.Clone()
+$incoming.version = '0.0.9.0'
+$incoming | ConvertTo-Json | Set-Content $incomingPath
+Assert-Refused { Invoke-PickleIdentity Check $root $incomingPath }
+$incoming.version = '0.2.0.0'
+$incoming | ConvertTo-Json | Set-Content $incomingPath
+Invoke-PickleIdentity Check $root $incomingPath
+if ((Get-Content -Raw $metadataPath | ConvertFrom-Json).version -ne '0.1.0.0') { throw 'Preflight changed installed metadata.' }
+Remove-Item -LiteralPath $incomingPath
 Invoke-PickleIdentity Check $root $metadataPath
 Invoke-PickleIdentity Register $root $metadataPath
 if ($script:addCount -ne 1) { throw 'Registration was not requested.' }
@@ -49,6 +65,6 @@ Invoke-PickleIdentity Unregister $root $metadataPath
 if ($script:removed.Count -ne 1 -or $script:removed[0] -ne 'fixture-full-name') { throw 'Exact owned identity was not removed.' }
 Invoke-PickleIdentity Unregister $root $metadataPath
 if ($script:removed.Count -ne 1) { throw 'Missing identity must be a no-op.' }
-Write-Host 'Identity fixtures passed: origin metadata, publisher/family/path ownership, idempotency, downgrade, checksum, exact removal. No OS deployment or trust calls.'
+Write-Host 'Identity fixtures passed: same-path migration/downgrade refusal, upgrade preflight, publisher/family/path ownership, idempotency, checksum, exact removal. No OS deployment or trust calls.'
 Remove-Item -LiteralPath $metadataPath,$packagePath
 Remove-Item -LiteralPath $root

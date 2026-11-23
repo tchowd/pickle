@@ -14,6 +14,16 @@ function Invoke-AppProbe([string[]]$Arguments) {
   $result = Start-Process -FilePath $application -ArgumentList $Arguments -Wait -PassThru
   return $result.ExitCode
 }
+function Assert-RetryableUninstall([string]$Uninstaller, [string]$Directory) {
+  $hostCopy = Join-Path $Directory 'pickle-browser-host.exe'
+  # Deny FILE_SHARE_DELETE on one auxiliary payload file without starting any browser process.
+  $held = [IO.File]::Open($hostCopy, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try {
+    $blocked = Start-Process -FilePath $Uninstaller -ArgumentList @('/S', "_?=$Directory") -Wait -PassThru
+    if ($blocked.ExitCode -eq 0) { throw 'Uninstall should report its locked auxiliary file.' }
+    if (!(Test-Path (Join-Path $Directory 'PickleRune.exe'))) { throw 'A failed uninstall removed the main executable needed for safe retry.' }
+  } finally { $held.Dispose() }
+}
 if ((Invoke-AppProbe @('--check-running')) -ne 0) { throw 'A Pickle instance is already running or could not be inspected safely. Use an isolated test account.' }
 foreach ($filename in @('PickleRune.exe', 'pickle-browser-host.exe', 'Uninstall.exe', 'Pickle.ico', 'THIRD_PARTY_NOTICES.txt', 'dependency-inventory.json', 'browser-extension/manifest.json')) {
   if (!(Test-Path (Join-Path $testDirectory $filename))) { throw "Installed payload is missing $filename." }
@@ -76,11 +86,24 @@ if ($hasIdentity) {
   $identity = Get-Content -Raw (Join-Path $testDirectory 'PickleIdentity.json') | ConvertFrom-Json
   $registered = @(Get-AppxPackage -Name $identity.name | Where-Object { $_.PackageFamilyName -ceq $identity.family })
   if ($registered.Count -ne 1) { throw 'Expected the exact signed identity family to be registered.' }
+  $metadataPath = Join-Path $testDirectory 'PickleIdentity.json'
+  $originalMetadata = [IO.File]::ReadAllBytes($metadataPath)
+  try {
+    $differentIdentity = Get-Content -Raw $metadataPath | ConvertFrom-Json
+    $differentIdentity.name = $identity.name + '.Other'
+    $differentIdentity.family = $differentIdentity.name + '_' + ($identity.family -split '_')[-1]
+    $differentIdentity | ConvertTo-Json | Set-Content -Encoding utf8 $metadataPath
+    $expectedMetadata = [Convert]::ToBase64String([IO.File]::ReadAllBytes($metadataPath))
+    $migration = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$testDirectory") -Wait -PassThru
+    if ($migration.ExitCode -eq 0) { throw 'Same-path identity migration must be refused before copying.' }
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($metadataPath)) -cne $expectedMetadata) { throw 'Rejected migration overwrote existing identity metadata.' }
+  } finally { [IO.File]::WriteAllBytes($metadataPath,$originalMetadata) }
   $repair = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$testDirectory") -Wait -PassThru
   if ($repair.ExitCode -ne 0) { throw 'Repairing the same identity version and location failed.' }
   $conflict = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$secondDirectory") -Wait -PassThru
   if ($conflict.ExitCode -eq 0) { throw 'An identity already owned by another external directory must not be stolen.' }
   if (!(Test-Path $application) -or (Get-ItemProperty -LiteralPath $uninstallKey).InstallLocation -ne $testDirectory) { throw 'Identity conflict changed the original installed application.' }
+  Assert-RetryableUninstall $uninstaller $testDirectory
   $removed = Start-Process -FilePath $uninstaller -ArgumentList @('/S', "_?=$testDirectory") -Wait -PassThru
   if ($removed.ExitCode -ne 0 -or (Test-Path $application)) { throw 'Signed identity uninstall failed.' }
   if (@(Get-AppxPackage -Name $identity.name | Where-Object { $_.PackageFamilyName -ceq $identity.family }).Count) { throw 'Owned identity was retained after successful uninstall.' }
@@ -94,6 +117,7 @@ if ($hasIdentity) {
 # A second install replaces the global app entry. Removing the old one must preserve the new one.
 $second = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$secondDirectory") -Wait -PassThru
 if ($second.ExitCode -ne 0) { throw 'The second isolated installation failed.' }
+Assert-RetryableUninstall $uninstaller $testDirectory
 $removed = Start-Process -FilePath $uninstaller -ArgumentList @('/S', "_?=$testDirectory") -Wait -PassThru
 if ($removed.ExitCode -ne 0) { throw 'Uninstaller reported failure.' }
 $deadline = [DateTime]::UtcNow.AddSeconds(20)

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreVideo
 import LocalAuthentication
 import ScreenCaptureKit
 import Security
@@ -280,6 +281,40 @@ private final class PageOperation {
   var task: Task<Void, Never>?
   deinit { task?.cancel() }
 }
+
+enum PageCaptureError: Error { case invalidGeometry }
+
+// SCContentFilter owns the capture geometry: its contentRect is in points and
+// pointPixelScale is the matching source backing scale (both macOS 14 APIs).
+// Never assume every source is 2x, or infer the filter's content from SCWindow.frame.
+func pageCaptureConfiguration(contentRect: CGRect, pointPixelScale: Float) throws
+  -> SCStreamConfiguration
+{
+  let scale = Double(pointPixelScale)
+  let nativeWidth = Double(contentRect.width) * scale
+  let nativeHeight = Double(contentRect.height) * scale
+  guard !contentRect.isNull, !contentRect.isInfinite,
+    [nativeWidth, nativeHeight, scale].allSatisfy({ $0.isFinite && $0 > 0 })
+  else { throw PageCaptureError.invalidGeometry }
+  let reduction = min(1, 2000 / max(nativeWidth, nativeHeight))
+  let width = Int((nativeWidth * reduction).rounded())
+  let height = Int((nativeHeight * reduction).rounded())
+  guard (1...2000).contains(width), (1...2000).contains(height)
+  else { throw PageCaptureError.invalidGeometry }
+  let config = SCStreamConfiguration()
+  config.width = width
+  config.height = height
+  config.captureResolution = .best
+  // With dimensions derived from actual backing pixels there is no upscaling
+  // to perform. False permits only proportional downscaling for the pixel cap.
+  config.scalesToFit = false
+  config.preservesAspectRatio = true
+  config.ignoreShadowsSingleWindow = true
+  config.pixelFormat = kCVPixelFormatType_32BGRA
+  config.colorSpaceName = CGColorSpace.sRGB
+  config.showsCursor = false
+  return config
+}
 @_cdecl("pickle_capture_page_start") public func pickleCapturePage(
   _ input: UnsafePointer<CChar>, _ callback: @escaping PageCallback,
   _ context: UnsafeMutableRawPointer?
@@ -308,13 +343,11 @@ private final class PageOperation {
             && $0.owningApplication?.bundleIdentifier == bundle
         }), window.frame.width > 0, window.frame.height > 0
       else { throw NSError(domain: "Pickle", code: 1) }
-      let config = SCStreamConfiguration()
-      let scale = min(2, 2000 / max(window.frame.width, window.frame.height))
-      config.width = max(1, Int(window.frame.width * scale))
-      config.height = max(1, Int(window.frame.height * scale))
-      config.showsCursor = false
+      let filter = SCContentFilter(desktopIndependentWindow: window)
+      let config = try pageCaptureConfiguration(
+        contentRect: filter.contentRect, pointPixelScale: filter.pointPixelScale)
       let image = try await SCScreenshotManager.captureImage(
-        contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: config)
+        contentFilter: filter, configuration: config)
       try Task.checkCancellation()
       let worker = Task.detached { try processPage(image) }
       let result = try await withTaskCancellationHandler(
@@ -336,12 +369,16 @@ private final class PageOperation {
   let operation = Unmanaged<PageOperation>.fromOpaque(handle).takeRetainedValue()
   operation.task?.cancel()
 }
-private func processPage(_ image: CGImage) throws -> [String: Any] {
+// Internal so the standalone content-free fixture can exercise this exact path.
+func processPage(_ image: CGImage) throws -> [String: Any] {
   try Task.checkCancellation()
   let request = VNRecognizeTextRequest()
   request.recognitionLevel = .accurate
   request.usesLanguageCorrection = true
   request.automaticallyDetectsLanguage = true
+  // Explicitly retain small screen text on every supported OS. Apple's public
+  // documentation and newer SDK header differ about this property's default.
+  request.minimumTextHeight = 0
   try VNImageRequestHandler(cgImage: image).perform([request])
   try Task.checkCancellation()
   let full = (request.results ?? []).compactMap { $0.topCandidates(1).first }.filter {
@@ -353,8 +390,8 @@ private func processPage(_ image: CGImage) throws -> [String: Any] {
     text.append(character)
   }
   let scale = min(1, 1440 / Double(max(image.width, image.height)))
-  let width = max(1, Int(Double(image.width) * scale))
-  let height = max(1, Int(Double(image.height) * scale))
+  let width = max(1, Int((Double(image.width) * scale).rounded()))
+  let height = max(1, Int((Double(image.height) * scale).rounded()))
   guard
     let canvas = CGContext(
       data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
