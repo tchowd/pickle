@@ -155,13 +155,13 @@ fn input_with_submit(
     )
 }
 fn submit_follow_up(s: &mut AppState, tx: &mut Tx) {
-    if matches!(
-        s.activity,
-        Activity::Running { .. } | Activity::WaitingContext
-    ) {
+    if s.reading_busy() {
         return;
     }
     s.follow_up(s.question.text.clone(), None, tx);
+}
+fn submit_term(s: &mut AppState, tx: &mut Tx) {
+    s.explain_term(s.term.text.clone(), tx);
 }
 fn toggle(
     s: &AppState,
@@ -272,7 +272,7 @@ fn reader(s: &AppState) -> El {
             .collect()
     })
     .font(TextStyle::new(14.0, 400.0).lh(21.0))
-    .wrap()
+    .wrap_anywhere()
     .w_full()
     .shrink()
     .color(INK)
@@ -288,12 +288,12 @@ fn reader(s: &AppState) -> El {
         .radius(10.0)
         .fill(SURFACE)
         .child(source_text);
-    if source.chars().count() > 450 {
+    if !source.is_empty() {
         source_panel = source_panel.child(action(
             s,
             "toggle-full-source",
             if s.source_expanded {
-                "Collapse passage"
+                "Hide full passage"
             } else {
                 "Show full passage"
             },
@@ -327,10 +327,7 @@ fn reader(s: &AppState) -> El {
                 })),
         )
         .child(source_panel);
-    let busy = matches!(
-        s.activity,
-        Activity::Running { .. } | Activity::WaitingContext
-    );
+    let busy = s.reading_busy();
     content = content.child(
         row()
             .w_full()
@@ -362,6 +359,14 @@ fn reader(s: &AppState) -> El {
                 .label("Start a new passage"),
             ),
     );
+    content = content
+        .child(input_with_submit("explain-term", "Word or phrase from this passage", &s.term, |s| &mut s.term, false, Some(submit_term)))
+        .child(row().gap(8.0)
+            .child(action(s, "explain-term-submit", "Explain word or phrase", false, submit_term).disabled(busy || s.settings_pending))
+            .child(action(s, "explain-selection", "Explain selected words", false, |s, tx| {
+                if let Some(selection) = tx.text_selection() { s.explain_term(selection.text().to_owned(), tx); }
+                else { s.notice = Some("Select a word in the passage or answer, then choose Explain selected words.".into()); }
+            }).disabled(busy || s.settings_pending).keeps_text_selection()));
     if s.panel == Panel::Expanded {
         content = content.child(activity(s));
         if let Some(result) = &s.result {
@@ -399,36 +404,36 @@ fn reader(s: &AppState) -> El {
                 content = content
                     .child(note(format!("Answer model: {model}{timing}")).key("answer-provenance"));
             }
-            for (i, turn) in s.conversation.iter().enumerate() {
-                content = content.child(
-                    col()
-                        .key(format!("turn-{i}"))
-                        .w_full()
-                        .gap(12.0)
-                        .child(el().h(1.0).w_full().fill(HAIR))
-                        .child(
-                            text(turn.label.as_ref().unwrap_or(&turn.question))
-                                .wrap_anywhere()
-                                .shrink()
-                                .font(TextStyle::new(15.0, 600.0))
-                                .color(GREEN),
-                        )
-                        .child(answer(&turn.answer, s.settings.text_size, false)),
-                );
-                if let Some(label) = turn.quality.visible_label() {
-                    content = content.child(note(label));
-                }
+        }
+        for (i, turn) in s.conversation.iter().enumerate() {
+            content = content.child(
+                col()
+                    .key(format!("turn-{i}"))
+                    .w_full()
+                    .gap(12.0)
+                    .child(el().h(1.0).w_full().fill(HAIR))
+                    .child(
+                        text(turn.label.as_ref().unwrap_or(&turn.question))
+                            .wrap_anywhere()
+                            .shrink()
+                            .font(TextStyle::new(15.0, 600.0))
+                            .color(GREEN),
+                    )
+                    .child(answer(&turn.answer, s.settings.text_size, false)),
+            );
+            if let Some(label) = turn.quality.visible_label() {
+                content = content.child(note(label));
             }
         }
         if !s.draft.is_empty() {
             content = content.child(answer(&s.draft, s.settings.text_size, true));
         }
-        if s.result.is_some() && !busy {
+        if (s.result.is_some() || !s.conversation.is_empty()) && !busy {
             content = content.child(
                 row()
                     .gap(8.0)
                     .child(action(s, "copy-answer", "Copy", false, |s, tx| {
-                        tx.copy(s.answer())
+                        tx.copy(pickle_core::answer_plain_text(s.answer()))
                     }))
                     .child(action(s, "save-answer", "Save", false, |s, _| {
                         s.save_answer()
@@ -443,12 +448,34 @@ fn reader(s: &AppState) -> El {
                 .child(action(s, "shorter", "Shorter", false, |s, tx| s.follow_up("Make the explanation shorter without losing qualifications, uncertainty, or important details.".into(), Some("Shorter".into()), tx)))
                 .child(action(s, "more-detail", "More detail", false, |s, tx| s.follow_up("Explain this in more detail, distinguishing source facts from general background.".into(), Some("More detail".into()), tx)))
                 .child(action(s, "example", "Give an example", false, |s, tx| s.follow_up("Give a clearly labeled hypothetical example that illustrates this passage without inventing source-specific facts.".into(), Some("Give an example".into()), tx))));
-            content = content.child(input_with_submit("follow-up", "Ask about this passage", &s.question, |s| &mut s.question, false, Some(submit_follow_up)))
-                .child(row().gap(8.0).child(action(s, "send-follow-up", "Ask", true, submit_follow_up))
-                    .child(action(s, "explain-selection", "Explain selected words", false, |s, tx| {
-                        if let Some(selection) = tx.text_selection() { let term = selection.text().to_owned(); s.follow_up(format!("Explain this term in the context of the passage: {term}"), Some(format!("Explain “{term}”")), tx); }
-                        else { s.notice = Some("Select a word in the passage or answer, then choose Explain selected words.".into()); }
-                    }).keeps_text_selection()));
+            content = content
+                .child(input_with_submit(
+                    "follow-up",
+                    "Ask about this passage",
+                    &s.question,
+                    |s| &mut s.question,
+                    false,
+                    Some(submit_follow_up),
+                ))
+                .child(row().gap(8.0).child(action(
+                    s,
+                    "send-follow-up",
+                    "Ask",
+                    true,
+                    submit_follow_up,
+                )));
+            if !s.conversation.is_empty() {
+                content = content.child(
+                    action(
+                        s,
+                        "clear-follow-ups",
+                        "Clear follow-ups (keep passage)",
+                        false,
+                        |s, _| s.clear_follow_ups(),
+                    )
+                    .disabled(s.settings_pending),
+                );
+            }
         }
     }
     if s.auto_preview.is_none()
@@ -991,7 +1018,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
         .as_ref()
         .and_then(|id| entries.iter().find(|entry| &entry.id == id))
     {
-        let copied = entry.answer.clone();
+        let copied = pickle_core::answer_plain_text(&entry.answer);
         content = content
             .child(action(s, "entry-back", "Back to results", false, |s, _| {
                 s.library_selected = None
@@ -1018,16 +1045,30 @@ fn library(s: &AppState, bookmark: bool) -> El {
             })
             .child(content);
     }
-    content = content.child(input(
-        "search-library",
-        "Search passages and answers",
-        &s.search,
-        |s| {
-            s.library_page = 0;
-            &mut s.search
-        },
-        false,
-    ));
+    let search = text_input(&s.search, TextStyle::new(14.0, 400.0).lh(22.0))
+        .key("search-library")
+        .label("Search passages and answers")
+        .single_line()
+        .w_full()
+        .color(INK)
+        .on_edit(|s: &mut AppState| &mut s.search)
+        .on_input_change(|s: &mut AppState, _| s.library_page = 0);
+    content = content.child(
+        col()
+            .w_full()
+            .gap(6.0)
+            .child(note("Search passages and answers"))
+            .child(
+                el().w_full()
+                    .h(38.0)
+                    .px(10.0)
+                    .center_y()
+                    .radius(7.0)
+                    .fill(PAPER)
+                    .border(1.0, HAIR)
+                    .child(search),
+            ),
+    );
     if entries.is_empty() {
         content = content.child(paragraph(if bookmark {
             "Choose Save beside an answer to keep it here."
@@ -1047,7 +1088,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
     for entry in matches.iter().skip(page * 20).take(20) {
         let id = entry.id.clone();
         let selected = entry.id.clone();
-        let answer_text = entry.answer.clone();
+        let answer_text = pickle_core::answer_plain_text(&entry.answer);
         content = content.child(
             col()
                 .key(format!("entry-{}", entry.id))
@@ -1103,8 +1144,10 @@ fn library(s: &AppState, bookmark: bool) -> El {
                 )
                 .child(note(format!("Page {} of {pages}", page + 1)))
                 .child(
-                    action(s, "library-next", "Next", false, |s, _| s.library_page += 1)
-                        .disabled(page + 1 >= pages),
+                    action(s, "library-next", "Next", false, move |s, _| {
+                        s.library_page = s.library_page.saturating_add(1).min(pages - 1);
+                    })
+                    .disabled(page + 1 >= pages),
                 ),
         );
     }

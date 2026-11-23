@@ -182,6 +182,9 @@ impl AppState {
         self.context_state.clear();
     }
     pub fn begin_audio(&mut self) {
+        if self.context_state.pending > 0 {
+            return;
+        }
         if !self.context_policy() {
             return;
         }
@@ -228,6 +231,9 @@ impl AppState {
         });
     }
     pub fn begin_visual_analysis(&mut self) {
+        if self.context_state.pending > 0 {
+            return;
+        }
         if !self.context_policy() {
             return;
         }
@@ -348,3 +354,101 @@ impl AppState {
 
 // Captured target metadata is session-only and never reaches history or provider payloads.
 pub type CaptureTarget = CapturedSelection;
+
+#[cfg(test)]
+mod pending_operation_tests {
+    use super::*;
+    use crate::controller::Panel;
+    use pickle_core::{ReadingAction, SelectionSnapshot};
+    use rune::{Env, Runtime};
+
+    fn pending() -> AppState {
+        let mut state = AppState {
+            snapshot: Some(SelectionSnapshot::new(
+                "A controlled source passage.",
+                "Fixture",
+                "fixture.editor",
+            )),
+            panel: Panel::Expanded,
+            activity: Activity::WaitingContext,
+            // Without the pending guard, policy validation would replace the
+            // notice before any service check. No live service is constructed.
+            paused: true,
+            notice: Some("Existing operation remains active.".into()),
+            ..AppState::default()
+        };
+        state.context_state.pending = 2;
+        state.context_state.action = Some(Pending::action(ReadingAction::Simplify));
+        state.context_state.page = Some(CapturedPage {
+            jpeg: vec![1, 2, 3],
+            text: "Controlled OCR fixture.".into(),
+            truncated: false,
+        });
+        state
+    }
+
+    fn unchanged(state: &AppState, id: uuid::Uuid, cancel: &CancellationToken) {
+        assert_eq!(state.context_state.id, id);
+        assert_eq!(state.context_state.pending, 2);
+        assert!(!cancel.is_cancelled());
+        assert_eq!(
+            state.context_state.action.as_ref().unwrap().action,
+            ReadingAction::Simplify
+        );
+        assert!(matches!(state.activity, Activity::WaitingContext));
+        assert_eq!(
+            state.notice.as_deref(),
+            Some("Existing operation remains active.")
+        );
+        assert!(state.services.is_none() && state.handle.is_none());
+    }
+
+    #[test]
+    fn pending_audio_and_visual_tools_return_before_policy_or_service_work() {
+        let mut state = pending();
+        let id = state.context_state.id;
+        let cancel = state.context_state.cancel.clone();
+        state.begin_visual_analysis();
+        unchanged(&state, id, &cancel);
+        state.begin_audio();
+        unchanged(&state, id, &cancel);
+    }
+
+    #[test]
+    fn disabled_context_buttons_preserve_the_existing_operation_when_hit() {
+        let state = pending();
+        let id = state.context_state.id;
+        let cancel = state.context_state.cancel.clone();
+        let mut runtime = Runtime::new(
+            state,
+            crate::views::view,
+            (560.0, 1800.0),
+            Env::new(true, 1.0),
+        );
+        fn disabled(node: &serde_json::Value, key: &str) -> bool {
+            if node["key"] == key {
+                return node["states"]
+                    .as_array()
+                    .is_some_and(|states| states.iter().any(|state| state == "disabled"));
+            }
+            node["children"]
+                .as_array()
+                .is_some_and(|children| children.iter().any(|child| disabled(child, key)))
+        }
+        for key in ["analyze-visuals", "listen"] {
+            for _ in 0..60 {
+                runtime.frame(1.0 / 60.0);
+            }
+            assert!(disabled(&runtime.accessibility_json(), key));
+            let (x, y) = runtime.find(key).unwrap();
+            assert!(
+                y > 0.0 && y < 1800.0,
+                "The disabled control must be in the fixture viewport."
+            );
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0 / 60.0);
+            unchanged(&runtime.state, id, &cancel);
+        }
+    }
+}

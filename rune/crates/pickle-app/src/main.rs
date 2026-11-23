@@ -259,9 +259,16 @@ fn on_key(s: &mut AppState, event: &KeyEvent, tx: &mut Tx) -> bool {
             s.cancel();
             tx.quit();
         }
-        Key::Command('1') => s.run_action(pickle_core::ReadingAction::Simplify, tx),
-        Key::Command('2') => s.run_action(pickle_core::ReadingAction::Expand, tx),
-        Key::Command('3') => s.run_action(pickle_core::ReadingAction::Chart, tx),
+        Key::Command(key @ ('1' | '2' | '3')) => {
+            if !s.reading_busy() {
+                let action = match key {
+                    '1' => pickle_core::ReadingAction::Simplify,
+                    '2' => pickle_core::ReadingAction::Expand,
+                    _ => pickle_core::ReadingAction::Chart,
+                };
+                s.run_action(action, tx);
+            }
+        }
         _ => return false,
     }
     true

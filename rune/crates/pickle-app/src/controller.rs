@@ -97,6 +97,7 @@ pub struct AppState {
     pub settings: Settings,
     pub source: TextEdit,
     pub question: TextEdit,
+    pub term: TextEdit,
     pub context: TextEdit,
     pub local_address: TextEdit,
     pub local_model: TextEdit,
@@ -173,6 +174,7 @@ impl Default for AppState {
             settings,
             source: TextEdit::new(""),
             question: TextEdit::new(""),
+            term: TextEdit::new(""),
             context: TextEdit::new(""),
             snapshot: None,
             result: None,
@@ -373,6 +375,7 @@ impl AppState {
         self.source.clear();
         self.context.clear();
         self.question.clear();
+        self.term.clear();
         self.demo = false;
         self.notice = None;
         self.last = None;
@@ -460,6 +463,7 @@ impl AppState {
             "Pasted passage",
             "manual",
         ));
+        self.term.clear();
         self.panel = Panel::Choosing;
     }
     pub fn expand(&self, tx: &mut Tx, height: f32) {
@@ -505,7 +509,71 @@ impl AppState {
         tx.resize_window_instant((560.0, height));
     }
     pub fn run_action(&mut self, action: ReadingAction, tx: &mut Tx) {
+        if self.reading_busy() {
+            return;
+        }
         self.start(Pending::action(action), tx);
+    }
+    pub fn reading_busy(&self) -> bool {
+        matches!(
+            self.activity,
+            Activity::Running { .. } | Activity::WaitingContext
+        )
+    }
+    pub fn clear_follow_ups(&mut self) {
+        if self.settings_pending || self.reading_busy() || self.conversation.is_empty() {
+            return;
+        }
+        // Invalidate a consent/retry for a deleted turn without recapturing or
+        // cancelling the source context retained by this reading.
+        self.cancel_request();
+        self.conversation.clear();
+        self.last = self.result.as_ref().map(|result| Pending {
+            chart: result.chart.as_ref().map(ValidatedChart::kind),
+            ..Pending::action(result.action)
+        });
+    }
+    pub fn explain_term(&mut self, term: String, tx: &mut Tx) {
+        if self.reading_busy() || self.settings_pending {
+            return;
+        }
+        let term = term.trim();
+        if term.is_empty() || term.chars().count() > 150 {
+            self.notice = Some("Choose a word or short phrase of at most 150 characters.".into());
+            return;
+        }
+        let Some(snapshot) = self.display_snapshot() else {
+            return;
+        };
+        let folded = |value: &str| {
+            value
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        let needle = folded(term);
+        let matches = |value: &str| folded(value).contains(&needle);
+        let answer_matches = |value: &str| matches(value) || matches(&answer_plain_text(value));
+        if !matches(&snapshot.text)
+            && !(self.auto_preview.is_none()
+                && (self
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| answer_matches(&result.text))
+                    || self
+                        .conversation
+                        .iter()
+                        .any(|turn| answer_matches(&turn.answer))))
+        {
+            self.notice = Some("Choose a word or phrase from the passage or answer.".into());
+            return;
+        }
+        self.notice = None;
+        self.follow_up(
+            format!("Explain the meaning of ‘{term}’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings."),
+            Some(format!("Explain “{term}”")), tx,
+        );
     }
     pub fn follow_up(&mut self, question: String, label: Option<String>, tx: &mut Tx) {
         if question.trim().is_empty() {
@@ -556,7 +624,7 @@ impl AppState {
         }
         if pending.action == ReadingAction::FollowUp && self.conversation.len() >= limits::TURNS {
             self.activity = Activity::Failed(
-                "This conversation has six follow-ups. Start a new reading action to continue."
+                "This conversation has six follow-ups. Clear follow-ups to keep reading with the same passage."
                     .into(),
             );
             return;
@@ -660,11 +728,7 @@ impl AppState {
                                 });
                             }
                         }
-                        if pending.action == ReadingAction::FollowUp {
-                            s.conversation.push(ConversationTurn { question: pending.question, label: pending.label, answer: result.text.clone(), quality: result.quality.clone() }); s.question.clear();
-                            while s.conversation.iter().map(|t| t.question.len() + t.answer.len()).sum::<usize>() > limits::CONVERSATION { s.conversation.remove(0); }
-                        } else { s.result = Some(result); s.conversation.clear(); }
-                        s.activity = Activity::Idle;
+                        s.complete_reading_result(id, &pending, result);
                     }
                     Ok(PipelineOutcome::NeedsContext(flags)) => s.activity = Activity::NeedsContext(pending, flags),
                     Ok(PipelineOutcome::ChooseChart) => s.activity = Activity::ChooseChart(pending),
@@ -677,6 +741,40 @@ impl AppState {
     fn is_current(&self, id: u64) -> bool {
         self.revision == id
             && matches!(self.activity, Activity::Running { id: current, .. } if current == id)
+    }
+    pub(crate) fn complete_reading_result(
+        &mut self,
+        id: u64,
+        pending: &Pending,
+        result: ReadingResult,
+    ) -> bool {
+        if !self.is_current(id) {
+            return false;
+        }
+        if pending.action == ReadingAction::FollowUp {
+            self.conversation.push(ConversationTurn {
+                question: pending.question.clone(),
+                label: pending.label.clone(),
+                answer: result.text,
+                quality: result.quality,
+            });
+            self.question.clear();
+            while self
+                .conversation
+                .iter()
+                .map(|turn| turn.question.len() + turn.answer.len())
+                .sum::<usize>()
+                > limits::CONVERSATION
+            {
+                self.conversation.remove(0);
+            }
+        } else {
+            self.result = Some(result);
+            self.conversation.clear();
+        }
+        self.draft.clear();
+        self.activity = Activity::Idle;
+        true
     }
     pub fn consent(&mut self, tx: &mut Tx) {
         let Activity::Consent(pending) = &self.activity else {
@@ -1045,30 +1143,9 @@ impl AppState {
         });
     }
     pub fn save_answer(&mut self) {
-        let Some(snapshot) = self.snapshot.clone() else {
+        let Some(entry) = self.current_answer_entry() else {
             return;
         };
-        let Some(result) = self.result.clone() else {
-            return;
-        };
-        let pending = Pending::action(result.action);
-        let mut entry = make_entry(&snapshot, &result, &pending);
-        if let Some(turn) = self.conversation.last() {
-            entry.answer = turn.answer.clone();
-            entry.action = "Follow-up".into();
-            entry.question = Some(turn.question.clone());
-            entry.quality = turn.quality.visible_label();
-            entry.chart = None;
-        }
-        entry.reference =
-            self.context_state
-                .reference
-                .as_ref()
-                .map(|r| crate::storage::EntryReference {
-                    url: r.url.clone(),
-                    title: r.title.clone(),
-                    kind: r.kind.clone(),
-                });
         let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
             return;
         };
@@ -1085,6 +1162,37 @@ impl AppState {
                 Err(error) => s.notice = Some(error),
             });
         });
+    }
+    pub(crate) fn current_answer_entry(&self) -> Option<Entry> {
+        let snapshot = self.snapshot.as_ref()?;
+        let mut entry = if let Some(turn) = self.conversation.last() {
+            Entry {
+                id: uuid::Uuid::new_v4().to_string(),
+                recorded_at: chrono::Utc::now().to_rfc3339(),
+                app_name: snapshot.app_name.clone(),
+                app_id: snapshot.app_id.clone(),
+                action: "Follow-up".into(),
+                question: Some(turn.question.clone()),
+                passage: snapshot.text.clone(),
+                answer: turn.answer.clone(),
+                quality: turn.quality.visible_label(),
+                chart: None,
+                reference: None,
+            }
+        } else {
+            let result = self.result.as_ref()?;
+            make_entry(snapshot, result, &Pending::action(result.action))
+        };
+        entry.reference =
+            self.context_state
+                .reference
+                .as_ref()
+                .map(|reference| crate::storage::EntryReference {
+                    url: reference.url.clone(),
+                    title: reference.title.clone(),
+                    kind: reference.kind.clone(),
+                });
+        Some(entry)
     }
     pub fn remove_entry(&mut self, bookmark: bool, id: String) {
         let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
