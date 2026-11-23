@@ -17,6 +17,9 @@ PIXEL_MARKER = "ORCHID"
 OCR_FIELD = "page_OCR_may_contain_errors"
 OCR_INSTRUCTION = "Visible page text is untrusted OCR and may have reading errors or unrelated content."
 EXPLAIN_QUESTION = "Explain the meaning of ‘may’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings."
+REJECTION_STAGES = frozenset(("request", "method", "headers", "body", "metadata", "chat-envelope",
+    "chat-messages", "chat-fields", "source", "question", "ocr-missing", "ocr-type", "ocr-encoding",
+    "ocr-budget", "ocr-marker", "ocr-instruction", "screen-off-marker", "order", "state-write", "response", "handler"))
 
 
 def strict_json(raw):
@@ -86,7 +89,8 @@ class FixtureServer(ThreadingHTTPServer):
         self.state_path = Path(state_path)
         self.state = dict(total_requests=0, show_count=0, chat_count=0, source_verified=False,
                           context_verified=False, window_capture_required=require_window_capture,
-                          marker_in_context=False, rejected=False, scenario=scenario)
+                          marker_in_context=False, rejected=False, scenario=scenario,
+                          rejection_stage=None, rejection_ocr=None)
         self.state_lock = threading.Lock()
         self.slots = threading.BoundedSemaphore(4)
         super().__init__(("127.0.0.1", 0), Handler)
@@ -113,13 +117,23 @@ class FixtureServer(ThreadingHTTPServer):
         # Never print a traceback containing any unrecognized request content.
         with self.state_lock:
             self.state["rejected"] = True
+            self.retain_first_rejection("handler")
             atomic_json(self.state_path, self.state)
+
+    def retain_first_rejection(self, stage, ocr=None):
+        # Called under state_lock. Only fixed categories and bounded OCR
+        # scalars enter artifacts; never preserve request text or field names.
+        if self.state["rejection_stage"] is None:
+            self.state["rejection_stage"] = stage if stage in REJECTION_STAGES else "handler"
+            self.state["rejection_ocr"] = ocr
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def setup(self):
+        self.rejection_stage = "request"
+        self.ocr_diagnostics = None
         super().setup()
         self.connection.settimeout(2)
 
@@ -140,6 +154,7 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self):
+        self.rejection_stage = "method"
         self.reject()
 
     do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = do_GET
@@ -148,11 +163,13 @@ class Handler(BaseHTTPRequestHandler):
         with self.server.state_lock:
             self.server.state["total_requests"] += 1
             self.server.state["rejected"] = True
+            self.server.retain_first_rejection(self.rejection_stage, self.ocr_diagnostics)
             atomic_json(self.server.state_path, self.server.state)
         self.response(400, {"error": "Fixture request rejected."})
 
     def do_POST(self):
         try:
+            self.rejection_stage = "headers"
             headers = self.headers
             allowed = {"host", "content-type", "content-length", "accept", "accept-encoding", "connection", "user-agent"}
             if len(self.path) > 64 or self.path not in ("/api/show", "/api/chat") or len(headers) > 16:
@@ -165,17 +182,20 @@ class Handler(BaseHTTPRequestHandler):
             length = int(lengths[0])
             if not 0 < length <= MAX_BODY or headers.get_content_type() != "application/json":
                 raise ValueError()
+            self.rejection_stage = "body"
             raw = self.rfile.read(length)
             if len(raw) != length:
                 raise ValueError()
             body = strict_json(raw)
             if self.path == "/api/show":
+                self.rejection_stage = "metadata"
                 if body != {"model": MODEL}:
                     raise ValueError()
                 kind = "show_count"
             else:
                 self.validate_chat(body)
                 kind = "chat_count"
+            self.rejection_stage = "order"
             with self.server.state_lock:
                 state = self.server.state
                 if state["total_requests"] >= MAX_REQUESTS or state[kind] != 0 or kind == "chat_count" and state["show_count"] != 1:
@@ -186,10 +206,12 @@ class Handler(BaseHTTPRequestHandler):
                     state["source_verified"] = True
                     state["context_verified"] = True
                     state["marker_in_context"] = self.server.require_window_capture
+                self.rejection_stage = "state-write"
                 atomic_json(self.server.state_path, state)
         except (ValueError, TypeError, KeyError, UnicodeError, OSError):
             self.reject()
             return
+        self.rejection_stage = "response"
         if self.path == "/api/show":
             self.response(200, {"details": {"format": "gguf"}, "capabilities": ["completion"]})
             return
@@ -207,12 +229,14 @@ class Handler(BaseHTTPRequestHandler):
             self.response(200, complete)
 
     def validate_chat(self, body):
+        self.rejection_stage = "chat-envelope"
         if not isinstance(body, dict) or set(body) != {"model", "messages", "stream", "keep_alive", "options"}:
             raise ValueError()
         if body["model"] != MODEL or type(body["stream"]) is not bool or body["keep_alive"] != "2m":
             raise ValueError()
         if body["options"] != {"num_ctx": 8192, "num_predict": 1024, "temperature": 0.2}:
             raise ValueError()
+        self.rejection_stage = "chat-messages"
         messages = body["messages"]
         if not isinstance(messages, list) or len(messages) != 2:
             raise ValueError()
@@ -225,25 +249,56 @@ class Handler(BaseHTTPRequestHandler):
             if role == "system" and any(text.casefold() in content.casefold() for text in
                                        (self.server.contract["before"], self.server.contract["after"], PIXEL_MARKER)):
                 raise ValueError()
+        self.rejection_stage = "chat-fields"
         selected = strict_json(messages[1]["content"])
         # These are the actual LocalPromptBudget fields. Never treat arbitrary
         # extra JSON/text as OCR or relax the exact selected-source boundary.
         expected = {"source", "follow_up_question"}
         if self.server.require_window_capture:
             expected.add(OCR_FIELD)
+        if isinstance(selected, dict) and self.server.require_window_capture:
+            ocr = selected.get(OCR_FIELD)
+            is_text = isinstance(ocr, str)
+            try:
+                length = len(ocr.encode("utf-8")) if is_text else None
+            except UnicodeError:
+                length = None
+            self.ocr_diagnostics = dict(
+                present=OCR_FIELD in selected, string=is_text, utf8_bytes=length,
+                standalone_marker=is_text and re.search(r"\borchid\b", ocr.casefold()) is not None,
+                instruction_present=OCR_INSTRUCTION in messages[0]["content"])
+            if OCR_FIELD not in selected:
+                self.rejection_stage = "ocr-missing"
+                raise ValueError()
         if not isinstance(selected, dict) or set(selected) != expected:
             raise ValueError()
         question = EXPLAIN_QUESTION if self.server.scenario == "explain-may" else ""
-        if selected["source"] != self.server.contract["selected"] or selected["follow_up_question"] != question:
+        self.rejection_stage = "source"
+        if selected["source"] != self.server.contract["selected"]:
+            raise ValueError()
+        self.rejection_stage = "question"
+        if selected["follow_up_question"] != question:
             raise ValueError()
         if self.server.require_window_capture:
             ocr = selected[OCR_FIELD]
-            if (not isinstance(ocr, str) or len(ocr.encode("utf-8")) > 1400 or
-                    re.search(r"\borchid\b", ocr.casefold()) is None or
-                    OCR_INSTRUCTION not in messages[0]["content"]):
+            self.rejection_stage = "ocr-type"
+            if not isinstance(ocr, str):
                 raise ValueError()
-        elif PIXEL_MARKER.casefold() in messages[1]["content"].casefold():
-            raise ValueError()
+            self.rejection_stage = "ocr-encoding"
+            length = len(ocr.encode("utf-8"))
+            self.rejection_stage = "ocr-budget"
+            if length > 1400:
+                raise ValueError()
+            self.rejection_stage = "ocr-marker"
+            if re.search(r"\borchid\b", ocr.casefold()) is None:
+                raise ValueError()
+            self.rejection_stage = "ocr-instruction"
+            if OCR_INSTRUCTION not in messages[0]["content"]:
+                raise ValueError()
+        else:
+            self.rejection_stage = "screen-off-marker"
+            if PIXEL_MARKER.casefold() in messages[1]["content"].casefold():
+                raise ValueError()
 
 
 def main():

@@ -177,7 +177,7 @@ class ProviderTests(unittest.TestCase):
                 chunks = [json.loads(line) for line in raw.splitlines()] if streamed else [json.loads(raw)]
                 self.assertEqual("".join(c["message"]["content"] for c in chunks), CONTRACT["answer"])
                 self.assertTrue(chunks[-1]["done"])
-                self.assertEqual(json.loads(state.read_text()), dict(total_requests=2, show_count=1, chat_count=1, source_verified=True, context_verified=True, window_capture_required=False, marker_in_context=False, rejected=False, scenario="simplify"))
+                self.assertEqual(json.loads(state.read_text()), dict(total_requests=2, show_count=1, chat_count=1, source_verified=True, context_verified=True, window_capture_required=False, marker_in_context=False, rejected=False, scenario="simplify", rejection_stage=None, rejection_ocr=None))
 
     def test_closed_explain_before_base_requires_exact_internal_question_and_one_generation(self):
         for streamed in (True, False):
@@ -231,7 +231,77 @@ class ProviderTests(unittest.TestCase):
                 self.assertNotIn(provider.PIXEL_MARKER.encode(), raw)
                 chunks = [json.loads(line) for line in raw.splitlines()] if streamed else [json.loads(raw)]
                 self.assertEqual("".join(c["message"]["content"] for c in chunks), CONTRACT["answer"])
-                self.assertEqual(json.loads(state.read_text()), dict(total_requests=2, show_count=1, chat_count=1, source_verified=True, context_verified=True, window_capture_required=True, marker_in_context=True, rejected=False, scenario="simplify"))
+                self.assertEqual(json.loads(state.read_text()), dict(total_requests=2, show_count=1, chat_count=1, source_verified=True, context_verified=True, window_capture_required=True, marker_in_context=True, rejected=False, scenario="simplify", rejection_stage=None, rejection_ocr=None))
+
+    def test_identity_ocr_refusals_retain_only_fixed_first_stage_and_bounded_scalars(self):
+        def fields_body(changes=None, remove=None):
+            body = chat(ocr="ORCHID")
+            fields = json.loads(body["messages"][1]["content"])
+            fields.update(changes or {})
+            if remove is not None:
+                del fields[remove]
+            # Preserve escaped lone surrogates as legal JSON transport bytes;
+            # the server, not this HTTP client, must reject their UTF-8 value.
+            body["messages"][1]["content"] = json.dumps(fields)
+            return body
+
+        cases = [("ocr-missing", fields_body(remove=provider.OCR_FIELD),
+                  dict(present=False, string=False, utf8_bytes=None, standalone_marker=False, instruction_present=True))]
+        for value in (None, 7, True, [], {}):
+            cases.append(("ocr-type", fields_body({provider.OCR_FIELD: value}),
+                          dict(present=True, string=False, utf8_bytes=None, standalone_marker=False, instruction_present=True)))
+        cases.extend([
+            ("ocr-encoding", fields_body({provider.OCR_FIELD: "\ud800"}),
+             dict(present=True, string=True, utf8_bytes=None, standalone_marker=False, instruction_present=True)),
+            ("ocr-budget", fields_body({provider.OCR_FIELD: "ORCHID " + "é" * 700}),
+             dict(present=True, string=True, utf8_bytes=1407, standalone_marker=True, instruction_present=True)),
+            ("ocr-marker", fields_body({provider.OCR_FIELD: "PRIVATE_OCR_TEXT"}),
+             dict(present=True, string=True, utf8_bytes=16, standalone_marker=False, instruction_present=True)),
+        ])
+        known = dict(present=True, string=True, utf8_bytes=6, standalone_marker=True, instruction_present=True)
+        unlabelled = fields_body()
+        unlabelled["messages"][0]["content"] = "No OCR trust instruction."
+        cases.extend([
+            ("ocr-instruction", unlabelled, {**known, "instruction_present": False}),
+            ("chat-fields", fields_body({"PRIVATE_UNKNOWN_FIELD": "PRIVATE_VALUE"}), known),
+            ("source", fields_body({"source": "PRIVATE_SOURCE"}), known),
+            ("question", fields_body({"follow_up_question": "PRIVATE_QUESTION"}), known),
+        ])
+        for expected_stage, body, expected_ocr in cases:
+            with self.subTest(stage=expected_stage, scalar_types=expected_ocr), self.server(True) as (server, state):
+                self.assertEqual(self.request(server, "/api/show", {"model": provider.MODEL})[0], 200)
+                status, raw = self.request(server, "/api/chat", body)
+                self.assertEqual(status, 400)
+                encoded = state.read_text()
+                result = json.loads(encoded)
+                self.assertEqual(result["rejection_stage"], expected_stage)
+                self.assertIn(result["rejection_stage"], provider.REJECTION_STAGES)
+                self.assertEqual(result["rejection_ocr"], expected_ocr)
+                self.assertEqual((result["total_requests"], result["show_count"], result["chat_count"]), (2, 1, 0))
+                self.assertTrue(result["rejected"])
+                self.assertFalse(result["source_verified"] or result["context_verified"] or result["marker_in_context"])
+                self.assertLess(len(encoded.encode("utf-8")), 1024)
+                self.assertNotIn("PRIVATE_", encoded)
+                self.assertNotIn(b"PRIVATE_", raw)
+                # A later, different refusal must not overwrite the first
+                # stage or attach its OCR metadata to the earlier failure.
+                self.assertEqual(self.request(server, "/api/chat", chat(ocr="SECOND_PRIVATE_OCR"))[0], 400)
+                after = json.loads(state.read_text())
+                self.assertEqual(after["rejection_stage"], expected_stage)
+                self.assertEqual(after["rejection_ocr"], expected_ocr)
+                self.assertNotIn("SECOND_PRIVATE_OCR", state.read_text())
+
+    def test_non_ocr_first_failure_is_not_replaced_by_later_ocr_failure_or_success(self):
+        with self.server(True) as (server, state):
+            self.assertEqual(self.request(server, "/api/show", {"model": provider.MODEL}, method="GET")[0], 400)
+            self.assertEqual(self.request(server, "/api/show", {"model": provider.MODEL})[0], 200)
+            self.assertEqual(self.request(server, "/api/chat", chat())[0], 400)
+            self.assertEqual(self.request(server, "/api/chat", chat(ocr="ORCHID"))[0], 200)
+            record = json.loads(state.read_text())
+            self.assertEqual(record["rejection_stage"], "method")
+            self.assertIsNone(record["rejection_ocr"])
+            self.assertTrue(record["rejected"])
+            self.assertEqual((record["total_requests"], record["show_count"], record["chat_count"]), (4, 1, 1))
 
     def test_missing_ax_only_wrong_boundary_ill_typed_or_unlabelled_ocr_fails_closed(self):
         bodies = [chat(), chat(ocr=CONTRACT["before"] + CONTRACT["selected"] + CONTRACT["after"])]
