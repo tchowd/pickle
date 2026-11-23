@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).with_name("windows-reading-provider.py")
 spec = importlib.util.spec_from_file_location("reading_fixture_provider", SCRIPT)
@@ -18,6 +19,113 @@ provider = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(provider)
 CONTRACT = {"before": "BEFORE owned fixture marker.", "selected": "Café shuttle service may help on this route in dry weather.",
             "after": "AFTER owned fixture marker.", "answer": "The Café shuttle may help on this route in dry weather."}
+
+
+class ChildLifecycleFailure(AssertionError):
+    """Only fixed stages and scalar owned-child diagnostics enter test logs."""
+    def __init__(self, stage, owner, os_error=None):
+        self.stage, self.owner, self.os_error = stage, owner, os_error
+
+    def __str__(self):
+        return json.dumps(dict(stage=self.stage, returncode=None if self.owner.child is None else self.owner.child.returncode,
+                               elapsed_ms=int((time.monotonic() - self.owner.started) * 1000),
+                               stdout_bytes=self.owner.stdout_bytes, stderr_bytes=self.owner.stderr_bytes,
+                               cleanup_complete=self.owner.cleanup_complete, os_error=self.os_error,
+                               cleanup_stage=self.owner.cleanup_stage, cleanup_os_error=self.owner.cleanup_os_error,
+                               cleanup_failure_count=self.owner.cleanup_failure_count,
+                               stdout_closed=self.owner.stdout_closed, stderr_closed=self.owner.stderr_closed), sort_keys=True)
+
+
+class OwnedChild:
+    """Retain the exact Popen child; collect/close both pipes on every exit path."""
+    def __init__(self, command):
+        self.started = time.monotonic()
+        self.stdout_bytes = self.stderr_bytes = None
+        self.cleanup_complete = False
+        self.cleanup_stage = self.cleanup_os_error = None
+        self.cleanup_failure_count = 0
+        self.stdout_closed = self.stderr_closed = False
+        self.child = None
+        try:
+            self.child = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError as error:
+            raise ChildLifecycleFailure("child-spawn-failed", self, error.errno) from None
+
+    def __enter__(self):
+        return self
+
+    def communicate(self):
+        try:
+            output, errors = self.child.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            raise ChildLifecycleFailure("child-output-timeout", self) from None
+        self.stdout_bytes, self.stderr_bytes = len(output), len(errors)
+        self.cleanup_complete = self.child.poll() is not None
+        return output, errors
+
+    def wait_ready(self, ready, timeout=5):
+        deadline = time.monotonic() + timeout
+        while True:
+            if time.monotonic() >= deadline:
+                raise ChildLifecycleFailure("ready-timeout", self)
+            if self.child.poll() is not None:
+                raise ChildLifecycleFailure("child-exited-before-ready", self)
+            try:
+                with ready.open("rb") as stream:
+                    raw = stream.read(4097)
+            except FileNotFoundError:
+                raw = None
+            except OSError as error:
+                raise ChildLifecycleFailure("ready-read-failed", self, error.errno) from None
+            if raw is not None:
+                if time.monotonic() >= deadline:
+                    raise ChildLifecycleFailure("ready-timeout", self)
+                if len(raw) > 4096:
+                    raise ChildLifecycleFailure("ready-size-invalid", self)
+                try:
+                    value = json.loads(raw)
+                except (ValueError, UnicodeError):
+                    raise ChildLifecycleFailure("ready-json-invalid", self) from None
+                if self.child.poll() is not None:
+                    raise ChildLifecycleFailure("child-exited-at-ready", self)
+                return value
+            if time.monotonic() >= deadline:
+                raise ChildLifecycleFailure("ready-timeout", self)
+            time.sleep(0.01)
+
+    def __exit__(self, kind, value, traceback):
+        def failed(stage, error=None):
+            self.cleanup_failure_count += 1
+            if self.cleanup_stage is None:
+                self.cleanup_stage = stage
+                self.cleanup_os_error = error.errno if isinstance(error, OSError) else None
+
+        try:
+            if self.child.poll() is None:
+                self.child.kill()
+        except Exception as error:
+            failed("child-kill-failed", error)
+        try:
+            self.communicate()
+        except ChildLifecycleFailure as error:
+            failed("child-output-timeout" if error.stage == "child-output-timeout" else "child-communication-failed")
+        except Exception as error:
+            failed("child-communication-failed", error)
+        # Close independently: a failed stdout close must not omit stderr.
+        for name in ("stdout", "stderr"):
+            stream = getattr(self.child, name)
+            try:
+                stream.close()
+            except Exception as error:
+                failed(name + "-close-failed", error)
+            setattr(self, name + "_closed", stream.closed)
+        self.cleanup_complete = (self.cleanup_failure_count == 0 and self.child.returncode is not None
+                                 and self.stdout_closed and self.stderr_closed)
+        # An incoming startup failure remains primary. Its scalar report reads
+        # the cleanup metadata above after unwinding; never replace its stage.
+        if kind is None and not self.cleanup_complete:
+            raise ChildLifecycleFailure("child-cleanup-failed", self)
 
 
 def chat(stream=True, ocr=None):
@@ -179,22 +287,131 @@ class ProviderTests(unittest.TestCase):
             root = Path(directory)
             contract = root / "contract.json"; contract.write_text(json.dumps(CONTRACT), encoding="utf-8")
             ready, state, stop = (root / n for n in ("ready.json", "state.json", "stop"))
-            child = subprocess.Popen([sys.executable, str(SCRIPT), "--contract", str(contract), "--ready", str(ready), "--state", str(state), "--stop-file", str(stop)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            try:
-                deadline = time.monotonic() + 5
-                while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                metadata = json.loads(ready.read_text())
-                self.assertEqual(metadata["pid"], child.pid)
+            with OwnedChild([sys.executable, str(SCRIPT.resolve(strict=True)), "--contract", str(contract), "--ready", str(ready), "--state", str(state), "--stop-file", str(stop)]) as owned:
+                metadata = owned.wait_ready(ready)
+                self.assertEqual(metadata["pid"], owned.child.pid)
                 self.assertTrue(0 < metadata["port"] <= 65535)
                 self.assertEqual(json.loads(state.read_text())["total_requests"], 0)
                 stop.touch()
-                output, errors = child.communicate(timeout=5)
-                self.assertEqual(child.returncode, 0)
-                self.assertEqual((output, errors), (b"", b""))
-            finally:
-                if child.poll() is None:
-                    child.kill(); child.wait(timeout=5)
+                output, errors = owned.communicate()
+                self.assertEqual(owned.child.returncode, 0)
+                self.assertEqual((len(output), len(errors)), (0, 0))
+
+    def test_cli_early_exit_reports_status_without_echo_and_closes_owned_pipes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "never-ready.json"
+            with self.assertRaises(ChildLifecycleFailure) as failure:
+                with OwnedChild([sys.executable, "-c", "import sys; print('PRIVATE_CHILD_OUTPUT'); sys.stderr.write('PRIVATE_CHILD_ERROR'); sys.exit(23)"]) as owned:
+                    owned.wait_ready(ready)
+            report = json.loads(str(failure.exception))
+            self.assertEqual(report["stage"], "child-exited-before-ready")
+            self.assertEqual(report["returncode"], 23)
+            self.assertGreater(report["stdout_bytes"], 0)
+            self.assertGreater(report["stderr_bytes"], 0)
+            self.assertTrue(report["cleanup_complete"])
+            self.assertNotIn("PRIVATE_CHILD", str(failure.exception))
+            self.assertTrue(owned.child.stdout.closed)
+            self.assertTrue(owned.child.stderr.closed)
+            self.assertFalse(ready.exists())
+
+    def test_cli_invalid_contract_exits_without_readiness_or_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract, ready, state, stop = (root / name for name in ("contract.json", "ready.json", "state.json", "stop"))
+            contract.write_text('{"invalid":"PRIVATE_CONTRACT"}', encoding="utf-8")
+            with self.assertRaises(ChildLifecycleFailure) as failure:
+                with OwnedChild([sys.executable, str(SCRIPT.resolve(strict=True)), "--contract", str(contract), "--ready", str(ready), "--state", str(state), "--stop-file", str(stop)]) as owned:
+                    owned.wait_ready(ready)
+            report = json.loads(str(failure.exception))
+            self.assertEqual(report["stage"], "child-exited-before-ready")
+            self.assertEqual(report["returncode"], 1)
+            self.assertEqual((report["stdout_bytes"], report["stderr_bytes"]), (0, 0))
+            self.assertTrue(report["cleanup_complete"])
+            self.assertTrue(owned.child.stdout.closed)
+            self.assertTrue(owned.child.stderr.closed)
+            self.assertFalse(ready.exists())
+            self.assertFalse(state.exists())
+
+    def test_cli_missing_readiness_has_its_own_deadline_and_reaps_owned_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "never-ready.json"
+            with self.assertRaises(ChildLifecycleFailure) as failure:
+                with OwnedChild([sys.executable, "-c", "import time; time.sleep(30)"]) as owned:
+                    owned.wait_ready(ready, timeout=0.05)
+            report = json.loads(str(failure.exception))
+            self.assertEqual(report["stage"], "ready-timeout")
+            self.assertIsNotNone(report["returncode"])
+            self.assertTrue(report["cleanup_complete"])
+            self.assertEqual((report["stdout_bytes"], report["stderr_bytes"]), (0, 0))
+            self.assertTrue(owned.child.stdout.closed)
+            self.assertTrue(owned.child.stderr.closed)
+            self.assertFalse(ready.exists())
+
+    def test_cli_even_a_present_ready_file_cannot_override_an_expired_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "ready.json"
+            with self.assertRaises(ChildLifecycleFailure) as failure:
+                with OwnedChild([sys.executable, "-c", "import time; time.sleep(30)"]) as owned:
+                    ready.write_text(json.dumps(dict(pid=owned.child.pid, port=12345)), encoding="utf-8")
+                    owned.wait_ready(ready, timeout=0)
+            self.assertEqual(failure.exception.stage, "ready-timeout")
+            self.assertTrue(owned.cleanup_complete)
+            self.assertTrue(owned.child.stdout.closed)
+            self.assertTrue(owned.child.stderr.closed)
+
+    def test_cleanup_timeout_preserves_primary_failure_and_is_fatal_without_one(self):
+        for primary in (True, False):
+            with self.subTest(primary=primary):
+                owned = OwnedChild([sys.executable, "-c", "pass"])
+                # Reap this exact owned child before injecting only the cleanup
+                # communication failure; no process can survive this test.
+                owned.child.wait(timeout=5)
+                initial = ChildLifecycleFailure("ready-timeout", owned)
+                cleanup = ChildLifecycleFailure("child-output-timeout", owned)
+                with mock.patch.object(owned, "communicate", side_effect=cleanup):
+                    with self.assertRaises(ChildLifecycleFailure) as failure:
+                        with owned:
+                            if primary:
+                                raise initial
+                if primary:
+                    self.assertIs(failure.exception, initial)
+                report = json.loads(str(failure.exception))
+                self.assertEqual(report["stage"], "ready-timeout" if primary else "child-cleanup-failed")
+                self.assertEqual(report["cleanup_stage"], "child-output-timeout")
+                self.assertEqual(report["cleanup_failure_count"], 1)
+                self.assertFalse(report["cleanup_complete"])
+                self.assertTrue(report["stdout_closed"])
+                self.assertTrue(report["stderr_closed"])
+
+    def test_failed_stdout_close_does_not_mask_primary_or_omit_stderr_close(self):
+        owned = OwnedChild([sys.executable, "-c", "pass"])
+        owned.child.wait(timeout=5)
+        actual_stdout = owned.child.stdout
+
+        class FailingClose:
+            @property
+            def closed(self):
+                return actual_stdout.closed
+
+            def close(self):
+                actual_stdout.close()
+                raise OSError(5, "PRIVATE_CLEANUP_ERROR")
+
+        owned.child.stdout = FailingClose()
+        initial = ChildLifecycleFailure("child-exited-before-ready", owned)
+        with mock.patch.object(owned, "communicate", return_value=(b"", b"")):
+            with self.assertRaises(ChildLifecycleFailure) as failure:
+                with owned:
+                    raise initial
+        self.assertIs(failure.exception, initial)
+        report = json.loads(str(failure.exception))
+        self.assertEqual(report["stage"], "child-exited-before-ready")
+        self.assertEqual(report["cleanup_stage"], "stdout-close-failed")
+        self.assertEqual(report["cleanup_os_error"], 5)
+        self.assertTrue(report["stdout_closed"])
+        self.assertTrue(report["stderr_closed"])
+        self.assertFalse(report["cleanup_complete"])
+        self.assertNotIn("PRIVATE_CLEANUP_ERROR", str(failure.exception))
 
 
 if __name__ == "__main__":
