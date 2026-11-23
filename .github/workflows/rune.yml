@@ -153,6 +153,7 @@ jobs:
           path: |
             rune/artifacts/*.zip
             rune/artifacts/*setup.exe
+            rune/artifacts/*.png
             rune/artifacts/notices-*/
             rune/artifacts/*capabilities.json
             rune/artifacts/*version.txt
