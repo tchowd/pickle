@@ -146,7 +146,7 @@ fn boolean(ok: i32) -> io::Result<()> {
 fn invalid(message: &'static str) -> io::Error {
     io::Error::other(message)
 }
-fn open(path: &Path) -> io::Result<File> {
+fn open_mutation(directory: &tempfile::TempDir) -> io::Result<File> {
     // Exact MAXIMUM_ALLOWED is intentional: Microsoft documents that a
     // SetSecurityInfo handle opened this way does NOT propagate ACEs to children.
     // https://learn.microsoft.com/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
@@ -154,6 +154,16 @@ fn open(path: &Path) -> io::Result<File> {
         .access_mode(MAXIMUM_ALLOWED)
         .share_mode(3) // READ | WRITE, never DELETE: prevent directory substitution
         .custom_flags(0x0200_0000 | 0x0020_0000) // BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+        .open(directory.path())
+}
+fn open_observer(path: &Path) -> io::Result<File> {
+    // READ_CONTROL | FILE_READ_ATTRIBUTES requests neither DELETE nor write
+    // access. Share DELETE so the one MAXIMUM_ALLOWED mutation handle can open;
+    // that mutation handle itself continues to refuse rename/delete sharing.
+    OpenOptions::new()
+        .access_mode(0x0002_0080)
+        .share_mode(7)
+        .custom_flags(0x0200_0000 | 0x0020_0000)
         .open(path)
 }
 fn identity(file: &File) -> io::Result<(u32, u64, u32)> {
@@ -359,11 +369,16 @@ struct RestoreAcl<'a> {
     armed: bool,
 }
 impl<'a> RestoreAcl<'a> {
-    fn deny_create(directory: &'a tempfile::TempDir) -> io::Result<Self> {
-        let file = open(directory.path())?;
+    fn deny_create(
+        directory: &'a tempfile::TempDir,
+        observer: &File,
+        expected_dacl: &DaclSnapshot,
+    ) -> io::Result<Self> {
+        let file = open_mutation(directory)?;
         let id = identity(&file)?;
         if id.2 & DIRECTORY == 0
             || id.2 & REPARSE_POINT != 0
+            || id != identity(observer)?
             || final_path(&file)? != fs::canonicalize(directory.path())?
         {
             return Err(invalid(
@@ -371,6 +386,11 @@ impl<'a> RestoreAcl<'a> {
             ));
         }
         let original = DaclSnapshot::read(&file)?;
+        if original != *expected_dacl || DaclSnapshot::read(observer)? != original {
+            return Err(invalid(
+                "Owned ACL observer and mutation snapshots differ before denial",
+            ));
+        }
         let mut guard = Self {
             directory,
             file,
@@ -416,7 +436,7 @@ impl<'a> RestoreAcl<'a> {
         Ok(guard)
     }
     fn assert_identity(&self) -> io::Result<()> {
-        let fresh = open(self.directory.path())?;
+        let fresh = open_observer(self.directory.path())?;
         if identity(&self.file)? != self.identity
             || identity(&fresh)? != self.identity
             || final_path(&self.file)? != fs::canonicalize(self.directory.path())?
@@ -457,7 +477,7 @@ fn child_acls(directory: &Path) -> Vec<DaclSnapshot> {
         "child/proof.txt",
     ]
     .iter()
-    .map(|name| DaclSnapshot::read(&open(&directory.join(name)).unwrap()).unwrap())
+    .map(|name| DaclSnapshot::read(&open_observer(&directory.join(name)).unwrap()).unwrap())
     .collect()
 }
 
@@ -477,11 +497,11 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
         fs::create_dir(directory.path().join("child")).unwrap();
         fs::write(directory.path().join("child/proof.txt"), b"owned child").unwrap();
         let children_before = child_acls(directory.path());
-        let before_handle = open(directory.path()).unwrap();
+        let before_handle = open_observer(directory.path()).unwrap();
         let before = DaclSnapshot::read(&before_handle).unwrap();
         let before_identity = identity(&before_handle).unwrap();
 
-        let mut restore = RestoreAcl::deny_create(&directory).unwrap();
+        let mut restore = RestoreAcl::deny_create(&directory, &before_handle, &before).unwrap();
         assert!(DaclSnapshot::read(&before_handle).unwrap() != before);
         assert!(
             child_acls(directory.path()) == children_before,
@@ -512,7 +532,7 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
         assert!(DaclSnapshot::read(&before_handle).unwrap() == before);
         assert_eq!(identity(&before_handle).unwrap(), before_identity);
         assert_eq!(
-            identity(&open(directory.path()).unwrap()).unwrap(),
+            identity(&open_observer(directory.path()).unwrap()).unwrap(),
             before_identity
         );
         assert!(
