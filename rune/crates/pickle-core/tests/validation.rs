@@ -20,7 +20,13 @@ fn explicit_quantities_preserve_scale_and_units() {
 #[test]
 fn malformed_numbers_cannot_become_partial_evidence() {
     assert!(numeric_evidence("$10,5 and $1e6 and 1.2.3 kg").is_empty());
-    assert_eq!(numeric_evidence("The price is $10.")[0].value, 10.0);
+    assert_eq!(
+        numeric_evidence("The price is $10.")
+            .iter()
+            .map(|value| value.value)
+            .collect::<Vec<_>>(),
+        vec![10.0]
+    );
     assert_eq!(
         numeric_evidence("Change was -12% and then 5 percent.")
             .iter()
@@ -127,9 +133,32 @@ fn mixed_units_and_unknown_fields_are_rejected() {
         )
         .is_err()
     );
+    // A valid control isolates the unknown-field refusal from other guards.
+    let source = "$10 and $20";
+    let valid = bars(source, &["n0", "n8"]);
+    assert!(validate_chart(&valid, ChartKind::Bar, source).is_ok());
+    let mut with_html: serde_json::Value = serde_json::from_str(&valid).unwrap();
+    with_html["html"] = json!("<script>alert(1)</script>");
+    assert!(validate_chart(&with_html.to_string(), ChartKind::Bar, source).is_err());
 }
 fn flow(source: &str, labels: &[&str], condition: &str) -> String {
     json!({"type":"flow_diagram","nodes":labels.iter().enumerate().map(|(i,label)|json!({"id":format!("n{i}"),"label":label})).collect::<Vec<_>>(),"edges":labels.windows(2).enumerate().map(|(i,_)|json!({"from":format!("n{i}"),"to":format!("n{}",i+1),"evidence":source,"condition":condition})).collect::<Vec<_>>()}).to_string()
+}
+#[test]
+fn original_flow_validates_source_nodes_and_edges() {
+    // Exact payload and three assertions from ValidationTests.swift:35–39.
+    let source = "The request is received then validated.";
+    let candidate = r#"{"type":"flow_diagram","nodes":[{"id":"a","label":"received"},{"id":"b","label":"validated"}],"edges":[{"from":"a","to":"b","evidence":"The request is received then validated.","condition":""}]}"#;
+    assert!(validate_chart(candidate, ChartKind::Flow, source).is_ok());
+    assert!(
+        validate_chart(
+            &candidate.replace(r#""to":"b""#, r#""to":"c""#),
+            ChartKind::Flow,
+            source
+        )
+        .is_err()
+    );
+    assert!(validate_chart(candidate, ChartKind::Flow, "An unrelated passage.").is_err());
 }
 #[test]
 fn flow_edges_and_conditions_require_literal_evidence() {
@@ -724,6 +753,7 @@ fn announcement_removal_preserves_substantive_openings() {
 
 #[test]
 fn references_preserve_provenance_and_bounded_relevant_excerpts() {
+    assert_eq!(WebReference::excerpt("", "test", 12_000), "");
     let text = format!(
         "{}The selected mitochondrial process uses energy.\nMore information.",
         "Unrelated paragraph.\n".repeat(100)

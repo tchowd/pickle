@@ -255,6 +255,36 @@ fn local_address_rejects_unsafe_or_ambiguous_destinations() {
     assert!(config.validate(false).is_err());
 }
 
+#[tokio::test]
+async fn local_offline_pipeline_rejects_an_unasserted_loopback_tunnel_before_any_http() {
+    let (base, captured) = server(vec![Reply::json(json!({"fixture":"finished"}))]);
+    let writer = OllamaProvider::new(LocalAIConfiguration {
+        address: base.to_string(),
+        same_device: false,
+        ..LocalAIConfiguration::default()
+    });
+    let checker = Arc::new(CloudCheckCounter::default());
+    let input = RequestInput::new(
+        SelectionSnapshot::new("The treatment may help.", "Test", "test"),
+        ReadingAction::Simplify,
+    );
+    let (events, mut received) = unbounded_channel();
+    let error = Pipeline::new(Arc::new(writer), Some(checker.clone()), true)
+        .run(input, events, CancellationToken::new())
+        .await
+        .expect_err("Loopback alone must not assert same-device inference");
+    assert!(error.to_string().contains("Offline mode blocks inference"));
+    assert_eq!(checker.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(received.try_recv().is_err());
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    // The still-live recipient must receive only this explicit stop request,
+    // not metadata or a chat attempt hidden behind a closed listener.
+    stop_listening_fixture(&base, &captured);
+}
+
 #[test]
 fn line_framing_handles_unicode_boundaries_and_rejects_bad_text() {
     let mut lines = Lines::default();
@@ -296,6 +326,14 @@ fn sse_supports_both_contracts_and_requires_a_terminator() {
     assert_eq!(result.text, "Some benefit");
     assert_eq!(result.model, "resolved");
     assert_eq!(result.usage.unwrap().input_tokens, Some(8));
+    // Original OpenAI-only case, without an earlier native-response delta.
+    let mut openai = Sse::default();
+    openai
+        .line(r#"data: {"choices":[{"delta":{"content":"An answer."}}]}"#)
+        .unwrap();
+    openai.line("").unwrap();
+    openai.line("data: [DONE]").unwrap();
+    assert_eq!(openai.finish("test").unwrap().text, "An answer.");
     let mut incomplete = Sse::default();
     incomplete
         .line("data: {\"response\":\"Incomplete\"}")
@@ -353,7 +391,9 @@ fn local_budget_preserves_source_and_only_excerpts_supplemental_context() {
     input.question = "Keep this question?".into();
     input.page_context = "supplemental 日本語 ".repeat(2000);
     input.previous_result = "history \"\\\n".repeat(2000);
-    let expected_source = input.source();
+    let expected_source =
+        "Keep this source intact.\n\nUser-supplied context:\nUser added source context.";
+    assert_eq!(input.source(), expected_source);
     let mut original = prompt();
     original.local_input = Some(input);
     let result = fit(original).unwrap();
@@ -1249,7 +1289,10 @@ async fn local_http_preserves_timed_reference_provenance_and_bounds_unicode_exce
             }
             reference.validate().unwrap();
             input.reference = Some(reference.clone());
-            let expected_source = input.source();
+            let expected_source = format!(
+                "{}\n\nUser-supplied context:\nManual source context must remain exact: Café 日本語.",
+                input.snapshot.text
+            );
             let original = pickle_core::make_prompt(&input, None, None).unwrap();
             let expected_system = original.system.clone();
             let complete = json!({"done":true,"message":{"content":"Fixed fixture answer."}});
@@ -1502,9 +1545,12 @@ async fn local_chat_timing_includes_delayed_headers_and_only_streams_report_firs
 
 #[tokio::test]
 async fn cloud_backed_ollama_metadata_prevents_chat() {
-    let (base, captured) = server(vec![Reply::json(
-        json!({"details":{"format":"gguf"},"capabilities":["completion"],"remote_host":"cloud.example"}),
-    )]);
+    let (base, captured) = server(vec![
+        Reply::json(
+            json!({"details":{"format":"gguf"},"capabilities":["completion"],"remote_host":"https://ollama.com"}),
+        ),
+        Reply::json(json!({"fixture":"finished"})),
+    ]);
     let provider = OllamaProvider::new(LocalAIConfiguration::new(base.to_string()));
     let (tx, _) = unbounded_channel();
     assert!(
@@ -1513,8 +1559,14 @@ async fn cloud_backed_ollama_metadata_prevents_chat() {
             .await
             .is_err()
     );
-    assert_eq!(captured.recv().unwrap().path, "/api/show");
-    assert!(captured.recv_timeout(Duration::from_millis(30)).is_err());
+    let metadata = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(metadata.path, "/api/show");
+    assert_eq!(metadata.body, json!({"model":"llama3.2:1b"}));
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    stop_listening_fixture(&base, &captured);
 }
 
 #[tokio::test]
@@ -1849,9 +1901,10 @@ async fn visual_analysis_sends_one_bounded_image_only_when_explicitly_invoked() 
 
 #[tokio::test]
 async fn local_vision_requires_a_downloaded_vision_model() {
-    let (base, captured) = server(vec![Reply::json(
-        json!({"details":{"format":"gguf"},"capabilities":["completion"]}),
-    )]);
+    let (base, captured) = server(vec![
+        Reply::json(json!({"details":{"format":"gguf"},"capabilities":["completion"]})),
+        Reply::json(json!({"fixture":"finished"})),
+    ]);
     let provider = OllamaProvider::new(LocalAIConfiguration::new(base.to_string()));
     let error = provider
         .summarize(&[1, 2, 3], "source", CancellationToken::new())
@@ -1859,8 +1912,14 @@ async fn local_vision_requires_a_downloaded_vision_model() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("vision model"), "{error}");
-    assert_eq!(captured.recv().unwrap().path, "/api/show");
-    assert!(captured.recv_timeout(Duration::from_millis(20)).is_err());
+    let metadata = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(metadata.path, "/api/show");
+    assert_eq!(metadata.body, json!({"model":"llama3.2:1b"}));
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    stop_listening_fixture(&base, &captured);
 }
 
 #[test]
