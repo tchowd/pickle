@@ -7,6 +7,9 @@ use rune::{
 use rune_kit::{Markdown, MarkdownStyle};
 
 #[cfg(test)]
+#[path = "legacy_render_tests.rs"]
+mod legacy_render_tests;
+#[cfg(test)]
 #[path = "reader_scroll_tests.rs"]
 mod reader_scroll_tests;
 #[cfg(test)]
