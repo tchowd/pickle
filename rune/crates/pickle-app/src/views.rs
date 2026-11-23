@@ -1101,6 +1101,44 @@ mod layout_regressions {
     use rune::{Env, Runtime};
 
     #[test]
+    fn header_drag_region_excludes_buttons_and_reader_text() {
+        let mut runtime = Runtime::new(
+            AppState::default(),
+            view,
+            (560.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        runtime.pointer_down(30.0, 24.0);
+        assert_eq!(
+            runtime.take_titlebar_action(),
+            Some(rune::TitlebarAction::Drag)
+        );
+        assert!(runtime.take_titlebar_action().is_none());
+        runtime.pointer_up(30.0, 24.0);
+        for key in ["pin-reader", "open-settings", "passage-input"] {
+            for _ in 0..60 {
+                runtime.frame(1.0 / 60.0);
+            }
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            assert!(
+                runtime.take_titlebar_action().is_none(),
+                "{key} started a window drag"
+            );
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0 / 60.0);
+            if key == "pin-reader" {
+                assert!(runtime.state.pinned);
+            }
+            if key == "open-settings" {
+                assert_eq!(runtime.state.route, Route::Settings);
+                runtime.update(|s, _| s.route = Route::Reader);
+            }
+        }
+    }
+
+    #[test]
     fn retry_shortcut_is_shown_only_for_live_initial_registration_failure() {
         use crate::invocation_ui::InvocationRegistration;
         let mut runtime = Runtime::new(

@@ -12,6 +12,7 @@ unsafe extern "C" {
     fn pickle_screen_work_areas() -> *mut c_char;
     fn pickle_window_work_area(window_number: u32, fallback_x: i32, fallback_y: i32)
     -> *mut c_char;
+    fn pickle_configure_panel_drag(window_number: u32) -> *mut c_char;
     fn pickle_request_accessibility();
     fn pickle_request_screen_capture();
     fn pickle_credential_get(account: *const c_char, interactive: i32) -> *mut c_char;
@@ -87,6 +88,12 @@ pub fn capabilities() -> Capabilities {
         window_capture_ocr: true,
         source_audio: true,
     }
+}
+
+/// Install the missing pinned-Rune source-window drag forward for the actual
+/// adopted panel. Call on_ready on the UI thread; retains no raw view pointer.
+pub fn configure_panel_drag(window_number: Option<u32>) -> Result<(), PlatformError> {
+    decode::<bool>(unsafe { pickle_configure_panel_drag(window_number.unwrap_or(0)) }).map(|_| ())
 }
 
 /// Main-thread query using the actual panel's WindowHandle::window_number.

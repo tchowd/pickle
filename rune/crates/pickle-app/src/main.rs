@@ -217,9 +217,21 @@ fn main() {
         });
     let app = if background { app.windowless() } else { app };
     let app = app.on_ready(move |window| {
+        #[cfg(target_os = "macos")]
+        let drag_error = if headless {
+            None
+        } else {
+            pickle_platform::configure_panel_drag(window.window_number())
+                .err()
+                .map(|error| error.to_string())
+        };
         let window = window.clone();
         handle.update(move |s, _| {
             s.window = Some(window);
+            #[cfg(target_os = "macos")]
+            if let Some(error) = drag_error {
+                s.notice = Some(error);
+            }
             if s.panel != Panel::Choosing && s.auto_preview.is_none() {
                 s.restore_window_geometry();
             }

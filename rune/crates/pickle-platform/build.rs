@@ -23,6 +23,7 @@ fn main() {
         .arg("../../native/macos/PickleBridge.swift")
         .arg("../../native/macos/PickleAudio.swift")
         .arg("../../native/macos/PickleInvocation.swift")
+        .arg("../../native/macos/PickleWindow.swift")
         .arg("-o")
         .arg(out.join("libPickleBridge.a"))
         .status()
@@ -54,6 +55,7 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleAudio.swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleInvocation.swift");
+    println!("cargo:rerun-if-changed=../../native/macos/PickleWindow.swift");
     for framework in [
         "AppKit",
         "ApplicationServices",

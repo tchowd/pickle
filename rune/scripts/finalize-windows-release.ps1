@@ -61,7 +61,10 @@ $ns=[Xml.XmlNamespaceManager]::new($pe.NameTable);$ns.AddNamespace('m','urn:sche
 $identity=$pe.SelectSingleNode('//m:msix',$ns)
 if (!$identity -or $identity.packageName -cne $PackageName -or $identity.publisher -cne $Publisher -or $identity.applicationId -cne 'Pickle') { throw 'Prepared PE package identity mismatch.' }
 $unpacked=Join-Path $OutputDirectory 'identity-inspection'
-& $makeappx unpack /p (Join-Path $payload 'PickleIdentity.msix') /d $unpacked
+# Sparse identity intentionally references the separately inventoried external EXE.
+# /nv applies to unpack too; otherwise MakeAppx requires that EXE inside the tiny package.
+# Explicit identity/runtime/capability checks below and signature/timestamp gates still apply.
+& $makeappx unpack /nv /p (Join-Path $payload 'PickleIdentity.msix') /d $unpacked
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the unsigned identity package.' }
 [xml]$manifest=Get-Content -Raw (Join-Path $unpacked 'AppxManifest.xml')
 if ($manifest.Package.Identity.Name -cne $PackageName -or $manifest.Package.Identity.Publisher -cne $Publisher -or $manifest.Package.Identity.Version -cne $IdentityVersion -or $manifest.Package.Applications.Application.Id -cne 'Pickle' -or $manifest.Package.Applications.Application.Executable -cne 'PickleRune.exe') { throw 'Prepared MSIX identity/version mismatch.' }
