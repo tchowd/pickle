@@ -174,4 +174,32 @@ The extraction command now uses MakeAppx's documented `/nv` option for sparse pa
 
 The user reported that the actual UI could not be moved around the screen. The Pickle header already had Rune's `.window_drag()` marker. Source inspection found that pinned Rune sends that drag through winit's retained original `NSWindow`, while the content is displayed in an adopted nonactivating panel. Rune's source-window bridge forwards fifteen native selectors but omits `performWindowDragWithEvent:`, so the request targets the hidden backing window.
 
-An app-owned adapter supplies only that missing selector on winit's declared source class. It maps the exact visible panel/source pair weakly, forwards only an event belonging to that panel, preserves the original implementation for unrelated/mismatched/expired pairs, and refuses a foreign override. It does not alter global `NSWindow`, subclass KVO instances, add input monitoring, move by guessed deltas, or change Windows behavior. Native synthetic routing/lifetime/fallback fixtures and a full-header button/text hit-testing regression pass. Headless/isolated startup explicitly skips installation. Actual movement and frame persistence require the rebuilt app retest; these fixtures alone are not that evidence.
+An app-owned adapter supplies only that missing selector on winit's declared source class. It maps the exact visible panel/source pair weakly, forwards only an event belonging to that panel, preserves the original implementation for unrelated/mismatched/expired pairs, and refuses a foreign override. It does not alter global `NSWindow`, subclass KVO instances, add input monitoring, move by guessed deltas, or change Windows behavior. Native synthetic routing/lifetime/fallback fixtures and a full-header button/text hit-testing regression pass. Headless/isolated startup explicitly skips installation. The following rebuilt-app test provides the separate native movement evidence.
+
+### Verified native movement at `ac5688f8a99ce032e21c2b8db6f5093c255f7d3c`
+
+The old app was quit normally before rebuilding. The optimized current bundle passed strict signature, payload, version/capability and system-library inspection. The running executable's path/hash and the GUI diagnostic commit were checked against that exact artifact.
+
+- Executable SHA-256: `bb5e1cf39febdc3827db62271a38f65ba731b1a9ba7c89164bc96d5723ff6d90`.
+- Local ZIP SHA-256: `300f7905a6d2f9e51d8ec57283fb377ad922967d87204b6d278a60ada0e3c1ac`.
+- Automated background dragging did not produce a measurable saved-position change, so it was not counted as a native movement pass. The user then physically dragged the blank header and explicitly confirmed **“Yes, it moves now.”**
+- After that physical drag, normal quit persisted a changed window position. Reopening and quitting again without another move recorded exactly the same position, logical size and scale. This verifies movement plus save/restore on this Mac; it does not establish other displays/OS versions or Windows dragging.
+- Native Pin toggled on and off successfully, and Settings opened normally. Pin was restored off. The app was left running at its empty reader, with no inference, vision, audio or context-sharing action submitted during the test.
+- As with earlier ad hoc rebuilds, GUI diagnostics initially showed the existing capture grants false. Only Pickle Rune's stale Accessibility and screen-recording entries were removed/re-added for the exact current bundle, followed by normal restart. The current GUI then reported **both grants true**. Other apps and permission categories were left unchanged.
+- Saved OCR off, original modifier gesture on and automatic chooser off were independently confirmed. Permission flags are not a new controlled selection/OCR pass; those acceptance cases remain separate.
+
+### Complete CI and isolated Windows finalization at the same commit
+
+[Run 45102216881](https://github.com/tchowd/pickle/actions/runs/45102216881) passed all four jobs. Mac workspace tests recorded **246 passed, two ignored**; Windows recorded **238 passed, two ignored**. These totals exclude standalone helper/native fixtures. The new Mac drag fixture, portable finalizer/signing fixtures, strict checks and both optimized packages passed.
+
+The optimized Windows job now passed unsigned preparation before test-key creation, static PE/MSIX identity/runtime checks, and the complete finalizer. Its report binds source `ac5688f`, target `x86_64-pc-windows-msvc`, app version `0.1.0` and prepared-receipt SHA-256 `165b834167743096992d18655b21cd12cbe8f684e130011f6638107bb84165dd`. All five images—app, browser host, MSIX identity, generated uninstaller and final NSIS installer—passed exact disposable-signer and trusted timestamp verification. Independent MSIX CMS signer/RFC3161 checks also ran successfully. Gated output promotion succeeded; the test private key was removed before installed-app execution.
+
+The installed identity then passed exact **PICKLE** OCR, an owned visible 560×300 native window with two successful responsiveness probes, repair/conflict/live-instance guards, ownership cleanup and retained-data checks. Exact test certificate/private-key cleanup passed. This demonstrates the protocol on the hosted Windows environment with a disposable publisher. The test is not a production CA identity, a fresh isolated production signing worker, a clean standard-user Windows 11 test, or a real cross-app capture/browser session.
+
+| Ordinary optimized CI artifact | SHA-256 |
+|---|---|
+| Mac ZIP | `231a72dc668b4f2badbe942bb59f287b72c69c7027441b193629ab4805227def` |
+| Windows NSIS setup | `00b2fce29276ca94a80094199468b7513fa241b86b9cda72ba9f99d17703ad20` |
+| Windows ZIP | `74a96d5222e21fb9c1b8ac191335f13aadd7f974a5f6e5d47b25085abebfea1a` |
+
+The optimized enclosing artifact digests are Mac `sha256:423ff25b2319712b4e342997b96c165d6fb526ec4f695f53bb12d5bc42c68d26` and Windows `sha256:9d5456860062a43289325749c98724601bf0505781778802a13a529e0733e870`. The clearly named test-signed finalizer installer has SHA-256 `1256a2459fbd9d2bb036386103b1db6f4fec45d8afe103b51c6abb935923a25f`; its test-signed ZIP is `6a88df968577bc2f709a4f82bb34db40a63aaf0db345ac6cc4686e3730c561e6`. Their disposable trust was removed; keep them as evidence, not public release candidates.
