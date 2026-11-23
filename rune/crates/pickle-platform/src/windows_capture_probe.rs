@@ -3,7 +3,10 @@
 use super::{CapturedSelection, PlatformError, windows_child_job};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
+    fs::File,
     io::{BufRead, BufReader, Read, Write},
+    os::windows::io::{AsRawHandle, FromRawHandle},
     sync::mpsc::{self, Receiver, SyncSender},
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -11,12 +14,16 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{
+            CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, HWND,
+            INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT, WPARAM,
+        },
         Graphics::Gdi::*,
+        Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType},
         System::{
             LibraryLoader::GetModuleHandleW,
             Threading::{
-                GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32,
+                GetCurrentProcess, GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32,
                 PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
             },
         },
@@ -34,14 +41,140 @@ const CLASS: PCWSTR = w!("PickleOwnedWindowCaptureProbe");
 fn error(category: &'static str) -> PlatformError {
     PlatformError(category.into())
 }
-fn diagnostic(value: serde_json::Value) {
-    if let Ok(mut bytes) = serde_json::to_vec(&value)
-        && bytes.len() <= 4096
-    {
+const DIAGNOSTIC_LINE_LIMIT: usize = 4096;
+const DIAGNOSTIC_TOTAL_LIMIT: usize = 14 * 1024;
+struct BoundedSink<W> {
+    output: W,
+    remaining: usize,
+    failed: bool,
+}
+impl<W: Write> BoundedSink<W> {
+    fn write(&mut self, value: &serde_json::Value) {
+        let Ok(mut bytes) = serde_json::to_vec(value) else {
+            self.failed = true;
+            return;
+        };
         bytes.push(b'\n');
-        let mut output = std::io::stderr().lock();
-        let _ = output.write_all(&bytes).and_then(|_| output.flush());
+        if bytes.len() > DIAGNOSTIC_LINE_LIMIT || bytes.len() > self.remaining {
+            self.failed = true;
+            return;
+        }
+        self.remaining -= bytes.len();
+        if self
+            .output
+            .write_all(&bytes)
+            .and_then(|_| self.output.flush())
+            .is_err()
+        {
+            self.failed = true;
+        }
     }
+}
+struct StableDiagnostic {
+    sink: BoundedSink<File>,
+    original_stderr: *mut std::ffi::c_void,
+}
+thread_local! {
+    static DIAGNOSTIC: RefCell<Option<StableDiagnostic>> = const { RefCell::new(None) };
+}
+struct DiagnosticSession;
+fn valid_stderr_handle(handle: *mut std::ffi::c_void) -> bool {
+    !handle.is_null() && handle != INVALID_HANDLE_VALUE.0
+}
+impl DiagnosticSession {
+    fn start() -> Result<Self, PlatformError> {
+        let original = std::io::stderr().as_raw_handle();
+        // INVALID_HANDLE_VALUE is also a process pseudo-handle; passing it to
+        // DuplicateHandle would clone the wrong object instead of a pipe.
+        if !valid_stderr_handle(original) {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "{}",
+                serde_json::json!({
+                "schema":1,"test":FAILURE_TEST,"stage":"diagnostic-source-handle","valid":false})
+            );
+            return Err(error("report"));
+        }
+        let process = unsafe { GetCurrentProcess() };
+        let mut duplicate = HANDLE::default();
+        let cloned = unsafe {
+            DuplicateHandle(
+                process,
+                HANDLE(original),
+                process,
+                &mut duplicate,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if let Err(failure) = cloned {
+            // No owned channel exists yet. Fixed scalar initialization failure
+            // only; never create a file or change the process's standard table.
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "{}",
+                serde_json::json!({
+                "schema":1,"test":FAILURE_TEST,"stage":"diagnostic-duplicate",
+                "hresult":failure.code().0})
+            );
+            return Err(error("report"));
+        }
+        if unsafe { GetFileType(duplicate) } != FILE_TYPE_PIPE {
+            // DuplicateHandle also accepts non-file objects. Validate the
+            // redirected diagnostic pipe before giving the handle to File.
+            let _ = unsafe { CloseHandle(duplicate) };
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "{}",
+                serde_json::json!({
+                "schema":1,"test":FAILURE_TEST,"stage":"diagnostic-pipe","valid":false})
+            );
+            return Err(error("report"));
+        }
+        let file = unsafe { File::from_raw_handle(duplicate.0) };
+        DIAGNOSTIC.with(|state| {
+            *state.borrow_mut() = Some(StableDiagnostic {
+                sink: BoundedSink {
+                    output: file,
+                    remaining: DIAGNOSTIC_TOTAL_LIMIT,
+                    failed: false,
+                },
+                original_stderr: original,
+            })
+        });
+        Ok(Self)
+    }
+    fn failed(&self) -> bool {
+        DIAGNOSTIC.with(|state| {
+            state
+                .borrow()
+                .as_ref()
+                .is_none_or(|state| state.sink.failed)
+        })
+    }
+    fn stderr_changed(&self) -> Option<bool> {
+        DIAGNOSTIC.with(|state| {
+            state
+                .borrow()
+                .as_ref()
+                .map(|state| state.original_stderr != std::io::stderr().as_raw_handle())
+        })
+    }
+}
+impl Drop for DiagnosticSession {
+    fn drop(&mut self) {
+        DIAGNOSTIC.with(|state| {
+            state.borrow_mut().take();
+        });
+    }
+}
+fn diagnostic(value: serde_json::Value) {
+    DIAGNOSTIC.with(|state| {
+        if let Some(state) = state.borrow_mut().as_mut() {
+            state.sink.write(&value);
+        }
+    });
 }
 fn breadcrumb(stage: &'static str) {
     diagnostic(
@@ -57,13 +190,12 @@ fn spawn_observation(role: &'static str, observation: windows_child_job::SpawnOb
 
 fn start_io_failure(stage: &'static str, failure: &std::io::Error) -> PlatformError {
     let native = windows_child_job::native_failure(failure);
-    eprintln!(
-        "{}",
+    diagnostic(
         serde_json::json!({"schema":1,"test":FAILURE_TEST,"passed":false,
             "stage":stage,"io_kind":format!("{:?}",failure.kind()),
             "raw_os_error":failure.raw_os_error(),
             "native_operation":native.map(|value|value.0),
-            "hresult":native.map(|value|value.1)})
+            "hresult":native.map(|value|value.1)}),
     );
     error("fixture-start")
 }
@@ -73,13 +205,10 @@ fn spawn_fixture() -> Result<windows_child_job::Child, PlatformError> {
         spawn_observation("initial", value)
     })) {
         Ok(child) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"schema":1,
+            diagnostic(serde_json::json!({"schema":1,
                 "test":"windows-owned-window-capture-fixture-launch",
                 "breakaway_retry":false,"creation_flags":windows_child_job::fixture_creation_flags(false),
-                "atomic_job_membership_verified":true})
-            );
+                "atomic_job_membership_verified":true}));
             Ok(child)
         }
         Err(original) => {
@@ -112,13 +241,12 @@ fn spawn_fixture() -> Result<windows_child_job::Child, PlatformError> {
                     "failure":io_evidence(failure)}),
             };
             let native = windows_child_job::native_failure(&original);
-            eprintln!(
-                "{}",
+            diagnostic(
                 serde_json::json!({"schema":1,"test":FAILURE_TEST,"passed":false,
                 "stage":"spawn","io_kind":format!("{:?}",original.kind()),
                 "raw_os_error":original.raw_os_error(),"native_operation":native.map(|value|value.0),
                 "hresult":native.map(|value|value.1),"parent":parent,
-                "self_version_control":control,"breakaway_retry":retry_evidence})
+                "self_version_control":control,"breakaway_retry":retry_evidence}),
             );
             match retry {
                 Some(Ok(child)) => Ok(child),
@@ -280,12 +408,9 @@ impl FixtureChild {
                     Err(mpsc::RecvTimeoutError::Timeout) => ("ready-timeout", None),
                     Err(mpsc::RecvTimeoutError::Disconnected) => ("ready-disconnected", None),
                 };
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"schema":1,"test":FAILURE_TEST,
+                diagnostic(serde_json::json!({"schema":1,"test":FAILURE_TEST,
                     "passed":false,"stage":stage,"helper_category":category,
-                    "child_running":self.child.as_ref().and_then(|child|child.is_running().ok())})
-                );
+                    "child_running":self.child.as_ref().and_then(|child|child.is_running().ok())}));
                 return Err(error("fixture-start"));
             }
         };
@@ -444,6 +569,29 @@ fn source(ready: &Ready) -> Result<CapturedSelection, PlatformError> {
 }
 
 pub(super) fn verify_window_capture_runtime() -> Result<serde_json::Value, PlatformError> {
+    let session = DiagnosticSession::start()?;
+    let result = verify_window_capture_inner();
+    let category = result
+        .as_ref()
+        .err()
+        .map(|failure| match failure.0.as_str() {
+            "identity" | "fixture-start" | "paint" | "target" | "capture" | "image" | "word"
+            | "cleanup" | "report" => failure.0.as_str(),
+            _ => "unavailable",
+        });
+    diagnostic(
+        serde_json::json!({"schema":1,"test":"windows-owned-window-capture-breadcrumb",
+        "stage":"verify-returned","succeeded":result.is_ok(),
+        "failure_category":category,
+        "current_standard_stderr_handle_changed":session.stderr_changed(),
+        "diagnostic_write_failed":session.failed()}),
+    );
+    if result.is_ok() && session.failed() {
+        return Err(error("report"));
+    }
+    result
+}
+fn verify_window_capture_inner() -> Result<serde_json::Value, PlatformError> {
     breadcrumb("verify-enter");
     if !super::windows_context::has_package_identity() {
         return Err(error("identity"));
@@ -451,12 +599,12 @@ pub(super) fn verify_window_capture_runtime() -> Result<serde_json::Value, Platf
     let mut fixture = FixtureChild::start()?;
     let ready = fixture.ready()?;
     let source = source(&ready)?;
-    let diagnostic = std::sync::Arc::new(super::windows_context::CaptureDiagnostics::new());
+    let capture_diagnostic = std::sync::Arc::new(super::windows_context::CaptureDiagnostics::new());
     breadcrumb("capture-before");
     let captured = super::windows_context::capture_page_observed(
         &source,
         CancellationToken::new(),
-        Some(diagnostic.clone()),
+        Some(capture_diagnostic.clone()),
     )
     .map_err(|_| error("capture"));
     let result = captured.and_then(|page| {
@@ -477,15 +625,14 @@ pub(super) fn verify_window_capture_runtime() -> Result<serde_json::Value, Platf
     });
     let cleanup = fixture.finish(&ready);
     if result.is_err() || cleanup.is_err() {
-        eprintln!(
-            "{}",
-            serde_json::json!({"schema":1,"test":"windows-owned-window-capture-native","passed":false,"native_capture":diagnostic.snapshot()})
+        diagnostic(
+            serde_json::json!({"schema":1,"test":"windows-owned-window-capture-native","passed":false,"native_capture":capture_diagnostic.snapshot()}),
         );
     }
     cleanup?;
     let (width, height, dark, jpeg_bytes) = result?;
     Ok(
-        serde_json::json!({"schema":1,"test":"windows-owned-window-capture","passed":true,"package_identity":true,"production_window_capture":true,"expected_word_matched":true,"jpeg_bytes":jpeg_bytes,"width":width,"height":height,"dark_pixels":dark,"painted_before_capture":true,"owned_window_closed":true,"fixture_thread_joined":true,"fixture_process_stopped":true,"native_capture":diagnostic.snapshot()}),
+        serde_json::json!({"schema":1,"test":"windows-owned-window-capture","passed":true,"package_identity":true,"production_window_capture":true,"expected_word_matched":true,"jpeg_bytes":jpeg_bytes,"width":width,"height":height,"dark_pixels":dark,"painted_before_capture":true,"owned_window_closed":true,"fixture_thread_joined":true,"fixture_process_stopped":true,"native_capture":capture_diagnostic.snapshot()}),
     )
 }
 fn valid_capture_geometry(width: u32, height: u32, dark: usize, jpeg_bytes: usize) -> bool {
@@ -734,6 +881,53 @@ fn run_fixture() -> Result<(), PlatformError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_channel_refuses_missing_and_pseudo_standard_handles() {
+        assert!(!valid_stderr_handle(std::ptr::null_mut()));
+        assert!(!valid_stderr_handle(INVALID_HANDLE_VALUE.0));
+        // No dereference/query: real validity is still checked by DuplicateHandle.
+        assert!(valid_stderr_handle(42_usize as *mut _));
+    }
+    #[test]
+    fn stable_sink_caps_lines_and_total_bytes_and_latches_write_failure() {
+        let value = serde_json::json!({"stage":"owned"});
+        let line = serde_json::to_vec(&value).unwrap().len() + 1;
+        let mut sink = BoundedSink {
+            output: Vec::<u8>::new(),
+            remaining: line,
+            failed: false,
+        };
+        sink.write(&value);
+        assert_eq!(sink.output.len(), line);
+        assert!(!sink.failed);
+        sink.write(&value);
+        assert!(sink.failed);
+        assert_eq!(sink.output.len(), line);
+        let mut sink = BoundedSink {
+            output: Vec::<u8>::new(),
+            remaining: DIAGNOSTIC_TOTAL_LIMIT,
+            failed: false,
+        };
+        sink.write(&serde_json::json!({"stage":"x".repeat(DIAGNOSTIC_LINE_LIMIT)}));
+        assert!(sink.failed);
+        assert!(sink.output.is_empty());
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from_raw_os_error(6))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut sink = BoundedSink {
+            output: Broken,
+            remaining: DIAGNOSTIC_TOTAL_LIMIT,
+            failed: false,
+        };
+        sink.write(&value);
+        assert!(sink.failed);
+    }
     #[test]
     fn retained_image_gate_refuses_blank_wrong_shape_oversized_and_empty_captures() {
         assert!(valid_capture_geometry(768, 180, 1000, 5000));

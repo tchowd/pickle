@@ -485,6 +485,11 @@ pub(crate) struct SpawnObservation {
     pub creation_flags: u32,
 }
 type Observer<'a> = Option<&'a dyn Fn(SpawnObservation)>;
+#[derive(Clone, Copy)]
+struct ObservationContext {
+    parent_pid: u32,
+    creation_flags: u32,
+}
 fn observe(
     observer: Observer<'_>,
     stage: &'static str,
@@ -492,17 +497,17 @@ fn observe(
     child_pid: Option<u32>,
     process_handle_pid: Option<u32>,
     contained: Option<bool>,
-    breakaway: bool,
+    context: ObservationContext,
 ) {
     if let Some(observer) = observer {
         observer(SpawnObservation {
             stage,
             hresult,
-            parent_pid: unsafe { windows::Win32::System::Threading::GetCurrentProcessId() },
+            parent_pid: context.parent_pid,
             child_pid,
             process_handle_pid,
             contained,
-            creation_flags: fixture_creation_flags(breakaway),
+            creation_flags: context.creation_flags,
         });
     }
 }
@@ -682,6 +687,14 @@ fn spawn_with_stdio(
     }
     startup.lpAttributeList = attributes.pointer;
     let mut process = PROCESS_INFORMATION::default();
+    let observation_context = ObservationContext {
+        parent_pid: if observer.is_some() {
+            unsafe { windows::Win32::System::Threading::GetCurrentProcessId() }
+        } else {
+            0
+        },
+        creation_flags: fixture_creation_flags(breakaway),
+    };
     observe(
         observer,
         "create-process-before",
@@ -689,7 +702,7 @@ fn spawn_with_stdio(
         None,
         None,
         None,
-        breakaway,
+        observation_context,
     );
     let created = unsafe {
         CreateProcessW(
@@ -707,9 +720,22 @@ fn spawn_with_stdio(
             &mut process,
         )
     };
-    // Query only the exact handle returned by this call, and only for the
-    // explicit probe observer. No process enumeration or production extra work.
-    let process_handle_pid = if observer.is_some() && created.is_ok() {
+    // Preserve the call's actual status and raw PROCESS_INFORMATION PID before
+    // any post-return native query, including GetProcessId. The observer writes
+    // to an independent retained handle, not the process's standard table.
+    let creation_hresult = created.as_ref().err().map_or(0, |error| error.code().0);
+    observe(
+        observer,
+        "create-process-returned",
+        creation_hresult,
+        created.as_ref().ok().map(|_| process.dwProcessId),
+        None,
+        None,
+        observation_context,
+    );
+    created.map_err(|e| failure("Start contained transcriber", e))?;
+    // Query only the exact returned process handle for the explicit observer.
+    let process_handle_pid = if observer.is_some() {
         let pid = unsafe { windows::Win32::System::Threading::GetProcessId(process.hProcess) };
         (pid != 0).then_some(pid)
     } else {
@@ -717,14 +743,13 @@ fn spawn_with_stdio(
     };
     observe(
         observer,
-        "create-process-returned",
-        created.as_ref().err().map_or(0, |error| error.code().0),
-        created.as_ref().ok().map(|_| process.dwProcessId),
+        "process-handle-queried",
+        creation_hresult,
+        Some(process.dwProcessId),
         process_handle_pid,
         None,
-        breakaway,
+        observation_context,
     );
-    created.map_err(|e| failure("Start contained transcriber", e))?;
     // Attribute values reference the job/pipe handle arrays. Delete the list
     // while all values and their handles still live, before transferring pipes.
     drop(attributes);
@@ -735,7 +760,7 @@ fn spawn_with_stdio(
         Some(process.dwProcessId),
         process_handle_pid,
         None,
-        breakaway,
+        observation_context,
     );
     let process_handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess.0) };
     let _thread = unsafe { OwnedHandle::from_raw_handle(process.hThread.0) };
@@ -757,7 +782,7 @@ fn spawn_with_stdio(
         Some(process.dwProcessId),
         process_handle_pid,
         None,
-        breakaway,
+        observation_context,
     );
     let membership = unsafe {
         IsProcessInJob(
@@ -773,7 +798,7 @@ fn spawn_with_stdio(
         Some(process.dwProcessId),
         process_handle_pid,
         membership.as_ref().ok().map(|_| contained.as_bool()),
-        breakaway,
+        observation_context,
     );
     if membership.is_err() || !contained.as_bool() {
         observe(
@@ -783,7 +808,7 @@ fn spawn_with_stdio(
             Some(process.dwProcessId),
             process_handle_pid,
             None,
-            breakaway,
+            observation_context,
         );
         let _ = unsafe { TerminateProcess(raw(&child.process), 1) };
         // Retain the exact process/job handles through a bounded termination
@@ -797,7 +822,7 @@ fn spawn_with_stdio(
             Some(process.dwProcessId),
             process_handle_pid,
             None,
-            breakaway,
+            observation_context,
         );
         return Err(match membership {
             Err(error) => failure("Check contained process job", error),
@@ -813,7 +838,7 @@ fn spawn_with_stdio(
         Some(process.dwProcessId),
         process_handle_pid,
         Some(true),
-        breakaway,
+        observation_context,
     );
     Ok(child)
 }
