@@ -30,19 +30,26 @@ if ($null -eq $loop) { throw 'The package must run each browser through a separa
 $following=@($loop.Parent.Statements | Where-Object { $_.Extent.StartOffset -gt $loop.Extent.EndOffset } | Select-Object -First 1)
 if ($following.Count -ne 1 -or $following[0] -isnot [Management.Automation.Language.IfStatementAst]) { throw 'The package must fail after collecting safe setup failures.' }
 $actualPair=[scriptblock]::Create($loop.Extent.Text+"`n"+$following[0].Extent.Text)
-foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unknown')) {
+foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unknown','chrome-delivery-failed-cleanly')) {
   & {
     param($ActualPair,[string]$Scenario)
-    $testDirectory='owned-installed-package';$observed=[Collections.Generic.List[string]]::new();$extensionFailures=[Collections.Generic.List[string]]::new()
+    $testDirectory='owned-installed-package';$observed=[Collections.Generic.List[string]]::new();$deliveries=[Collections.Generic.List[string]]::new();$extensionFailures=[Collections.Generic.List[string]]::new()
     function Invoke-PickleExtensionCore([string]$PackageDirectory,[string]$Browser,[string]$EvidencePath) {
       if ($PackageDirectory -cne 'owned-installed-package' -or $EvidencePath -cne (Join-Path $PWD "artifacts/windows-extension-$Browser-native-smoke.json")) { throw 'The actual package setup call lost installed-payload ownership.' }
       $observed.Add($Browser)
       if ($Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-cleanup-unknown') { throw 'owned cleanup unknown' }
       return !($Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-failed-cleanly')
     }
+    function Invoke-PickleExtensionDeliveryCore([string]$PackageDirectory,[string]$Browser,[string]$EvidencePath) {
+      if ($PackageDirectory -cne 'owned-installed-package' -or $EvidencePath -cne (Join-Path $PWD "artifacts/windows-extension-$Browser-delivery-native-smoke.json")) { throw 'The delivery call lost its exact package/evidence boundaries.' }
+      $deliveries.Add($Browser)
+      return !($Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-delivery-failed-cleanly')
+    }
     $failed=$false;try { & $ActualPair } catch { $failed=$true }
     $expected=if ($Scenario -ceq 'chrome-cleanup-unknown') { 'chrome' } else { 'chrome,edge' }
     if (($observed -join ',') -cne $expected -or $failed -ne ($Scenario -cne 'both-pass')) { throw 'The actual package did not collect safe failures, stop on uncertain cleanup, or fail after a rejected setup.' }
+    $expectedDelivery=if ($Scenario -ceq 'chrome-cleanup-unknown') { '' } elseif ($Scenario -ceq 'chrome-failed-cleanly') { 'edge' } else { 'chrome,edge' }
+    if (($deliveries -join ',') -cne $expectedDelivery) { throw 'Delivery must follow each successful component independently, and stop on unsafe cleanup.' }
   } $actualPair $scenario
 }
 $python=Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1

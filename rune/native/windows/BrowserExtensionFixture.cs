@@ -385,7 +385,7 @@ public static class BrowserExtensionPredicates {
 
 #if !PICKLE_PREDICATES
 sealed class ExtensionStageFailure : Exception { public readonly string Code; public ExtensionStageFailure(string code) { Code=code; } }
-public static class BrowserExtensionFixtureProgram {
+public static partial class BrowserExtensionFixtureProgram {
     static readonly JavaScriptSerializer Json=new JavaScriptSerializer { MaxJsonLength=32768,RecursionLimit=12 };
     static readonly Dictionary<string,object> Report=new Dictionary<string,object> {
         {"schema",1},{"test","windows-stable-bundled-extension-load"},{"scope","bundled-extension-load-only"},
@@ -405,12 +405,16 @@ public static class BrowserExtensionFixtureProgram {
     }
     [MTAThread] public static int Main(string[] args) {
         if (args.Length==1 && args[0]=="--self-test") { BrowserExtensionPredicates.SelfTest(); return 0; }
+        if (args.Length==1 && args[0]=="--delivery-self-test") { BrowserExtensionDeliveryPredicates.SelfTest(); return 0; }
         if(args.Length>0 && args[0]=="--capture-owned-window") return CaptureChild(args);
-        bool loaded=false,drained=false;IntPtr window=IntPtr.Zero;
+        bool loaded=false,drained=false,delivery=false,delivered=false;IntPtr window=IntPtr.Zero;
         try {
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted") Fail("requires-hosted-windows-ci");
             string[] names={"--browser","--executable","--profile","--extension","--proxy-port","--evidence"};
-            if (args.Length!=1+names.Length*2 || args[0]!="load") Fail("invalid-arguments");
+            delivery=args.Length>0 && args[0]=="deliver-reference";
+            if(delivery) InitializeDeliveryReport();
+            if(delivery) names=names.Concat(new[]{"--application","--application-pid","--application-start-ticks","--support"}).ToArray();
+            if (args.Length!=1+names.Length*2 || (args[0]!="load" && !delivery)) Fail("invalid-arguments");
             var options=new Dictionary<string,string>(StringComparer.Ordinal);
             for (int i=1;i<args.Length;i+=2) {
                 if (!names.Contains(args[i]) || options.ContainsKey(args[i]) || String.IsNullOrWhiteSpace(args[i+1])) Fail("invalid-arguments");
@@ -432,6 +436,7 @@ public static class BrowserExtensionFixtureProgram {
             Report["browser"]=kind;
             Report["browser_version"]=String.Format(CultureInfo.InvariantCulture,"{0}.{1}.{2}.{3}",version.FileMajorPart,version.FileMinorPart,version.FileBuildPart,version.FilePrivatePart);
             deadline=DateTime.UtcNow.AddSeconds(90);
+            if(delivery) { stage="delivery-app-ready";PrepareDelivery(options); }
             stage="launch-contained-browser";
             browser=new BrowserJob(exe,profile,kind+"://extensions/",port);
             Report["atomic_job_membership_verified"]=true;
@@ -517,7 +522,9 @@ public static class BrowserExtensionFixtureProgram {
                 id=last.Id;return true;
             },20,"loaded-extension-id-unavailable");
             Report["extension_card_identity_verified"]=true;Report["extension_loaded"]=true;Report["extension_id"]=id;Report["extension_version"]=extensionVersion;
-            loaded=true;stage="browser-cleanup";
+            loaded=true;
+            if(delivery) { ContinueDelivery(window,kind,id);delivered=true; }
+            stage="browser-cleanup";
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;
             if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card")) {
@@ -529,11 +536,14 @@ public static class BrowserExtensionFixtureProgram {
         catch (Exception error) { Report["failure"]="native-operation-failed";Report["error_kind"]=ErrorKind(error);Report["error_hresult"]=error.HResult; }
         finally {
             if (browser!=null) { try { drained=browser.Close(); } catch { drained=false; } browser.Dispose(); }
+            if(delivery) FinishDelivery();
             Report["browser_job_drained"]=drained;
-            Report["stage"]=stage;Report["passed"]=BrowserExtensionPredicates.Scope(loaded,drained,false);
+            bool complete=loaded && drained && (!delivery || (delivered && DeliveryStopped));
+            if(delivery) Report["full_delivery_verified"]=complete;
+            Report["stage"]=stage;Report["passed"]=complete;
             if (evidence!=null) { try { WriteEvidence(evidence,Report); } catch { loaded=false; } }
         }
-        return loaded && drained ? 0 : 1;
+        return loaded && drained && (!delivery || (delivered && DeliveryStopped)) ? 0 : 1;
     }
     static string ErrorKind(Exception error) {
         if(error is COMException) return "com";if(error is UnauthorizedAccessException) return "access-denied";
@@ -1058,7 +1068,7 @@ public static class BrowserExtensionFixtureProgram {
         }
         public void Dispose() { if(job!=IntPtr.Zero) { Native.TerminateJobObject(job,1);Native.CloseHandle(job);job=IntPtr.Zero; }if(process!=IntPtr.Zero) { Native.CloseHandle(process);process=IntPtr.Zero; } }
     }
-    static class Native {
+    static partial class Native {
         [DllImport("advapi32.dll",CharSet=CharSet.Unicode)] public static extern int RegGetValueW(IntPtr key,string subkey,string value,uint flags,out uint type,out uint data,ref uint bytes);
         [StructLayout(LayoutKind.Sequential)] public struct FileTime { public uint Low,High; }
         [DllImport("kernel32.dll")] public static extern bool GetProcessTimes(IntPtr process,out FileTime created,out FileTime exited,out FileTime kernel,out FileTime user);

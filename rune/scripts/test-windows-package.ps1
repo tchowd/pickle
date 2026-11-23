@@ -141,15 +141,18 @@ if (!$hasIdentity -and $Configuration -ceq 'debug' -and $env:GITHUB_ACTIONS -ceq
   Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $followEvidence) $false $Configuration -Scenario 'follow-up-return-clear'
 }
 . (Join-Path $PSScriptRoot 'windows-extension-smoke.ps1')
+. (Join-Path $PSScriptRoot 'windows-extension-delivery.ps1')
 if (Test-PickleExtensionSetupGate $Configuration $hasIdentity $PSEdition ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) $env:GITHUB_ACTIONS $env:RUNNER_ENVIRONMENT) {
-  # Real Stable setup discovery only, with no Pickle window alive. Each browser
-  # gets its own PowerShell 7 owner/job; native-host delivery remains unverified.
+  # Keep the isolated load-only component, then attempt real article delivery
+  # separately for each successful browser. Each mode owns its profile/job.
   & (Join-Path $PSScriptRoot 'test-windows-extension-smoke.ps1')
+  & (Join-Path $PSScriptRoot 'test-windows-extension-delivery.ps1')
   $extensionFailures=[Collections.Generic.List[string]]::new()
   foreach ($browser in @('chrome','edge')) {
     if (!(Invoke-PickleExtensionCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-native-smoke.json"))) { $extensionFailures.Add($browser) }
+    elseif (!(Invoke-PickleExtensionDeliveryCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-delivery-native-smoke.json"))) { $extensionFailures.Add("$browser-delivery") }
   }
-  if ($extensionFailures.Count) { throw 'One or more Stable extension setup stages failed; both safe-cleanup reports were retained and full delivery remains unverified.' }
+  if ($extensionFailures.Count) { throw 'One or more Stable extension setup or article-delivery stages failed; scoped reports were retained.' }
 }
 if ($hasIdentity) {
   # The installed user workflow above is the package capture gate. Retain the
