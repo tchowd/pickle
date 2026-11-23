@@ -38,15 +38,55 @@ fn error(category: &'static str) -> PlatformError {
 
 fn start_io_failure(stage: &'static str, failure: &std::io::Error) -> PlatformError {
     let native = windows_child_job::native_failure(failure);
+    // One extra process only after the real fixture's contained launch failed.
+    // This is evidence, never an alternate path to capture or a success gate.
+    let parent = (stage == "spawn").then(windows_child_job::parent_spawn_snapshot);
+    let control = (stage == "spawn").then(version_control_evidence);
     eprintln!(
         "{}",
         serde_json::json!({"schema":1,"test":FAILURE_TEST,"passed":false,
             "stage":stage,"io_kind":format!("{:?}",failure.kind()),
             "raw_os_error":failure.raw_os_error(),
             "native_operation":native.map(|value|value.0),
-            "hresult":native.map(|value|value.1)})
+            "hresult":native.map(|value|value.1),
+            "parent":parent,"self_version_control":control})
     );
     error("fixture-start")
+}
+fn io_evidence(failure: &std::io::Error) -> serde_json::Value {
+    let native = windows_child_job::native_failure(failure);
+    serde_json::json!({"io_kind":format!("{:?}",failure.kind()),
+        "raw_os_error":failure.raw_os_error(),
+        "native_operation":native.map(|value|value.0),"hresult":native.map(|value|value.1)})
+}
+fn version_control_evidence() -> serde_json::Value {
+    match windows_child_job::spawn_self_version_control() {
+        Err(failure) => serde_json::json!({"diagnostic_only":true,"spawned":false,
+            "inherits_stdio":false,"stage":"spawn","failure":io_evidence(&failure)}),
+        Ok(mut child) => {
+            let waited = child.wait_for_exit(Duration::from_secs(2));
+            let (exit_code, job_drained, forced_stop, wait_failure, stop_failure) = match waited {
+                Ok(status) => (status.code(), true, false, None, None),
+                Err(failure) => {
+                    let stopped = child.stop_and_wait(Duration::from_secs(1));
+                    (
+                        None,
+                        stopped.is_ok(),
+                        true,
+                        Some(io_evidence(&failure)),
+                        stopped.as_ref().err().map(io_evidence),
+                    )
+                }
+            };
+            // On unsuccessful drain, closing this exact non-inherited job still
+            // terminates its own tree. Do not claim acknowledged cleanup then.
+            drop(child);
+            serde_json::json!({"diagnostic_only":true,"spawned":true,
+                "inherits_stdio":false,"atomic_job_membership_verified":true,
+                "stage":"wait","exit_code":exit_code,"job_drained":job_drained,
+                "forced_stop":forced_stop,"wait_failure":wait_failure,"stop_failure":stop_failure})
+        }
+    }
 }
 fn helper_category(category: &str) -> bool {
     matches!(
@@ -668,6 +708,21 @@ mod tests {
                 "schema":1,"test":FAILURE_TEST,"category":"identity","extra":"rejected"
             }))
             .is_err()
+        );
+    }
+    #[test]
+    fn control_io_evidence_is_numeric_and_never_serializes_arbitrary_error_text() {
+        let value = io_evidence(&std::io::Error::from_raw_os_error(5));
+        assert_eq!(value["raw_os_error"], 5);
+        assert!(value["native_operation"].is_null());
+        assert!(value["hresult"].is_null());
+        let arbitrary = io_evidence(&std::io::Error::other("untrusted/private/path_or_text"));
+        assert_eq!(arbitrary["io_kind"], "Other");
+        assert!(!arbitrary.to_string().contains("private"));
+        assert!(
+            arbitrary
+                .as_object()
+                .is_some_and(|fields| fields.len() == 4)
         );
     }
 }

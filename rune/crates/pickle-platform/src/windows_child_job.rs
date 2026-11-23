@@ -59,6 +59,83 @@ pub(crate) fn native_failure(error: &io::Error) -> Option<(&'static str, i32)> {
         .downcast_ref::<NativeFailure>()
         .map(|failure| (failure.operation, failure.hresult))
 }
+fn child_policy_bits(flags: Option<u32>) -> [Option<bool>; 3] {
+    [1, 2, 4].map(|bit| flags.map(|value| value & bit != 0))
+}
+fn is_extended_path(path: &Path) -> bool {
+    path.as_os_str().encode_wide().take(4).eq([92, 92, 63, 92])
+}
+/// Inspect only this process and its current job. Query failures are evidence,
+/// not defaults: each value is absent unless its native query succeeded. With a
+/// nested chain, a NULL job query describes the caller's immediate job only.
+pub(crate) fn parent_spawn_snapshot() -> serde_json::Value {
+    use windows::Win32::System::{
+        JobObjects::{
+            JOBOBJECT_BASIC_UI_RESTRICTIONS, JobObjectBasicUIRestrictions,
+            QueryInformationJobObject,
+        },
+        SystemServices::PROCESS_MITIGATION_CHILD_PROCESS_POLICY,
+        Threading::{GetCurrentProcess, GetProcessMitigationPolicy, ProcessChildProcessPolicy},
+    };
+    let process = unsafe { GetCurrentProcess() };
+    let mut in_job = BOOL::default();
+    let membership = unsafe { IsProcessInJob(process, None, &mut in_job) };
+    let mut ui = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+    let ui_result = unsafe {
+        QueryInformationJobObject(
+            None,
+            JobObjectBasicUIRestrictions,
+            (&mut ui as *mut JOBOBJECT_BASIC_UI_RESTRICTIONS).cast(),
+            std::mem::size_of_val(&ui) as u32,
+            None,
+        )
+    };
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    let limits_result = unsafe {
+        QueryInformationJobObject(
+            None,
+            JobObjectExtendedLimitInformation,
+            (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32,
+            None,
+        )
+    };
+    let mut policy = PROCESS_MITIGATION_CHILD_PROCESS_POLICY::default();
+    let mitigation = unsafe {
+        GetProcessMitigationPolicy(
+            process,
+            ProcessChildProcessPolicy,
+            (&mut policy as *mut PROCESS_MITIGATION_CHILD_PROCESS_POLICY).cast(),
+            std::mem::size_of_val(&policy),
+        )
+    };
+    let policy_flags = mitigation
+        .as_ref()
+        .ok()
+        .map(|_| unsafe { policy.Anonymous.Flags });
+    let executable_extended_path = std::env::current_exe()
+        .ok()
+        .map(|path| is_extended_path(&path));
+    let [blocked, audited, secure_only] = child_policy_bits(policy_flags);
+    let hresult = |result: &windows::core::Result<()>| {
+        result.as_ref().err().map_or(0, |error| error.code().0)
+    };
+    serde_json::json!({
+        "in_job":membership.as_ref().ok().map(|_|in_job.as_bool()),
+        "in_job_hresult":hresult(&membership),
+        "job_ui_flags":ui_result.as_ref().ok().map(|_|ui.UIRestrictionsClass.0),
+        "job_ui_hresult":hresult(&ui_result),
+        "job_limit_flags":limits_result.as_ref().ok().map(|_|limits.BasicLimitInformation.LimitFlags.0),
+        "job_active_process_limit":limits_result.as_ref().ok().map(|_|limits.BasicLimitInformation.ActiveProcessLimit),
+        "job_limits_hresult":hresult(&limits_result),
+        "child_policy_flags":policy_flags,
+        "child_creation_blocked":blocked,
+        "child_creation_audited":audited,
+        "child_secure_creation_only":secure_only,
+        "child_policy_hresult":hresult(&mitigation),
+        "executable_extended_path":executable_extended_path
+    })
+}
 fn failure(operation: &'static str, error: windows::core::Error) -> io::Error {
     io::Error::other(NativeFailure {
         operation,
@@ -271,16 +348,16 @@ struct Attributes {
     pointer: LPPROC_THREAD_ATTRIBUTE_LIST,
 }
 impl Attributes {
-    fn new() -> io::Result<Self> {
+    fn new(count: u32) -> io::Result<Self> {
         let mut bytes = 0;
         // The first call reports the required allocation by design.
-        let _ = unsafe { InitializeProcThreadAttributeList(None, 2, None, &mut bytes) };
+        let _ = unsafe { InitializeProcThreadAttributeList(None, count, None, &mut bytes) };
         if bytes == 0 || bytes > 65_536 {
             return Err(io::Error::other("Invalid process attribute allocation"));
         }
         let mut storage = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
         let pointer = LPPROC_THREAD_ATTRIBUTE_LIST(storage.as_mut_ptr().cast());
-        unsafe { InitializeProcThreadAttributeList(Some(pointer), 2, None, &mut bytes) }
+        unsafe { InitializeProcThreadAttributeList(Some(pointer), count, None, &mut bytes) }
             .map_err(|e| failure("Initialize process attributes", e))?;
         Ok(Self {
             _storage: storage,
@@ -392,6 +469,61 @@ fn command_line(command: &Command) -> io::Result<Vec<u16>> {
 /// Environment/cwd overrides are rejected rather than silently ignored. The
 /// exact absolute .exe and argument builder still come from validated settings.
 pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
+    spawn_with_stdio(command, StdioMode::Piped)
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum StdioMode {
+    Piped,
+    None,
+}
+impl StdioMode {
+    fn attributes(self) -> u32 {
+        if self == Self::Piped { 2 } else { 1 }
+    }
+    fn inherits(self) -> bool {
+        self == Self::Piped
+    }
+}
+struct Pipes {
+    input: OwnedHandle,
+    writer: OwnedHandle,
+    reader: OwnedHandle,
+    output: OwnedHandle,
+    errors: OwnedHandle,
+}
+impl Pipes {
+    fn new() -> io::Result<Self> {
+        let (input, writer) = pipe()?;
+        let (reader, output) = pipe()?;
+        let errors: OwnedHandle = File::options().write(true).open("NUL")?.into();
+        for handle in [&input, &output, &errors] {
+            inherit(handle, true)?;
+        }
+        Ok(Self {
+            input,
+            writer,
+            reader,
+            output,
+            errors,
+        })
+    }
+}
+fn version_control_command(executable: &Path) -> Command {
+    let mut command = Command::new(executable);
+    command.arg("--version");
+    command
+}
+/// A failure-only diagnostic control, never a capture fallback. There is no
+/// caller-supplied executable, argument, environment, or working directory.
+pub(crate) fn spawn_self_version_control() -> io::Result<Child> {
+    spawn_with_stdio(
+        &version_control_command(&std::env::current_exe()?),
+        StdioMode::None,
+    )
+}
+
+fn spawn_with_stdio(command: &Command, mode: StdioMode) -> io::Result<Child> {
     let program = Path::new(command.get_program());
     if !program.is_absolute()
         || !program
@@ -423,23 +555,28 @@ pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
         )
     }
     .map_err(|e| failure("Configure transcriber job", e))?;
-    let (input, writer) = pipe()?;
-    let (reader, output) = pipe()?;
-    let errors: OwnedHandle = File::options().write(true).open("NUL")?.into();
-    for handle in [&input, &output, &errors] {
-        inherit(handle, true)?;
-    }
+    let pipes = if mode == StdioMode::Piped {
+        Some(Pipes::new()?)
+    } else {
+        None
+    };
     let jobs = [raw(&job)];
-    let handles = [raw(&input), raw(&output), raw(&errors)];
-    let attributes = Attributes::new()?;
+    let handles = pipes
+        .as_ref()
+        .map(|pipes| [raw(&pipes.input), raw(&pipes.output), raw(&pipes.errors)]);
+    let attributes = Attributes::new(mode.attributes())?;
     attributes.handles(PROC_THREAD_ATTRIBUTE_JOB_LIST, &jobs)?;
-    attributes.handles(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &handles)?;
+    if let Some(handles) = &handles {
+        attributes.handles(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles)?;
+    }
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = raw(&input);
-    startup.StartupInfo.hStdOutput = raw(&output);
-    startup.StartupInfo.hStdError = raw(&errors);
+    if let Some(pipes) = &pipes {
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = raw(&pipes.input);
+        startup.StartupInfo.hStdOutput = raw(&pipes.output);
+        startup.StartupInfo.hStdError = raw(&pipes.errors);
+    }
     startup.lpAttributeList = attributes.pointer;
     let mut process = PROCESS_INFORMATION::default();
     unsafe {
@@ -448,7 +585,7 @@ pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
             Some(PWSTR(line.as_mut_ptr())),
             None,
             None,
-            true,
+            mode.inherits(),
             CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
             None,
             PCWSTR::null(),
@@ -457,13 +594,20 @@ pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
         )
     }
     .map_err(|e| failure("Start contained transcriber", e))?;
+    // Attribute values reference the job/pipe handle arrays. Delete the list
+    // while all values and their handles still live, before transferring pipes.
+    drop(attributes);
     let process_handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess.0) };
     let _thread = unsafe { OwnedHandle::from_raw_handle(process.hThread.0) };
-    let mut child = Child {
+    let (stdin, stdout) = match pipes {
+        Some(pipes) => (Some(pipes.writer.into()), Some(pipes.reader.into())),
+        None => (None, None),
+    };
+    let child = Child {
         job: Some(job),
         process: process_handle,
-        stdin: Some(writer.into()),
-        stdout: Some(reader.into()),
+        stdin,
+        stdout,
     };
     let mut contained = BOOL::default();
     let membership = unsafe {
@@ -475,7 +619,10 @@ pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
     };
     if membership.is_err() || !contained.as_bool() {
         let _ = unsafe { TerminateProcess(raw(&child.process), 1) };
-        let _ = child.wait();
+        // Retain the exact process/job handles through a bounded termination
+        // wait. Returning drops the kill-on-close job even if no ACK arrives;
+        // never replace the original membership failure with cleanup details.
+        let _ = unsafe { WaitForSingleObject(raw(&child.process), 1000) };
         return Err(match membership {
             Err(error) => failure("Check contained process job", error),
             Ok(()) => io::Error::other("The transcriber did not enter its required job"),
@@ -514,5 +661,36 @@ mod diagnostic_tests {
             None
         );
         assert_eq!(native_failure(&io::Error::from_raw_os_error(5)), None);
+    }
+    #[test]
+    fn failure_control_has_fixed_argv_and_no_stdio_inheritance_policy() {
+        let path = Path::new(r"C:\Owned directory\PickleRune.exe");
+        let command = version_control_command(path);
+        assert_eq!(command.get_program(), path.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("--version")]
+        );
+        assert!(command.get_envs().next().is_none());
+        assert!(command.get_current_dir().is_none());
+        assert_eq!(StdioMode::None.attributes(), 1); // JOB_LIST only
+        assert!(!StdioMode::None.inherits());
+        assert_eq!(StdioMode::Piped.attributes(), 2); // JOB_LIST + HANDLE_LIST
+        assert!(StdioMode::Piped.inherits());
+    }
+    #[test]
+    fn policy_unknown_is_not_false_and_extended_path_is_only_a_boolean() {
+        assert_eq!(child_policy_bits(None), [None, None, None]);
+        assert_eq!(child_policy_bits(Some(0)), [Some(false); 3]);
+        assert_eq!(
+            child_policy_bits(Some(5)),
+            [Some(true), Some(false), Some(true)]
+        );
+        assert_eq!(
+            child_policy_bits(Some(2)),
+            [Some(false), Some(true), Some(false)]
+        );
+        assert!(is_extended_path(Path::new(r"\\?\C:\Owned\PickleRune.exe")));
+        assert!(!is_extended_path(Path::new(r"C:\Owned\PickleRune.exe")));
     }
 }
