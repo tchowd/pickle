@@ -127,6 +127,15 @@ public static class BrowserExtensionPredicates {
             (value=="0.1.0" ? 4 : 0) | (IdFromLabel(value)!=null ? 8 : 0) | (KnownErrorFlags(value)!=0 ? 16 : 0);
     }
     public static int WindowClassKind(string value) { return value=="Chrome_WidgetWin_1" ? 1 : value=="#32770" ? 2 : 0; }
+    // Closed source-backed author-ID observations, never retained ID strings.
+    // Chromium main extensions/item.html.ts: card/name/version/extension-id;
+    // item_list.html.ts: extensions-item id=item.id. Not a Stable157 guarantee.
+    public static int AutomationIdFlags(string value) {
+        if(String.IsNullOrEmpty(value)) return 1;
+        if(value.Length>4096) return 64;
+        if(value=="card") return 2;if(value=="name") return 4;if(value=="version") return 8;if(value=="extension-id") return 16;
+        return ExtensionId(value) ? 32 : 64;
+    }
     public const int MaxPngBytes=4*1024*1024;
     public static bool CaptureSize(long width,long height) { return width>0 && height>0 && width<=4096 && height<=2160 && width*height<=8388608; }
     public static int CaptureBudget(double remaining) { return remaining>=300 ? (int)Math.Min(2000,remaining) : 0; }
@@ -153,6 +162,10 @@ public static class BrowserExtensionPredicates {
     public static bool CommittedPage(bool entered,bool document,bool bound,int uriForm) { return entered && document && bound && (uriForm==1 || uriForm==2); }
     public static bool Scope(bool loaded,bool drained,bool fullDelivery) { return loaded && drained && !fullDelivery; }
     public static void SelfTest() {
+        string[] aids={"","card","name","version","extension-id","abcdefghijklmnopabcdefghijklmnop","private unrelated text"};
+        for(int i=0;i<aids.Length;i++) if(AutomationIdFlags(aids[i])!=(1<<i)) throw new Exception("closed-author-id-observations");
+        foreach(string other in new[]{"Card","card ","id: abcdefghijklmnopabcdefghijklmnop","qbcdefghijklmnopabcdefghijklmnop",new string('x',4097)})
+            if(AutomationIdFlags(other)!=64) throw new Exception("closed-author-id-refusal");
         if(!CaptureSize(1920,1080) || CaptureSize(0,1080) || CaptureSize(4097,1) || CaptureSize(4096,2160) || CaptureSize(Int64.MaxValue,2) ||
             CaptureBudget(299)!=0 || CaptureBudget(350)!=350 || CaptureBudget(10000)!=2000 ||
             !SameProcessBirth(123,123) || SameProcessBirth(123,124) || SameProcessBirth(0,0) || SameProcessBirth(123,0) ||
@@ -595,14 +608,22 @@ public static class BrowserExtensionFixtureProgram {
         }
         return false;
     }
-    static int[] DiagnosticAncestorRoles(AutomationElement element,IntPtr window) {
-        var result=new List<int>();var root=AutomationElement.FromHandle(window);
+    sealed class DiagnosticPath {
+        public readonly List<int> Roles=new List<int>(),AuthorIds=new List<int>();
+    }
+    static DiagnosticPath DiagnosticAncestors(AutomationElement element,IntPtr window) {
+        var result=new DiagnosticPath();var root=AutomationElement.FromHandle(window);
         for(int depth=0;element!=null && depth<8;depth++) {
-            Check();Owned(element);result.Add(element.Current.ControlType.Id);
+            Check();Owned(element);
+            // IDs are strings too: prove the exact window path before reading
+            // each one, rather than relying only on the process ID.
+            if(!DiagnosticBound(element,window)) Fail("uia-element-not-owned");
+            result.Roles.Add(element.Current.ControlType.Id);
+            result.AuthorIds.Add(BrowserExtensionPredicates.AutomationIdFlags(element.Current.AutomationId));
             if(Automation.Compare(element,root)) break;
             element=TreeWalker.RawViewWalker.GetParent(element);
         }
-        return result.ToArray();
+        return result;
     }
     sealed class PngBuffer : MemoryStream {
         public override void Write(byte[] bytes,int offset,int count) { if(count<0 || Position>BrowserExtensionPredicates.MaxPngBytes-count) throw new IOException();base.Write(bytes,offset,count); }
@@ -738,10 +759,13 @@ public static class BrowserExtensionFixtureProgram {
                 var current=node.Current;int title=BrowserExtensionPredicates.LibraryLabelFlags(current.Name);
                 int errorFlags=BrowserExtensionPredicates.KnownErrorFlags(current.Name),bounds=errorFlags!=0 ? ErrorBounds(current,window) : 0;
                 if(title!=0) {
-                    BrowserExtensionPredicates.RecordCandidate(titles,ref titleCount,()=>new Dictionary<string,object> {
+                    BrowserExtensionPredicates.RecordCandidate(titles,ref titleCount,()=> {
+                        var path=DiagnosticAncestors(node,window);
+                        return new Dictionary<string,object> {
                         {"flags",title},{"control_type_id",current.ControlType.Id},{"offscreen",current.IsOffscreen},
                         {"known_error_flags",errorFlags},{"bounds_nonempty",(bounds&1)!=0},{"bounds_intersect_window",(bounds&2)!=0},{"bounds_clipped",(bounds&4)!=0},
-                        {"ancestor_role_ids",DiagnosticAncestorRoles(node,window)}});
+                        {"automation_id_flags",path.AuthorIds[0]},{"ancestor_role_ids",path.Roles},{"ancestor_automation_id_flags",path.AuthorIds}};
+                    });
                 }
                 object pattern;bool toggle=node.TryGetCurrentPattern(TogglePattern.Pattern,out pattern);
                 int toggleState=toggle ? (int)((TogglePattern)pattern).Current.ToggleState : -1;

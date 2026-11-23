@@ -89,7 +89,7 @@ $null=ConvertTo-PickleExtensionStageReport $navigationFailure
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $navigationFailure 'edge' }
 $failureObserved=[ordered]@{
   incomplete=$false;nodes=20;property_errors=0;title_candidate_count=1;title_records_truncated=$false
-  title_records=@([ordered]@{flags=3;known_error_flags=0;bounds_nonempty=$false;bounds_intersect_window=$false;bounds_clipped=$false;control_type_id=50020;offscreen=$false;ancestor_role_ids=@(50020,50026,50032)})
+  title_records=@([ordered]@{flags=3;known_error_flags=0;bounds_nonempty=$false;bounds_intersect_window=$false;bounds_clipped=$false;control_type_id=50020;offscreen=$false;automation_id_flags=4;ancestor_role_ids=@(50020,50026,50032);ancestor_automation_id_flags=@(4,2,1)})
   developer_candidate_count=1;developer_records_truncated=$false;toggle_count=1;checkbox_count=0;button_count=0
   developer_records=@([ordered]@{name_flags=0;help_flags=0;labeled_by_flags=15;labeled_by_bound=$true;control_type_id=50002;enabled=$true;offscreen=$false;toggle_supported=$true;toggle_state=1;invoke_supported=$false})
   owned_window_count=1;window_records_truncated=$false
@@ -97,7 +97,7 @@ $failureObserved=[ordered]@{
 }
 $failureObserved=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
 $clean=ConvertTo-PickleExtensionFailureObservation $failureObserved
-if ($clean.title_records[0].flags -ne 3 -or $clean.title_records[0].ancestor_role_ids.Count -ne 3 -or $clean.developer_records[0].labeled_by_flags -ne 15 -or $clean.developer_records[0].name_flags -ne 0 -or $clean.window_records[0].known_error_count -ne 1) { throw 'Closed scalar mapping observations were changed.' }
+if ($clean.title_records[0].flags -ne 3 -or $clean.title_records[0].ancestor_role_ids.Count -ne 3 -or $clean.title_records[0].automation_id_flags -ne 4 -or ($clean.title_records[0].ancestor_automation_id_flags -join ',') -cne '4,2,1' -or $clean.developer_records[0].labeled_by_flags -ne 15 -or $clean.developer_records[0].name_flags -ne 0 -or $clean.window_records[0].known_error_count -ne 1) { throw 'Closed scalar mapping observations were changed.' }
 $partial=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
 $partial.incomplete=$true;$partial.owned_window_count=0;$partial.window_records=@()
 $partialClean=ConvertTo-PickleExtensionFailureObservation $partial
@@ -129,6 +129,15 @@ foreach ($group in @('title','developer','window')) {
 foreach ($change in @(@('flags',0),@('known_error_flags',32),@('known_error_flags',1),@('bounds_nonempty',$true),@('bounds_clipped',$true),@('bounds_intersect_window','true'),@('control_type_id',49999),@('offscreen','false'),@('ancestor_role_ids',@(50020,50026,50032,50032,50032,50032,50032,50032,50032)))) {
   $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.title_records[0].($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+}
+foreach ($change in @(@('automation_id_flags',0),@('automation_id_flags',3),@('automation_id_flags',65),@('automation_id_flags',2),@('automation_id_flags','4'),@('ancestor_automation_id_flags',@(4,2)),@('ancestor_automation_id_flags',@(4,3,1)),@('ancestor_automation_id_flags',@(4,'card',1)),@('ancestor_automation_id_flags',@(4,2,1.0)))) {
+  $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.title_records[0].($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+}
+foreach ($flags in @(1,2,4,8,16,32,64)) {
+  $mapped=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$mapped.title_records[0].automation_id_flags=$flags;$mapped.title_records[0].ancestor_automation_id_flags[0]=$flags
+  $mappedClean=ConvertTo-PickleExtensionFailureObservation $mapped
+  if ($mappedClean.title_records[0].automation_id_flags -ne $flags) { throw 'A closed author-ID category was lost.' }
 }
 $knownError=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
 $knownError.title_records[0].flags=16;$knownError.title_records[0].known_error_flags=16
