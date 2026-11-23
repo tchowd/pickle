@@ -276,3 +276,34 @@ At `d2f2ba3`, [run 45107549644](https://github.com/tchowd/pickle/actions/runs/45
 
 
 The fixture was subsequently corrected to set Rune's normalized primary-modifier flag on every platform, and to derive its drag endpoints from the Runtime's own shaped first-word range using the source font/style/scale. It now asserts the actual source hit, exact cursor endpoints, exact selected word **The**, identical in-memory Copy, and the matching Explain consent/source identity. This strengthens the selection requirement rather than skipping the Windows path. All twelve reader-parity tests and strict app Clippy passed locally. The old failure did not include geometry diagnostics, so the original guessed-coordinate cause is not claimed established before a Windows rerun; new failures include geometry, hit, selection-anchor and event evidence.
+
+
+### Corrected-fixture candidate `268946607b2be37ccd4068e63a4cb75cd8bf5014`
+
+The strengthened selection fixture passed the Windows workspace test step in [run 45108282227](https://github.com/tchowd/pickle/actions/runs/45108282227). The Mac desktop job also passed. This corrects the demonstrated test-modifier assumption and replaces guessed coordinates; the exact original Windows drag failure is not retroactively attributed to a measured hit region that the old test never logged. No product code was changed merely to make that test green.
+
+The optimized local Mac bundle was rebuilt from this clean source with the exact commit metadata, verified present in the executable, and passed package inspection. Its executable SHA-256 is `74186d71a456de7af6b7ceff07187d6da05e841ce09df42a439e62be657f879c`; local development ZIP SHA-256 is `2a7ba0555140a537a459d52758997851c6454f12cffb8137acb3469c420c31a8`. It replaces the on-disk `d2f2ba3` candidate. At package inspection time, native restart/interaction was pending manual unlock; those build/package results alone did not establish capture grants or new native word/clear control behavior. The later native result is recorded below.
+
+
+### Final CI result for `2689466`
+
+[Run 45108282227](https://github.com/tchowd/pickle/actions/runs/45108282227) passed **all four jobs** at exact source `268946607b2be37ccd4068e63a4cb75cd8bf5014`. Mac workspace tests passed **266**, with two ignored; Windows passed **258**, with two ignored. App suites passed 149 and 146 respectively. The exact shaped selection/in-memory Copy/Explain regression passed on Windows as well as Mac. Formatting, strict checks, helper/native fixtures, deterministic rendering and both development/optimized packages passed; standalone helper checks are outside those workspace totals.
+
+Optimized Windows again passed ordinary installation/runtime/native-window/lifecycle checks and the complete external-identity preparation/finalization path. All five images passed exact disposable-signer/trusted-timestamp verification, followed by installed fixed-fixture OCR, native responsiveness, repair/conflict/live-instance guards, owned identity/browser cleanup, retained data and exact test-certificate/private-key cleanup. These are hosted-runner results, not production publisher trust or the declined Windows 11 interactive matrix. No production signing, notarization, feed publication or public release occurred.
+
+The earlier `d2f2ba3` run finished with both Mac jobs and optimized Windows green; only Windows desktop failed its original selection fixture. Its result is preserved above rather than replaced by the corrected run. At CI completion, updated native acceptance on the local `2689466` bundle was waiting for a manual unlock. The user subsequently unlocked it; the bounded word/clear result is recorded below. Native OS clipboard/library lifecycle and automatic arrival scrolling remain open.
+
+
+### Native word and Clear follow-ups acceptance after manual unlock
+
+After the user confirmed **Unlocked**, the idle prior reader was quit normally; a read-only process check confirmed no PickleRune process remained. The exact packaged app was launched anew, and its native diagnostics reported source `268946607b2be37ccd4068e63a4cb75cd8bf5014`. Both Accessibility and screen-capture grants reported false. No grant refresh or authentication prompt was opened during this batch.
+
+Using only the explicitly labeled network-free demonstration:
+
+1. **Show full passage** was available before the first answer and changed to **Hide full passage** when used. The word field and both word actions were exposed.
+2. Entering an off-source term and pressing Return displayed **Choose a word or phrase from the passage or answer**, without an answer turn. Replacing it with **evidence** and pressing Return displayed an **Explain “evidence”** conversation turn before any Simplify/base answer. Copy and Save were present but were not submitted. The fixed demonstration response proves UI routing/rendering, not the quality of a real term definition.
+3. **Clear follow-ups (keep passage)** removed that initial turn, retained the original sample passage and term field, and did not fabricate a base result.
+4. Simplify then produced the base demonstration answer. A controlled Return-submitted question produced a follow-up. Another question was entered and left unsent. Clear follow-ups removed the completed turn while the complete base answer, original passage and exact unsent question remained in the native accessibility tree.
+5. **New** cleared the generated test session back to the empty reader. Pin remained off. Independently read stored switches confirmed OCR off, original modifier gesture on, automatic chooser off and history off.
+
+No OS Copy, Save, export, inference, browser, OCR, audio or visual-sharing action was submitted. The rebuilt app was left running on its empty reader. This closes these bounded native word/clear/Return checks on this Mac; it does not certify actual OS clipboard output, stored-data restart, VoiceOver/Narrator, Windows 11 interaction, current source capture or the remaining device matrix. Automatic arrival scrolling remains a concrete separate source task.
