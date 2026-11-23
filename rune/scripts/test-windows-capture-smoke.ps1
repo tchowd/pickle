@@ -10,7 +10,6 @@ foreach ($change in @(
   @{key='jpeg_bytes';value=9000000},
   @{key='dark_pixels';value=99999999},
   @{key='test';value='windows-ocr-fixed-fixture'},
-  @{key='schema';value=1.0},
   @{key='native_capture';value=@{stage='complete';hresult=0;supported=$true;frame_arrived=$false;width=768;height=180;driver_type=1}},
   @{key='source_text';value='forbidden extra field'}
 )) {
@@ -18,6 +17,19 @@ foreach ($change in @(
   $rejected=$false
   try { $null=Assert-PickleWindowCaptureReport ($bad | ConvertTo-Json -Compress) } catch { $rejected=$true }
   if (!$rejected) { throw "Invalid controlled report was admitted: $($change.key)" }
+}
+# Windows PowerShell 5 serializes the double 1.0 as the integer token 1.
+# Mutate the actual JSON wire token, rather than an object that the serializer
+# can normalize back into a valid report before the validator sees it.
+$validJson=$valid | ConvertTo-Json -Compress
+if (!$validJson.Contains('"schema":1,')) { throw 'The controlled schema wire token was not found.' }
+foreach ($literal in @('1.0','"1"','true')) {
+  $token='"schema":'+$literal+','
+  $raw=$validJson.Replace('"schema":1,',$token)
+  if ($raw -ceq $validJson -or !$raw.Contains($token)) { throw 'The invalid controlled schema wire token was not preserved.' }
+  $rejected=$false
+  try { $null=Assert-PickleWindowCaptureReport $raw } catch { $rejected=$true }
+  if (!$rejected) { throw "Invalid raw schema literal was admitted: $literal" }
 }
 Initialize-PickleCapturePipe
 $stream=[IO.MemoryStream]::new([byte[]]::new(25000))
