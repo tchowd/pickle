@@ -651,6 +651,8 @@ fn attempt(source: CapturedSelection, expected: String) -> Result<Attempt, Platf
                     "custom_variant_type",
                     "custom_variant_bool",
                     "nullable_navigation_ends",
+                    "node_hwnd_owner_pid",
+                    "pruned_foreign_native_branches",
                     "source_pid",
                     "root_pid",
                     "node_pid",

@@ -28,6 +28,23 @@ const WEB_ROOT: GUID = GUID::from_u128(0xc5fdc049_4eec_4299_87bb_ca9fc718a681);
 // https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation2-put_connectiontimeout
 const UIA_REQUEST_TIMEOUT_MS: u32 = 500;
 
+#[derive(Clone, Copy)]
+struct NativeBranch {
+    window: u64,
+    valid: bool,
+    owner: u32,
+    root: u64,
+}
+fn foreign_branch_is_outside(source_window: u64, node_pid: i32, branch: NativeBranch) -> bool {
+    source_window != 0
+        && node_pid > 0
+        && branch.window != 0
+        && branch.valid
+        && branch.owner == node_pid as u32
+        && branch.root != 0
+        && branch.root != source_window
+}
+
 // Both hosted fixture types own foreground windows. Serialize their native UI
 // work inside this test binary without changing ordinary parallel unit checks.
 #[cfg(test)]
@@ -176,6 +193,8 @@ struct ReaderDiagnostic {
     node_hwnd_root_matches_source: Option<bool>,
     node_executable_matches_source: Option<bool>,
     post_rejection_metadata: bool,
+    node_hwnd_owner_pid: u32,
+    pruned_foreign_native_branches: usize,
 }
 impl DocumentReader {
     fn new(source: &CapturedSelection, cancel: CancellationToken) -> Result<Self, PlatformError> {
@@ -241,6 +260,8 @@ impl DocumentReader {
                 node_hwnd_root_matches_source: None,
                 node_executable_matches_source: None,
                 post_rejection_metadata: false,
+                node_hwnd_owner_pid: 0,
+                pruned_foreign_native_branches: 0,
             }),
         })
     }
@@ -276,10 +297,10 @@ impl DocumentReader {
         let elapsed = (self.deadline - Duration::from_millis(1800)).elapsed();
         serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool,"nullable_navigation_ends":value.nullable_navigation_ends,
             "source_pid":self.source.source_pid,"root_pid":value.root_pid,"node_pid":value.node_pid,"queue_len":value.queue_len,"node_depth":value.node_depth,
-            "node_native_hwnd_present":value.node_native_hwnd_present,"node_hwnd_root_matches_source":value.node_hwnd_root_matches_source,"node_executable_matches_source":value.node_executable_matches_source,"post_rejection_metadata":value.post_rejection_metadata})
+            "node_native_hwnd_present":value.node_native_hwnd_present,"node_hwnd_root_matches_source":value.node_hwnd_root_matches_source,"node_hwnd_owner_pid":value.node_hwnd_owner_pid,"node_executable_matches_source":value.node_executable_matches_source,"post_rejection_metadata":value.post_rejection_metadata,"pruned_foreign_native_branches":value.pruned_foreign_native_branches})
     }
     #[cfg(test)]
-    fn record_rejected_node(&self, node: &IUIAutomationElement, pid: i32) {
+    fn record_rejected_node(&self, node: &IUIAutomationElement, pid: i32, branch: NativeBranch) {
         use ::windows::{
             Win32::{
                 Foundation::CloseHandle,
@@ -300,23 +321,6 @@ impl DocumentReader {
             return;
         }
         let control = unsafe { node.CurrentControlType() }.ok();
-        if self.cancel.is_cancelled() || Instant::now() >= self.deadline {
-            return;
-        }
-        let native = unsafe { node.CurrentNativeWindowHandle() }.ok();
-        let hwnd_root = native
-            .filter(|value| !value.0.is_null())
-            .and_then(|window| {
-                let mut owner = 0;
-                unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
-                if owner != self.source.source_pid || !unsafe { IsWindow(Some(window)) }.as_bool() {
-                    return None;
-                }
-                Some(
-                    unsafe { GetAncestor(window, GA_ROOT) }.0 as u64
-                        == self.source.source_window.unwrap_or(0),
-                )
-            });
         let executable_matches = (|| {
             if pid <= 0 {
                 return None;
@@ -346,11 +350,33 @@ impl DocumentReader {
             if let Some(control) = control {
                 value.control_type = control.0;
             }
-            value.node_native_hwnd_present = native.map(|value| !value.0.is_null());
-            value.node_hwnd_root_matches_source = hwnd_root;
+            value.node_native_hwnd_present = Some(branch.window != 0);
+            value.node_hwnd_owner_pid = branch.owner;
+            value.node_hwnd_root_matches_source =
+                (branch.root != 0).then_some(branch.root == self.source.source_window.unwrap_or(0));
             value.node_executable_matches_source = executable_matches;
             value
         });
+    }
+    fn native_branch(&self, node: &IUIAutomationElement) -> Result<NativeBranch, PlatformError> {
+        self.stage("foreign-native-hwnd");
+        self.check()?;
+        let window = self.rpc(unsafe { node.CurrentNativeWindowHandle() })?;
+        self.check()?;
+        let valid = unsafe { IsWindow(Some(window)) }.as_bool();
+        self.check()?;
+        let mut owner = 0;
+        unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
+        self.check()?;
+        // GA_ROOT follows only parents, whereas GA_ROOTOWNER would also pull
+        // separate owned popup windows into the captured window's scope.
+        let root = unsafe { GetAncestor(window, GA_ROOT) };
+        Ok(NativeBranch {
+            window: window.0 as u64,
+            valid,
+            owner,
+            root: root.0 as u64,
+        })
     }
     fn check(&self) -> Result<(), PlatformError> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -492,6 +518,7 @@ impl DocumentReader {
                 value.node_hwnd_root_matches_source = None;
                 value.node_executable_matches_source = None;
                 value.post_rejection_metadata = false;
+                value.node_hwnd_owner_pid = 0;
                 value
             });
             if depth > 12 || count > 192 {
@@ -506,8 +533,27 @@ impl DocumentReader {
                 value
             });
             if node_pid as u32 != self.source.source_pid {
+                let branch = self.native_branch(&node)?;
+                if foreign_branch_is_outside(
+                    self.source.source_window.unwrap_or(0),
+                    node_pid,
+                    branch,
+                ) {
+                    #[cfg(test)]
+                    self.diagnostic.update(|mut value| {
+                        value.pruned_foreign_native_branches += 1;
+                        value
+                    });
+                    // A different OS top-level window is outside this capture.
+                    // Do not read its Value or navigate any of its children.
+                    // WGC's IncludeSecondaryWindows defaults false; this app
+                    // does not enable it when capturing the exact source HWND.
+                    // https://learn.microsoft.com/uwp/api/windows.graphics.capture.graphicscapturesession.includesecondarywindows
+                    continue;
+                }
+                self.stage("traversal-pid");
                 #[cfg(test)]
-                self.record_rejected_node(&node, node_pid);
+                self.record_rejected_node(&node, node_pid, branch);
                 return Err(unavailable());
             }
             self.check()?;
@@ -618,6 +664,65 @@ mod real_tests;
 #[cfg(test)]
 mod nullable_navigation_tests {
     use super::*;
+
+    #[test]
+    fn foreign_native_branch_pruning_requires_matching_owner_and_a_different_os_root() {
+        let outside = NativeBranch {
+            window: 20,
+            valid: true,
+            owner: 42,
+            root: 21,
+        };
+        assert!(foreign_branch_is_outside(10, 42, outside));
+        for (source, pid, branch) in [
+            (0, 42, outside),
+            (10, 0, outside),
+            (10, -1, outside),
+            (
+                10,
+                42,
+                NativeBranch {
+                    window: 0,
+                    ..outside
+                },
+            ),
+            (
+                10,
+                42,
+                NativeBranch {
+                    valid: false,
+                    ..outside
+                },
+            ),
+            (
+                10,
+                42,
+                NativeBranch {
+                    owner: 43,
+                    ..outside
+                },
+            ),
+            (
+                10,
+                42,
+                NativeBranch {
+                    owner: 0,
+                    ..outside
+                },
+            ),
+            (10, 42, NativeBranch { root: 0, ..outside }),
+            (
+                10,
+                42,
+                NativeBranch {
+                    root: 10,
+                    ..outside
+                },
+            ),
+        ] {
+            assert!(!foreign_branch_is_outside(source, pid, branch));
+        }
+    }
 
     #[test]
     fn successful_null_navigation_is_end_but_failed_hresult_is_preserved() {

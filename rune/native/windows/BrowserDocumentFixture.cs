@@ -33,7 +33,7 @@ public sealed class DocumentFixtureForm : Form {
     public readonly int WebRootProperty;
     public RootNode Root;
     public Node MainDocument, FocusedNode;
-    public int DocumentReads, NestedReads, EditReads, LinkReads;
+    public int DocumentReads, NestedReads, EditReads, LinkReads, ForeignChildNavigations;
     private int nextId = 100;
     [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr window);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
@@ -75,6 +75,33 @@ public sealed class DocumentFixtureForm : Form {
         MainDocument.Hidden=Mode=="hidden-root";
         MainDocument.Add(Document("fixture-iframe",true,
             Mode=="wrong-value" || Mode=="false-root" ? Expected : Changed));
+        if (Mode=="foreign-pane") {
+            // Virtual synthetic metadata only: no external process is created.
+            // This unknown-owner branch must be encountered before the valid
+            // same-PID main document, so an early refusal cannot read its Value.
+            var pane=new Node(this,nextId++,ControlType.Pane,"foreign-pane",false,"");
+            pane.PidOverride=Pid+1;
+            pane.Add(Document("foreign-pane-document",true,Expected));
+            Root.Add(pane);
+        }
+        if (Mode=="foreign-document-only") {
+            Root.Children.Clear();
+            MainDocument.PidOverride=Pid+1;
+        }
+        if (Mode=="foreign-wrapper-main") {
+            var wrapper=new Node(this,nextId++,ControlType.Pane,"foreign-wrapper",false,"");
+            wrapper.PidOverride=Pid+1;
+            wrapper.Add(MainDocument);
+            Root.Add(wrapper); FocusedNode=Root; return;
+        }
+        if (Mode=="foreign-root") Root.PidOverride=Pid+1;
+        if (Mode=="wide-root") {
+            Root.Children.Clear();
+            // Wider than the existing global 192-node limit. The real
+            // document comes last and must not be read after a bounded walk.
+            for (int index=0;index<193;index++)
+                Root.Add(new Node(this,nextId++,ControlType.Pane,"wide-decoration",false,""));
+        }
         Root.Add(MainDocument);
         if (Mode=="multiple-roots") Root.Add(Document("fixture-second-root",true,Expected));
         FocusedNode=Root;
@@ -95,6 +122,9 @@ public sealed class DocumentFixtureForm : Form {
         FocusedNode=Mode=="password" && Root.Children.Count>0 ? Root.Children[0] : Root;
         SetForegroundWindow(Handle);
         SetFocus(Handle);
+    }
+    public void RecordForeignChildNavigation() {
+        Interlocked.Increment(ref ForeignChildNavigations);
     }
     protected override void WndProc(ref Message message) {
         if (message.Msg==0x003D && message.LParam.ToInt64()==AutomationInteropProvider.RootObjectId) {
@@ -118,6 +148,10 @@ public sealed class DocumentFixtureForm : Form {
                 return;
             }
             if (command==4) FocusOwned();
+            if (command==5) {
+                message.Result=new IntPtr(ForeignChildNavigations);
+                return;
+            }
             message.Result=new IntPtr(1);
             return;
         }
@@ -134,6 +168,7 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
     public readonly bool Web;
     public string Url;
     public bool Hidden;
+    public int? PidOverride;
     public Node Parent;
     public readonly List<Node> Children=new List<Node>();
     public Node(DocumentFixtureForm owner,int id,ControlType type,string name,bool web,string url) {
@@ -150,7 +185,8 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
         if (propertyId==ValuePatternIdentifiers.ValueProperty.Id && Type!=ControlType.Window)
             return Owner.ReadValue(this);
         if (propertyId==AutomationElementIdentifiers.ControlTypeProperty.Id) return Type.Id;
-        if (propertyId==AutomationElementIdentifiers.ProcessIdProperty.Id) return Owner.Pid;
+        if (propertyId==AutomationElementIdentifiers.ProcessIdProperty.Id)
+            return PidOverride.HasValue ? PidOverride.Value : Owner.Pid;
         if (propertyId==AutomationElementIdentifiers.NameProperty.Id) return DocumentFixtureForm.Expected;
         if (propertyId==AutomationElementIdentifiers.AutomationIdProperty.Id) return Name;
         if (propertyId==AutomationElementIdentifiers.FrameworkIdProperty.Id) return "PickleOwnedProvider";
@@ -168,6 +204,9 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
         return null;
     }
     public IRawElementProviderFragment Navigate(NavigateDirection direction) {
+        if (PidOverride.HasValue && PidOverride.Value!=Owner.Pid &&
+            (direction==NavigateDirection.FirstChild || direction==NavigateDirection.LastChild))
+            Owner.RecordForeignChildNavigation();
         if (direction==NavigateDirection.Parent) return Parent;
         if (direction==NavigateDirection.FirstChild) return Children.Count==0 ? null : Children[0];
         if (direction==NavigateDirection.LastChild) return Children.Count==0 ? null : Children[Children.Count-1];
@@ -204,7 +243,7 @@ public static class BrowserDocumentFixture {
         try {
             if (args.Length!=3) return 2;
             string mode=args[0],ready=args[1],entered=args[2];
-            if (Array.IndexOf(new[]{"stable","wrong-value","false-root","decoys-only","omnibox-only","link-only","multiple-roots","hidden-root","password","slow"},mode)<0) return 2;
+            if (Array.IndexOf(new[]{"stable","wrong-value","false-root","decoys-only","omnibox-only","link-only","multiple-roots","hidden-root","password","slow","foreign-pane","foreign-document-only","foreign-wrapper-main","foreign-root","wide-root"},mode)<0) return 2;
             Application.EnableVisualStyles();
             using (var form=new DocumentFixtureForm(mode,entered)) {
                 var watchdog=new System.Windows.Forms.Timer();

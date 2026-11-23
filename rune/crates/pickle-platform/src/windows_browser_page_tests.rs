@@ -89,6 +89,9 @@ impl Trace {
             "window_matches_source",
             "identity_present",
             "url_utf8_bytes",
+            "foreign_child_navigations",
+            "root_pid",
+            "node_pid",
         ] {
             if let Some(value) = values
                 .get(key)
@@ -456,6 +459,7 @@ fn owned_native_document_provider() {
     let executable = compile_provider(directory.path());
     trace.step("fixture", "compiled");
     let mut case = 0;
+    let mut ownership_cases = vec![];
     for (mode, phase, success, captures) in [
         ("stable", "stable", true, 1),
         ("wrong-value", "stable", false, 0),
@@ -469,6 +473,11 @@ fn owned_native_document_provider() {
         ("stable", "before-navigation", false, 0),
         ("stable", "after-navigation", false, 1),
         ("stable", "identity-change", false, 0),
+        ("foreign-pane", "stable", false, 0),
+        ("foreign-document-only", "stable", false, 0),
+        ("foreign-wrapper-main", "stable", false, 0),
+        ("foreign-root", "stable", false, 0),
+        ("wide-root", "stable", false, 0),
     ] {
         let trace_mode = if phase == "stable" { mode } else { phase };
         trace.step(trace_mode, "launching");
@@ -529,6 +538,44 @@ fn owned_native_document_provider() {
                 }),
                 "Accepted observations must execute native successful-null traversal ends"
             );
+        }
+        if mode.starts_with("foreign-") || mode == "wide-root" {
+            assert_eq!(
+                counts & 0xff,
+                0,
+                "{mode}: rejecting traversal must not read the main document Value"
+            );
+            let child_navigations = fixture.command(5).unwrap();
+            trace.metadata(
+                "ownership-branch-counters",
+                serde_json::json!({"foreign_child_navigations":child_navigations}),
+            );
+            assert_eq!(
+                child_navigations, 0,
+                "{mode}: a foreign branch must not enumerate descendants"
+            );
+            let observed_boundary = if mode == "wide-root" {
+                outcome.diagnostics.iter().any(|observation| {
+                    observation.stage == "traversal-node-limit"
+                        && observation.values["nodes"].as_u64() == Some(193)
+                })
+            } else {
+                let (stage, pid_key) = if mode == "foreign-root" {
+                    ("root-pid", "root_pid")
+                } else {
+                    ("traversal-pid", "node_pid")
+                };
+                outcome.diagnostics.iter().any(|observation| {
+                    observation.stage == stage
+                        && observation.values[pid_key].as_u64()
+                            == Some(u64::from(fixture.source.source_pid) + 1)
+                })
+            };
+            assert!(
+                observed_boundary,
+                "{mode}: refusal must reach the intended native PID/width boundary"
+            );
+            ownership_cases.push(serde_json::json!({"mode":mode,"accepted":outcome.accepted,"capture_count":outcome.captures,"document_reads":counts&0xff,"nested_reads":(counts>>8)&0xff,"foreign_child_navigations":child_navigations,"intended_boundary_observed":observed_boundary}));
         }
         trace.step(trace_mode, "closing");
         fixture.close();
@@ -624,6 +671,9 @@ fn owned_native_document_provider() {
         "multiple_and_hidden_roots_rejected":true,"password_focus_rejected":true,
         "navigation_before_capture_rejected":true,"navigation_after_capture_discards_result":true,
         "document_identity_change_rejected":true,"provider_timeout_bounded":true,
+        "virtual_foreign_pid_cases":ownership_cases,"virtual_foreign_pid_is_not_real_external_process":true,
+        "foreign_unknown_owner_branches_refused_without_value_or_descendant_reads":true,
+        "wide_tree_limit_refused_before_document_value":true,
         "provider_timeout_ms":provider_timeout_ms,"outer_timeout_ms":outer_timeout_ms,
         "isolated_worker_timeout_and_cancellation":true,"singleflight_held_until_actual_worker_return":true,
         "owned_children_stopped":true,"temporary_fixture_removed":true,
