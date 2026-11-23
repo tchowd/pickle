@@ -44,6 +44,14 @@ Local evidence: **418 Mac workspace tests passed, three ignored**; Windows platf
 
 The Mac availability check during this work again reported the Mac locked; no app was launched, no grant changed and no repeat unlock request was made. The previous verified checkpoint above remains authoritative while the new diagnostic is under native verification. A controlled fixed window will not by itself prove browser WGC pixels or extension delivery.
 
+### Native diagnostic attempts and startup investigation
+
+Source `94af34a529fe576dbefc3e74dc715943cd4c5314` ran in [45206142993](https://github.com/tchowd/pickle/actions/runs/45206142993). Both Mac jobs passed; the Windows workspace passed **435 tests, three ignored**. Both Windows package jobs stopped before native capture because Windows PowerShell 5 serialized the deliberately invalid schema value `1.0` as valid integer `1`. This was a negative-test fixture failure, not evidence of a captured frame. Source `f3c8d800eb526fdb31ffdb26e6f1a876ecd83906` preserves the invalid JSON wire tokens without changing the validator.
+
+In [45208517951](https://github.com/tchowd/pickle/actions/runs/45208517951), that contract test passed in both Windows packages. The actual installed diagnostic then failed with `fixture-start` in **both debug and release**, before any WGC-stage observation or successful capture report. Windows again passed **435 workspace tests, three ignored**, including the installed-browser document/provider components. Optimized Mac packaging passed. The failed [Windows development artifact](https://github.com/tchowd/pickle/actions/runs/45208517951/artifacts/14835249676) and [optimized Windows artifact](https://github.com/tchowd/pickle/actions/runs/45208517951/artifacts/14836775327) retain the bounded startup-error logs; no passing window-capture JSON exists. These results do not establish a cause, device failure, unavailable graphics support or successful capture.
+
+The next diagnostic revision retains a typed fixed operation and native HRESULT inside contained-process errors, records startup boundaries without paths or arbitrary messages, and transports only allowlisted helper-failure categories through its bounded pipe. It distinguishes spawn/attribute/job errors, IO errors, readiness timeout and helper identity/paint failures. It changes no process flags, identity requirements, ownership guards, capture pipeline, deadlines or success assertions. Windows all-target strict Clippy and formatting/diff checks passed; two additional native-target tests await Windows execution. No activation workaround or hardware fallback is justified by the evidence currently available.
+
 ## Mac controlled-source session, 22 November 2026 local time
 
 | Item | Observed evidence |

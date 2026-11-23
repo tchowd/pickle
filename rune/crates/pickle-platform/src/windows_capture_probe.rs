@@ -30,9 +30,29 @@ const WIDTH: u32 = 768;
 const HEIGHT: u32 = 180;
 const READY_TEST: &str = "windows-owned-window-capture-fixture-ready";
 const CLOSED_TEST: &str = "windows-owned-window-capture-fixture-closed";
+const FAILURE_TEST: &str = "windows-owned-window-capture-fixture-failure";
 const CLASS: PCWSTR = w!("PickleOwnedWindowCaptureProbe");
 fn error(category: &'static str) -> PlatformError {
     PlatformError(category.into())
+}
+
+fn start_io_failure(stage: &'static str, failure: &std::io::Error) -> PlatformError {
+    let native = windows_child_job::native_failure(failure);
+    eprintln!(
+        "{}",
+        serde_json::json!({"schema":1,"test":FAILURE_TEST,"passed":false,
+            "stage":stage,"io_kind":format!("{:?}",failure.kind()),
+            "raw_os_error":failure.raw_os_error(),
+            "native_operation":native.map(|value|value.0),
+            "hresult":native.map(|value|value.1)})
+    );
+    error("fixture-start")
+}
+fn helper_category(category: &str) -> bool {
+    matches!(
+        category,
+        "identity" | "fixture-start" | "paint" | "cleanup" | "report"
+    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -54,11 +74,19 @@ struct Closed {
     window_closed: bool,
     thread_joined: bool,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Failed {
+    schema: u32,
+    test: String,
+    category: String,
+}
 enum Output {
     Ready(Ready),
     Closed(Closed),
     End,
     Invalid,
+    Failed(Failed),
 }
 
 fn read_frame(reader: &mut impl BufRead) -> Result<Vec<u8>, ()> {
@@ -75,9 +103,17 @@ fn read_frame(reader: &mut impl BufRead) -> Result<Vec<u8>, ()> {
 fn drain_output(output: impl Read + Send + 'static, sender: SyncSender<Output>) {
     let mut reader = BufReader::new(output);
     let result = (|| {
-        let ready: Ready = serde_json::from_slice(&read_frame(&mut reader)?).map_err(|_| ())?;
+        let first = read_frame(&mut reader)?;
+        if let Ok(failed) = serde_json::from_slice::<Failed>(&first) {
+            return sender.send(Output::Failed(failed)).map_err(|_| ());
+        }
+        let ready: Ready = serde_json::from_slice(&first).map_err(|_| ())?;
         sender.send(Output::Ready(ready)).map_err(|_| ())?;
-        let closed: Closed = serde_json::from_slice(&read_frame(&mut reader)?).map_err(|_| ())?;
+        let second = read_frame(&mut reader)?;
+        if let Ok(failed) = serde_json::from_slice::<Failed>(&second) {
+            return sender.send(Output::Failed(failed)).map_err(|_| ());
+        }
+        let closed: Closed = serde_json::from_slice(&second).map_err(|_| ())?;
         sender.send(Output::Closed(closed)).map_err(|_| ())?;
         let mut trailing = [0u8; 1];
         if reader.read(&mut trailing).map_err(|_| ())? != 0 {
@@ -96,17 +132,21 @@ struct FixtureChild {
 }
 impl FixtureChild {
     fn start() -> Result<Self, PlatformError> {
-        let executable = std::env::current_exe().map_err(|_| error("fixture-start"))?;
+        let executable = std::env::current_exe()
+            .map_err(|failure| start_io_failure("current-executable", &failure))?;
         let mut command = Command::new(executable);
         command.arg("--windows-capture-owned-fixture");
-        let mut child = windows_child_job::spawn(&command).map_err(|_| error("fixture-start"))?;
+        let mut child = windows_child_job::spawn(&command)
+            .map_err(|failure| start_io_failure("spawn", &failure))?;
         drop(child.stdin.take());
-        let output = child.stdout.take().ok_or_else(|| error("fixture-start"))?;
+        let output = child.stdout.take().ok_or_else(|| {
+            start_io_failure("stdout-missing", &std::io::Error::other("missing pipe"))
+        })?;
         let (sender, receiver) = mpsc::sync_channel(3);
         let drain = std::thread::Builder::new()
             .name("pickle-capture-fixture-output".into())
             .spawn(move || drain_output(output, sender))
-            .map_err(|_| error("fixture-start"))?;
+            .map_err(|failure| start_io_failure("stdout-worker", &failure))?;
         Ok(Self {
             child: Some(child),
             output: receiver,
@@ -114,12 +154,29 @@ impl FixtureChild {
         })
     }
     fn ready(&self) -> Result<Ready, PlatformError> {
-        let Output::Ready(value) = self
-            .output
-            .recv_timeout(Duration::from_secs(4))
-            .map_err(|_| error("fixture-start"))?
-        else {
-            return Err(error("paint"));
+        let value = match self.output.recv_timeout(Duration::from_secs(4)) {
+            Ok(Output::Ready(value)) => value,
+            other => {
+                let (stage, category) = match other {
+                    Ok(Output::Failed(failed))
+                        if failed.schema == 1
+                            && failed.test == FAILURE_TEST
+                            && helper_category(&failed.category) =>
+                    {
+                        ("helper-failed", Some(failed.category))
+                    }
+                    Ok(_) => ("ready-protocol", None),
+                    Err(mpsc::RecvTimeoutError::Timeout) => ("ready-timeout", None),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => ("ready-disconnected", None),
+                };
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"schema":1,"test":FAILURE_TEST,
+                    "passed":false,"stage":stage,"helper_category":category,
+                    "child_running":self.child.as_ref().and_then(|child|child.is_running().ok())})
+                );
+                return Err(error("fixture-start"));
+            }
         };
         if !self
             .child
@@ -329,7 +386,22 @@ fn valid_capture_geometry(width: u32, height: u32, dark: usize, jpeg_bytes: usiz
 }
 
 pub(super) fn run_window_capture_fixture() -> Result<(), PlatformError> {
-    run_fixture()
+    let result = run_fixture();
+    if let Err(failure) = &result {
+        // stderr is intentionally NUL in the contained child. Report only a
+        // fixed allowlisted category on its existing bounded stdout channel.
+        let category = if helper_category(&failure.0) {
+            &failure.0
+        } else {
+            "fixture-start"
+        };
+        let _ = emit(&Failed {
+            schema: 1,
+            test: FAILURE_TEST.into(),
+            category: category.into(),
+        });
+    }
+    result
 }
 
 struct PaintState {
@@ -572,5 +644,30 @@ mod tests {
         assert!(read_frame(&mut std::io::Cursor::new(vec![b'x'; 1025])).is_err());
         let value = serde_json::json!({"schema":1,"test":READY_TEST,"pid":1,"hwnd":2,"width":WIDTH,"height":HEIGHT,"painted":true,"arbitrary":"rejected"});
         assert!(serde_json::from_value::<Ready>(value).is_err());
+    }
+    #[test]
+    fn helper_failure_frame_retains_only_exact_schema_and_allowlisted_categories() {
+        let mut bytes = serde_json::to_vec(&Failed {
+            schema: 1,
+            test: FAILURE_TEST.into(),
+            category: "identity".into(),
+        })
+        .unwrap();
+        bytes.push(b'\n');
+        let (sender, receiver) = mpsc::sync_channel(3);
+        drain_output(std::io::Cursor::new(bytes), sender);
+        let Output::Failed(failed) = receiver.recv().unwrap() else {
+            panic!("expected fixed failure frame")
+        };
+        assert_eq!(failed.schema, 1);
+        assert_eq!(failed.test, FAILURE_TEST);
+        assert!(helper_category(&failed.category));
+        assert!(!helper_category("arbitrary/private/native/message"));
+        assert!(
+            serde_json::from_value::<Failed>(serde_json::json!({
+                "schema":1,"test":FAILURE_TEST,"category":"identity","extra":"rejected"
+            }))
+            .is_err()
+        );
     }
 }

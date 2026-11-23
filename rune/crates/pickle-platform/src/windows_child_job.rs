@@ -39,8 +39,31 @@ use windows::{
     core::{BOOL, PCWSTR, PWSTR},
 };
 
+#[derive(Debug)]
+struct NativeFailure {
+    operation: &'static str,
+    hresult: i32,
+}
+impl std::fmt::Display for NativeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} failed ({:#x})", self.operation, self.hresult)
+    }
+}
+impl std::error::Error for NativeFailure {}
+
+/// Only fixed operation names and numeric native codes, never error messages or
+/// executable/argument data. The installed capture probe uses this on failure.
+pub(crate) fn native_failure(error: &io::Error) -> Option<(&'static str, i32)> {
+    error
+        .get_ref()?
+        .downcast_ref::<NativeFailure>()
+        .map(|failure| (failure.operation, failure.hresult))
+}
 fn failure(operation: &'static str, error: windows::core::Error) -> io::Error {
-    io::Error::other(format!("{operation} failed ({:#x})", error.code().0))
+    io::Error::other(NativeFailure {
+        operation,
+        hresult: error.code().0,
+    })
 }
 fn raw(handle: &OwnedHandle) -> HANDLE {
     HANDLE(handle.as_raw_handle())
@@ -277,7 +300,16 @@ impl Attributes {
                 None,
             )
         }
-        .map_err(|e| failure("Set contained process attributes", e))
+        .map_err(|e| {
+            failure(
+                if kind == PROC_THREAD_ATTRIBUTE_JOB_LIST {
+                    "Set contained process job attribute"
+                } else {
+                    "Set contained process handle attribute"
+                },
+                e,
+            )
+        })
     }
 }
 impl Drop for Attributes {
@@ -434,21 +466,20 @@ pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
         stdout: Some(reader.into()),
     };
     let mut contained = BOOL::default();
-    if unsafe {
+    let membership = unsafe {
         IsProcessInJob(
             raw(&child.process),
             Some(raw(child.job.as_ref().unwrap())),
             &mut contained,
         )
-    }
-    .is_err()
-        || !contained.as_bool()
-    {
+    };
+    if membership.is_err() || !contained.as_bool() {
         let _ = unsafe { TerminateProcess(raw(&child.process), 1) };
         let _ = child.wait();
-        return Err(io::Error::other(
-            "The transcriber did not enter its required job",
-        ));
+        return Err(match membership {
+            Err(error) => failure("Check contained process job", error),
+            Ok(()) => io::Error::other("The transcriber did not enter its required job"),
+        });
     }
     // CreateProcessW assigned the job before the initial thread could execute.
     // No PCM has entered writer; these unused child pipe copies now close here.
@@ -458,3 +489,30 @@ pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
 #[cfg(test)]
 #[path = "windows_child_job_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn native_failure_preserves_fixed_operation_and_exact_hresult_without_parsing_text() {
+        let code = windows::core::HRESULT(0x80070005_u32 as i32);
+        let error = failure(
+            "Start contained transcriber",
+            windows::core::Error::from_hresult(code),
+        );
+        assert_eq!(
+            native_failure(&error),
+            Some(("Start contained transcriber", code.0))
+        );
+        assert_eq!(
+            error.to_string(),
+            "Start contained transcriber failed (0x80070005)"
+        );
+        assert_eq!(
+            native_failure(&io::Error::other("untrusted/private/message")),
+            None
+        );
+        assert_eq!(native_failure(&io::Error::from_raw_os_error(5)), None);
+    }
+}
