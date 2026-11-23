@@ -12,10 +12,7 @@ const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
 const DIRECTORY: u32 = 0x10;
 const REPARSE_POINT: u32 = 0x400;
 const DACL_INFORMATION: u32 = 4;
-const PROTECTED_DACL: u32 = 0x8000_0000;
-const UNPROTECTED_DACL: u32 = 0x2000_0000;
 const DACL_CONTROL: u16 = 0x150c; // present/defaulted/auto-inherit/protected
-const SE_DACL_PROTECTED: u16 = 0x1000;
 
 #[repr(C)]
 struct Acl {
@@ -351,22 +348,20 @@ impl DaclSnapshot {
     fn pointer(&self) -> *mut Acl {
         self.words.as_ptr().cast_mut().cast()
     }
-    fn information(&self) -> u32 {
-        DACL_INFORMATION
-            | if self.control & SE_DACL_PROTECTED != 0 {
-                PROTECTED_DACL
-            } else {
-                UNPROTECTED_DACL
-            }
-    }
     fn apply(&self, file: &File, acl: *mut Acl) -> io::Result<()> {
+        // Replace only the DACL. Protection is never changed by this fixture;
+        // explicitly requesting UNPROTECTED would ask Windows to inherit ACEs
+        // from the parent and can set SE_DACL_AUTO_INHERITED. Neither protection
+        // transition belongs in this ACL-only mutation/restoration operation.
+        // https://learn.microsoft.com/windows/win32/secauthz/security-information
+        // Keep the full DACL_CONTROL equality check when verifying restoration.
         // SAFETY: the ACL is borrowed for this call. The retained MAXIMUM_ALLOWED
         // handle targets ONLY the owned directory and prevents child propagation.
         let code = unsafe {
             SetSecurityInfo(
                 file.as_raw_handle(),
                 1,
-                self.information(),
+                DACL_INFORMATION,
                 null_mut(),
                 null_mut(),
                 acl,
@@ -376,7 +371,7 @@ impl DaclSnapshot {
         trace(
             "set-security-return",
             Some(code as i32),
-            Some(u64::from(self.information())),
+            Some(u64::from(DACL_INFORMATION)),
         );
         status(code)
     }
