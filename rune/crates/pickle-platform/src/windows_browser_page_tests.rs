@@ -75,6 +75,7 @@ impl Trace {
             "hresult",
             "nodes",
             "documents",
+            "nullable_navigation_ends",
             "last_control_type",
             "control_type",
             "custom_variant_type",
@@ -519,6 +520,14 @@ fn owned_native_document_provider() {
                 "Accepted capture needs first,pre,post document Value reads"
             );
             assert_eq!(outcome.reads, 3);
+            assert!(
+                outcome.diagnostics.iter().all(|observation| {
+                    observation.values["nullable_navigation_ends"]
+                        .as_u64()
+                        .is_some_and(|count| count > 0)
+                }),
+                "Accepted observations must execute native successful-null traversal ends"
+            );
         }
         trace.step(trace_mode, "closing");
         fixture.close();
@@ -607,6 +616,7 @@ fn owned_native_document_provider() {
     directory.close().unwrap();
     let report = serde_json::json!({"schema":1,"test":"windows-owned-uia-document-provider","passed":true,
         "synthetic_provider_only":true,"real_browser_compatibility_proven":false,
+        "successful_null_navigation_observed":true,
         "root_document_value_exact_url":true,"document_name_decoy_ignored":true,
         "false_root_subtree_rejected":true,"iframe_values_not_read":true,
         "omnibox_values_not_read":true,"hyperlink_values_not_read":true,

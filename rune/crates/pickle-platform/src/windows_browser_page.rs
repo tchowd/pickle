@@ -27,6 +27,30 @@ const WEB_ROOT: GUID = GUID::from_u128(0xc5fdc049_4eec_4299_87bb_ca9fc718a681);
 // operation; every request is still clipped to the remaining total budget.
 // https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation2-put_connectiontimeout
 const UIA_REQUEST_TIMEOUT_MS: u32 = 500;
+
+// TreeWalker navigation explicitly returns S_OK + NULL at the end. The
+// windows 0.62 non-null interface projection converts that successful NULL to
+// Error::empty(), losing its distinction from a real HRESULT failure. Preserve
+// the ABI result here; never reinterpret E_POINTER or other failed HRESULTs as
+// an ordinary end of traversal.
+// https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomationtreewalker-getnextsiblingelement
+// SAFETY: query must follow the COM out-interface contract: write NULL or a
+// valid owned IUIAutomationElement reference to the initialized output pointer.
+unsafe fn nullable_automation_element(
+    query: impl FnOnce(*mut *mut std::ffi::c_void) -> HRESULT,
+) -> ::windows::core::Result<Option<IUIAutomationElement>> {
+    let mut raw = std::ptr::null_mut();
+    let status = query(&mut raw);
+    let element = if raw.is_null() {
+        None
+    } else {
+        // Adopt the one returned reference, including releasing it if a
+        // provider returned an owned reference together with a failed status.
+        Some(unsafe { IUIAutomationElement::from_raw(raw) })
+    };
+    status.ok()?;
+    Ok(element)
+}
 struct ComGuard;
 impl Drop for ComGuard {
     fn drop(&mut self) {
@@ -134,6 +158,7 @@ struct ReaderDiagnostic {
     control_type: i32,
     variant_type: u16,
     variant_bool: i16,
+    nullable_navigation_ends: usize,
 }
 impl DocumentReader {
     fn new(source: &CapturedSelection, cancel: CancellationToken) -> Result<Self, PlatformError> {
@@ -190,6 +215,7 @@ impl DocumentReader {
                 control_type: 0,
                 variant_type: 0,
                 variant_bool: 0,
+                nullable_navigation_ends: 0,
             }),
         })
     }
@@ -223,7 +249,7 @@ impl DocumentReader {
         let value = self.diagnostic.get();
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         let elapsed = (self.deadline - Duration::from_millis(1800)).elapsed();
-        serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool})
+        serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool,"nullable_navigation_ends":value.nullable_navigation_ends})
     }
     fn check(&self) -> Result<(), PlatformError> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -247,15 +273,35 @@ impl DocumentReader {
         self.rpc(unsafe { self.ui.CompareElements(left, right) })
             .map(|same| same.as_bool())
     }
-    fn next(
+    fn navigate(
         &self,
-        value: ::windows::core::Result<IUIAutomationElement>,
+        element: &IUIAutomationElement,
+        first_child: bool,
     ) -> Result<Option<IUIAutomationElement>, PlatformError> {
-        match value {
-            Ok(element) => Ok(Some(element)),
-            Err(error) if error.code() == HRESULT(0x80004003u32 as i32) => Ok(None),
-            Err(error) => self.rpc(Err(error)),
+        let walker = Interface::vtable(&self.walker);
+        let getter = if first_child {
+            walker.GetFirstChildElement
+        } else {
+            walker.GetNextSiblingElement
+        };
+        let result = unsafe {
+            nullable_automation_element(|output| {
+                getter(
+                    Interface::as_raw(&self.walker),
+                    Interface::as_raw(element),
+                    output,
+                )
+            })
+        };
+        let result = self.rpc(result)?;
+        #[cfg(test)]
+        if result.is_none() {
+            self.diagnostic.update(|mut value| {
+                value.nullable_navigation_ends += 1;
+                value
+            });
         }
+        Ok(result)
     }
     fn web_root(&self, element: &IUIAutomationElement) -> Result<bool, PlatformError> {
         self.check()?;
@@ -365,7 +411,7 @@ impl DocumentReader {
             }
             self.check()?;
             self.stage("traversal-first-child");
-            let mut child = self.next(unsafe { self.walker.GetFirstChildElement(&node) })?;
+            let mut child = self.navigate(&node, true)?;
             while let Some(element) = child {
                 count += 1;
                 if count > 192 {
@@ -373,7 +419,7 @@ impl DocumentReader {
                 }
                 self.check()?;
                 self.stage("traversal-next-sibling");
-                child = self.next(unsafe { self.walker.GetNextSiblingElement(&element) })?;
+                child = self.navigate(&element, false)?;
                 queue.push_back((element, depth + 1));
             }
         }
@@ -434,3 +480,33 @@ impl DocumentReader {
 #[cfg(test)]
 #[path = "windows_browser_page_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod nullable_navigation_tests {
+    use super::*;
+
+    #[test]
+    fn successful_null_navigation_is_end_but_failed_hresult_is_preserved() {
+        let calls = std::cell::Cell::new(0);
+        for status in [
+            HRESULT(0),
+            HRESULT(0x80004003u32 as i32),
+            HRESULT(0x80131505u32 as i32),
+        ] {
+            let result = unsafe {
+                nullable_automation_element(|output| {
+                    calls.set(calls.get() + 1);
+                    assert!((*output).is_null());
+                    *output = std::ptr::null_mut();
+                    status
+                })
+            };
+            if status.is_ok() {
+                assert!(result.unwrap().is_none());
+            } else {
+                assert_eq!(result.unwrap_err().code(), status);
+            }
+        }
+        assert_eq!(calls.get(), 3);
+    }
+}
