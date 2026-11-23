@@ -123,7 +123,7 @@ fn focused_discovery_walker(
 // Both hosted fixture types own foreground windows. Serialize their native UI
 // work inside this test binary without changing ordinary parallel unit checks.
 #[cfg(test)]
-fn native_browser_fixture_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn native_browser_fixture_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

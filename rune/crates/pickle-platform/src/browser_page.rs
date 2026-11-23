@@ -11,6 +11,12 @@ mod macos;
 #[path = "windows_browser_page.rs"]
 mod windows;
 
+// Every hosted native fixture that owns foreground windows shares this lock.
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) fn native_desktop_fixture_lock() -> std::sync::MutexGuard<'static, ()> {
+    windows::native_browser_fixture_lock()
+}
+
 /// Intentionally strict: complete serialized URLs must be byte-identical.
 /// No fragment removal, query sorting, Unicode folding, percent decoding,
 /// address-bar elision, redirect following or network request is performed.

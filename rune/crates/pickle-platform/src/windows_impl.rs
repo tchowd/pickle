@@ -486,6 +486,10 @@ impl SelectionReader for NativeSelectionReader<'_> {
 #[path = "windows_selection_origin_tests.rs"]
 mod selection_origin_tests;
 
+#[cfg(test)]
+#[path = "windows_selection_origin_native_tests.rs"]
+mod selection_origin_native_tests;
+
 pub(super) fn validate_source_window(source: &CapturedSelection) -> Result<(), PlatformError> {
     let hwnd = HWND(
         source
