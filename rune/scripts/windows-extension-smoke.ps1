@@ -94,14 +94,14 @@ function Build-PickleExtensionFixture([string]$Directory) {
   $output=Join-Path $Directory 'BrowserExtensionFixture.exe'
   $references=@('System.dll','System.Core.dll','System.Drawing.dll','System.Web.Extensions.dll','WPF/WindowsBase.dll','WPF/UIAutomationClient.dll','WPF/UIAutomationTypes.dll') | ForEach-Object { Join-Path $framework $_ }
   foreach ($reference in $references) { if (!(Test-Path -LiteralPath $reference -PathType Leaf)) { throw 'A required inbox UI Automation reference was unavailable.' } }
-  $arguments=@('/nologo','/langversion:5','/target:exe',"/out:$output")+@($references | ForEach-Object { "/reference:$_" })+@((Join-Path $PSScriptRoot '../native/windows/BrowserExtensionFixture.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionDelivery.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionDetails.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionLayout.cs'))
+  $arguments=@('/nologo','/langversion:5','/target:exe',"/out:$output")+@($references | ForEach-Object { "/reference:$_" })+@((Join-Path $PSScriptRoot '../native/windows/BrowserExtensionFixture.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionDelivery.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionDetails.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionLayout.cs'),(Join-Path $PSScriptRoot '../native/windows/BrowserExtensionEdgeNavigation.cs'))
   $compile=Start-PickleReadingChild $compiler $arguments
   try { if (!$compile.WaitForExit(30000) -or $compile.ExitCode -ne 0 -or !(Test-Path -LiteralPath $output -PathType Leaf)) { throw 'The owned extension fixture did not compile within its deadline.' } }
   finally { if (!$compile.HasExited) { $compile.Kill();$compile.WaitForExit(10000) | Out-Null };$compile.Dispose() }
   return $output
 }
 function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
-  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure','error_kind','error_hresult','failure_observation','window_capture','edge_policy_observation') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
+  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure','error_kind','error_hresult','failure_observation','window_capture','edge_policy_observation','edge_navigation_observation') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
   Assert-PickleExtensionRecoveredLayout $Report
   if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-bundled-extension-load' -or $Report.scope -cne 'bundled-extension-load-only' -or $Report.browser -cne $Browser) { throw 'The native setup stage report had the wrong scope.' }
   foreach ($key in @('passed','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_loaded','browser_job_drained')) {
@@ -277,12 +277,50 @@ function ConvertTo-PickleExtensionEdgePolicies($Observation) {
   })
   return [pscustomobject][ordered]@{effective_policy_claimed=$false;incomplete=$Observation.incomplete;records=$clean}
 }
+function Test-PickleEdgeNavigationLabel($Value) {
+  if ($Value -isnot [string] -or !$Value.Length -or $Value.Length -gt 80 -or $Value -cne $Value.Trim()) { return $false }
+  foreach ($character in $Value.ToCharArray()) {
+    if (![char]::IsLetterOrDigit($character) -and ' .,!?()[]''"-–—&+'.IndexOf($character) -lt 0) { return $false }
+  }
+  return ![regex]::IsMatch($Value,'[\p{L}\p{Nd}-]+(?:\.[\p{L}\p{Nd}-]+)*\.\p{L}{2,}',[Text.RegularExpressions.RegexOptions]::CultureInvariant)
+}
+function ConvertTo-PickleEdgeNavigation($Observation) {
+  $keys=@('stage','incomplete','proof_verified','nodes','controls','property_errors','truncated','records','work_area_width','work_area_height','window_dpi')
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'Unknown Edge navigation observation fields.' }
+  if ($Observation.stage -isnot [string] -or $Observation.stage -cnotin @('before-ownership','before-document','traversal','after-document','complete')) { throw 'Unknown Edge navigation observation stage.' }
+  foreach ($key in @('incomplete','proof_verified','truncated')) { if ($Observation.$key -isnot [bool]) { throw 'Edge observation flags must be booleans.' } }
+  foreach ($key in @('nodes','controls','property_errors')) { if (($Observation.$key -isnot [int] -and $Observation.$key -isnot [long]) -or $Observation.$key -lt 0 -or $Observation.$key -gt 1024) { throw 'Edge observation counts exceeded bounds.' } }
+  if ($Observation.controls -gt $Observation.nodes -or $Observation.property_errors -gt $Observation.nodes) { throw 'Edge observation counts were inconsistent.' }
+  $records=@($Observation.records)
+  if ($records.Count -gt 16 -or $records.Count -ne [Math]::Min(16,$Observation.controls) -or $Observation.truncated -ne ($Observation.controls -gt 16)) { throw 'Edge observation records/counts differed.' }
+  if ($Observation.proof_verified -ne ($Observation.stage -ceq 'complete') -or (!$Observation.proof_verified -and (!$Observation.incomplete -or $records.Count -or $Observation.controls)) -or ($Observation.proof_verified -and $Observation.incomplete -ne ($Observation.property_errors -ne 0))) { throw 'Unverified Edge page cannot retain labels or complete evidence.' }
+  $clean=@(foreach ($record in $records) {
+    $fields=@('role','label','enabled','offscreen','bounds_flags','invoke_supported','toggle_supported','toggle_state','expand_supported','expand_state','ancestor_roles','ancestors_truncated')
+    if (@($record.PSObject.Properties).Count -ne $fields.Count -or @($record.PSObject.Properties.Name | Where-Object { $_ -cnotin $fields }).Count) { throw 'Unknown Edge navigation control fields.' }
+    foreach ($key in @('enabled','offscreen','invoke_supported','toggle_supported','expand_supported','ancestors_truncated')) { if ($record.$key -isnot [bool]) { throw 'Edge control flags must be booleans.' } }
+    foreach ($key in @('role','bounds_flags','toggle_state','expand_state')) { if ($record.$key -isnot [int] -and $record.$key -isnot [long]) { throw 'Edge control metadata must be integers.' } }
+    if ($record.role -notin @(50000,50002,50003,50005,50009,50011,50013,50019,50024,50031) -or $record.bounds_flags -lt 0 -or $record.bounds_flags -gt 7 -or
+        ($record.toggle_supported -and $record.toggle_state -notin @(0,1,2)) -or (!$record.toggle_supported -and $record.toggle_state -ne -1) -or
+        ($record.expand_supported -and $record.expand_state -notin @(0,1,2,3)) -or (!$record.expand_supported -and $record.expand_state -ne -1)) { throw 'Edge control role/state was outside scope.' }
+    if ($null -ne $record.label -and !(Test-PickleEdgeNavigationLabel $record.label)) { throw 'Unsafe Edge control label refused.' }
+    $ancestors=@($record.ancestor_roles)
+    if (!$ancestors.Count -or $ancestors.Count -gt 8 -or $ancestors[0] -ne $record.role -or ($record.ancestors_truncated -and $ancestors.Count -ne 8) -or (!$record.ancestors_truncated -and $ancestors[-1] -ne 50030)) { throw 'Edge control ancestry was inconsistent.' }
+    foreach ($role in $ancestors) { if (($role -isnot [int] -and $role -isnot [long]) -or $role -lt 50000 -or $role -gt 50049) { throw 'Edge ancestry role was outside bounds.' } }
+    [pscustomobject][ordered]@{role=$record.role;label=$record.label;enabled=$record.enabled;offscreen=$record.offscreen;bounds_flags=$record.bounds_flags;invoke_supported=$record.invoke_supported;toggle_supported=$record.toggle_supported;toggle_state=$record.toggle_state;expand_supported=$record.expand_supported;expand_state=$record.expand_state;ancestor_roles=$ancestors;ancestors_truncated=$record.ancestors_truncated}
+  })
+  foreach ($key in @('work_area_width','work_area_height','window_dpi')) {
+    $value=$Observation.$key;$minimum=if ($key -ceq 'window_dpi') { 48 } else { 1 };$maximum=if ($key -ceq 'window_dpi') { 960 } else { 32768 }
+    if ($null -ne $value -and (($value -isnot [int] -and $value -isnot [long]) -or $value -lt $minimum -or $value -gt $maximum)) { throw 'Edge native metric was outside bounds.' }
+  }
+  if (($null -eq $Observation.work_area_width) -ne ($null -eq $Observation.work_area_height)) { throw 'Partial Edge work-area dimensions refused.' }
+  return [pscustomobject][ordered]@{stage=$Observation.stage;incomplete=$Observation.incomplete;proof_verified=$Observation.proof_verified;nodes=$Observation.nodes;controls=$Observation.controls;property_errors=$Observation.property_errors;truncated=$Observation.truncated;records=$clean;work_area_width=$Observation.work_area_width;work_area_height=$Observation.work_area_height;window_dpi=$Observation.window_dpi}
+}
 function ConvertTo-PickleExtensionStageReport($Report) {
   return ConvertTo-PickleExtensionDriverScalars $Report $false
 }
 function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
-  # Whitelist scalar diagnostic keys. The native helper never writes arbitrary
-  # UI names/values or exception messages; no private paths enter artifacts.
+  # Whitelist diagnostics; only the separately proven fresh Edge internal page
+  # may retain its constrained control labels. No values or private paths.
   $booleans=@('passed','full_delivery_verified','native_host_registered','native_host_executed','authenticated_bridge_verified','app_launched','devtools_or_cdp_used','extension_code_modified','browser_job_drained','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_toggle_found','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_name_found','extension_version_found','extension_card_identity_verified','extension_loaded','developer_observation_unavailable','failure_observation_unavailable')
   $numbers=@('schema','error_hresult','folder_field_candidates','extension_id_candidates','target_card_candidates','last_owned_uia_nodes','refused_uia_pid','last_owned_picker_windows','last_owned_browser_windows','navigation_shortcut_events','navigation_enter_events','navigation_confirm_shortcut_events','navigation_escape_events')
   $fixed=@{test=@('windows-stable-bundled-extension-load');scope=@('bundled-extension-load-only');browser=@('chrome','edge');stage=@('arguments','launch-contained-browser','owned-browser-window','ordinary-navigation','developer-mode','load-unpacked','owned-folder-picker','folder-picker-path','loaded-extension-card','browser-cleanup');error_kind=@('com','access-denied','io','argument','other')}
@@ -302,7 +340,11 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
   $clean=[ordered]@{}
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
-    if ($key -ceq 'edge_layout_observation') {
+    if ($key -ceq 'edge_navigation_observation') {
+      if ($Report.browser -cne 'edge' -or $Report.stage -cne 'developer-mode' -or $Report.passed -isnot [bool] -or $Report.passed -or $Report.failure -cnotin @('developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','edge-layout-unverified','edge-layout-unavailable','stage-deadline')) { throw 'Edge navigation observation is failure-only internal-page evidence.' }
+      $clean[$key]=ConvertTo-PickleEdgeNavigation $value
+    }
+    elseif ($key -ceq 'edge_layout_observation') {
       if ($Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable' -or $Report.passed -isnot [bool]) { throw 'Only the original owned Edge discovery failure can have a layout record.' }
       $layout=ConvertTo-PickleExtensionLayout $value
       if ($Report.passed -and !$layout.safely_verified) { throw 'Unsafe layout cannot attest recovered success.' };$clean[$key]=$layout

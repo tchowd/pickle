@@ -4,7 +4,7 @@ param(
   [Parameter(Mandatory=$true)][string]$EvidencePath,
   [Parameter(Mandatory=$true)][ValidateSet('debug','release')][string]$Configuration,
   [switch]$RequireWindowCapture,
-  [ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify'
+  [ValidateSet('simplify','explain-may','follow-up-return-clear','formatted-copy')][string]$Scenario='simplify'
 )
 $ErrorActionPreference='Stop'
 if ($PSEdition -cne 'Core' -or $PSVersionTable.PSVersion.Major -lt 7 -or [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Installed reading acceptance requires PowerShell 7 on Windows.' }

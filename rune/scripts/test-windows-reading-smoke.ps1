@@ -25,7 +25,7 @@ try {
   $readingCall=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-PickleReadingCore'},$true))
   $reportCall=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Assert-PicklePackageReadingEvidence'},$true))
   $oldProbe=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-PickleWindowCaptureProbe'},$true))
-  if ($predicate.Count -ne 1 -or $readingCall.Count -ne 3 -or $reportCall.Count -ne 3 -or $oldProbe.Count) { throw 'The actual reading gates or explicit-only legacy capture diagnostic wiring differed.' }
+  if ($predicate.Count -ne 1 -or $readingCall.Count -ne 4 -or $reportCall.Count -ne 4 -or $oldProbe.Count) { throw 'The actual reading gates or explicit-only legacy capture diagnostic wiring differed.' }
   . ([scriptblock]::Create($predicate[0].Extent.Text))
   $actualPackageCalls=[scriptblock]::Create($readingCall[0].Extent.Text+"`n"+$reportCall[0].Extent.Text)
   foreach ($required in @($false,$true)) {
@@ -117,6 +117,21 @@ try {
   Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $followReport $true 'debug' -Scenario 'follow-up-return-clear' }
   Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $followReport $false 'release' -Scenario 'follow-up-return-clear' }
   Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $followReport $false 'debug' -Scenario 'explain-may' }
+  $copyReport=$validReport | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+  $copyReport.configuration='debug';$copyReport.require_window_capture=$false;$copyReport.marker_in_context=$false
+  foreach ($node in @($copyReport,$copyReport.server,$copyReport.driver,$copyReport.restart_driver)) { $node.scenario='formatted-copy' }
+  $copyReport.server.window_capture_required=$false;$copyReport.server.marker_in_context=$false
+  $copyReport.driver | Add-Member native_copy_verified $true
+  $copyReport.restart_driver | Add-Member saved_native_copy_verified $true
+  foreach ($driver in @($copyReport.driver,$copyReport.restart_driver)) { $driver | Add-Member known_fixture_clipboard_cleared $true;$driver | Add-Member clipboard_sender_pid_verified $false }
+  Assert-PicklePackageReadingEvidence $copyReport $false 'debug' -Scenario 'formatted-copy'
+  foreach ($pair in @(@('driver','native_copy_verified'),@('restart_driver','saved_native_copy_verified'),@('driver','known_fixture_clipboard_cleared'),@('restart_driver','known_fixture_clipboard_cleared'),@('driver','clipboard_sender_pid_verified'),@('restart_driver','clipboard_sender_pid_verified'))) {
+    $bad=$copyReport | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    $bad.($pair[0]).($pair[1])=!$bad.($pair[0]).($pair[1])
+    Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $bad $false 'debug' -Scenario 'formatted-copy' }
+    $bad.($pair[0]).PSObject.Properties.Remove($pair[1])
+    Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $bad $false 'debug' -Scenario 'formatted-copy' }
+  }
   foreach ($mode in @(@('debug',$false,'true','github-hosted',$true),@('debug',$true,'true','github-hosted',$false),@('release',$false,'true','github-hosted',$false),
       @('debug',$false,$null,$null,$false),@('debug',$false,'false','github-hosted',$false),@('debug',$false,'true','self-hosted',$false),
       @('debug',$false,'true',$null,$false),@('debug',$false,'TRUE','github-hosted',$false))) {
@@ -125,8 +140,8 @@ try {
       $Configuration=$Mode[0];$hasIdentity=$Mode[1];$application='owned-app';$supportRoot='owned-profile'
       $observed=[pscustomobject]@{called=0;read=0;next=$null}
       function Invoke-PickleReadingCore($Application,$DataDirectory,$EvidencePath,$Configuration,[string]$Scenario,[switch]$RequireWindowCapture) {
-        $expectedScenario=if ($observed.called -eq 0) { 'explain-may' } else { 'follow-up-return-clear' }
-        $expectedFile=if ($observed.called -eq 0) { 'unpackaged-debug-native-smoke-explain-reading.json' } else { 'unpackaged-debug-native-smoke-follow-up-reading.json' }
+        $expectedScenario=@('explain-may','follow-up-return-clear')[$observed.called]
+        $expectedFile=@('unpackaged-debug-native-smoke-explain-reading.json','unpackaged-debug-native-smoke-follow-up-reading.json')[$observed.called]
         if ($observed.called -ge 2 -or $Scenario -cne $expectedScenario -or $RequireWindowCapture -or $Application -cne 'owned-app' -or $DataDirectory -cne 'owned-profile' -or $Configuration -cne 'debug' -or (Split-Path $EvidencePath -Leaf) -cne $expectedFile -or $observed.called -ne $observed.read) { throw 'The package additional reading invocation differed.' }
         $observed.called++;$observed.next=$EvidencePath
       }
@@ -163,7 +178,7 @@ try {
   [IO.File]::WriteAllText($argumentProbe,'param([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[string]$Scenario); [IO.File]::WriteAllText($EvidencePath,(@($Application,$DataDirectory,$Configuration,[bool]$RequireWindowCapture,$Scenario) | ConvertTo-Json -Compress))')
   $powerShell=(Get-Process -Id $PID).Path
   $probeApplication='C:\owned Café app\PickleRune.exe';$probeData='C:\owned data\'
-  foreach ($transportCase in @(@($false,'simplify'),@($true,'simplify'),@($false,'explain-may'),@($false,'follow-up-return-clear'))) {
+  foreach ($transportCase in @(@($false,'simplify'),@($true,'simplify'),@($false,'explain-may'),@($false,'follow-up-return-clear'),@($false,'formatted-copy'))) {
     $requireCapture=$transportCase[0];$scenario=$transportCase[1]
     $argumentProcess=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $argumentProbe $probeApplication $probeData $argumentResult 'release' -RequireWindowCapture:$requireCapture -Scenario $scenario))
     try {
@@ -253,7 +268,7 @@ try {
   # Both originally present and originally absent archives must be restored
   # only after their current bytes are proven to be our exact test outputs.
   foreach ($originalArchives in @($false,$true)) {
-    foreach ($savedScenario in @('simplify','explain-may','follow-up-return-clear')) {
+    foreach ($savedScenario in @('simplify','explain-may','follow-up-return-clear','formatted-copy')) {
     $case=Join-Path $root ('saved-'+[guid]::NewGuid().ToString('N'))
     $profile=Join-Path $case 'data';New-Item -ItemType Directory -Path $profile -Force | Out-Null
     $caseSettings=Join-Path $profile 'settings.json'
@@ -275,6 +290,7 @@ try {
     $entry=[ordered]@{id=[guid]::NewGuid().ToString('D');recorded_at=$recorded;app_name='ReadingFixture';app_id=('windows:'+$fixturePath.ToLowerInvariant());action='Simplify';question=$null;passage=$contract.selected;answer=$contract.answer;quality=$null;chart=$null;reference=$null}
     if ($savedScenario -ceq 'explain-may') { $entry.action='Explain';$entry.question='may' }
     elseif ($savedScenario -ceq 'follow-up-return-clear') { $entry.action='Follow-up';$entry.question=Get-PickleReadingFollowQuestion;$entry.answer=Get-PickleReadingFollowAnswer }
+    elseif ($savedScenario -ceq 'formatted-copy') { $entry.answer=Get-PickleReadingExpectedAnswer $contract $savedScenario }
     $archive=[ordered]@{version=1;data=@($entry)}
     $validSaved=[Text.UTF8Encoding]::new($false).GetBytes(($archive | ConvertTo-Json -Depth 8 -Compress))
     Write-PickleReadingAtomic $bookmarks $validSaved

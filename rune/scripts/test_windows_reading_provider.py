@@ -182,6 +182,23 @@ class ProviderTests(unittest.TestCase):
                 self.assertTrue(chunks[-1]["done"])
                 self.assertEqual(json.loads(state.read_text()), dict(total_requests=2, show_count=1, chat_count=1, source_verified=True, context_verified=True, window_capture_required=False, marker_in_context=False, rejected=False, scenario="simplify", rejection_stage=None, rejection_ocr=None))
 
+    def test_formatted_copy_uses_one_generation_with_literal_markup_and_hard_lines(self):
+        expected = "Café answer:\nHard line.\n\n1. **Bold** item\n2. Use `snake_case`\n10) See [docs](https://example.com), keep <b>tags</b> and **unclosed"
+        for streamed in (True, False):
+            with self.server(scenario="formatted-copy") as (server, state):
+                self.assertEqual(self.request(server, "/api/show", {"model": provider.MODEL})[0], 200)
+                status, raw = self.request(server, "/api/chat", chat(streamed, scenario="formatted-copy"))
+                self.assertEqual(status, 200)
+                chunks = [json.loads(line) for line in raw.splitlines()] if streamed else [json.loads(raw)]
+                self.assertEqual("".join(chunk["message"]["content"] for chunk in chunks), expected)
+                record = json.loads(state.read_text())
+                self.assertEqual((record["total_requests"], record["show_count"], record["chat_count"]), (2, 1, 1))
+                self.assertTrue(record["source_verified"] and record["context_verified"])
+                self.assertFalse(record["rejected"] or record["marker_in_context"])
+        with self.assertRaises(ValueError):
+            with self.server(True, "formatted-copy"):
+                pass
+
     def test_closed_explain_before_base_requires_exact_internal_question_and_one_generation(self):
         for streamed in (True, False):
             with self.server(scenario="explain-may") as (server, state):

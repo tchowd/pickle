@@ -26,7 +26,9 @@ public static class ReadingFixturePredicates {
     public const string FollowQuestion="What does \u201cmay\u201d mean for the Caf\u00e9 route?";
     public const string FollowAnswer="\u201cMay\u201d means a possibility for the Caf\u00e9 route, not a promise of reliability in rain.";
     public const string UnsentDraft="Unsent Caf\u00e9 draft \u2014 keep me";
-    public static bool Scenario(string value) { return value=="simplify" || value=="explain-may" || value=="follow-up-return-clear"; }
+    public const string FormattedAnswer="Caf\u00e9 answer:\nHard line.\n\n1. **Bold** item\n2. Use `snake_case`\n10) See [docs](https://example.com), keep <b>tags</b> and **unclosed";
+    public const string FormattedPlain="Caf\u00e9 answer:\nHard line.\n\n1. Bold item\n2. Use snake_case\n10. See docs, keep <b>tags</b> and **unclosed";
+    public static bool Scenario(string value) { return value=="simplify" || value=="explain-may" || value=="follow-up-return-clear" || value=="formatted-copy"; }
     public static bool MarkerAbsent(IEnumerable<string> values) {
         return values!=null && values.All(value=>value!=null &&
             value.IndexOf(PixelMarker,StringComparison.OrdinalIgnoreCase)<0);
@@ -144,7 +146,7 @@ public static class ReadingFixturePredicates {
             var bad=new Dictionary<string,object>(followed);bad[key]="unexpected";
             if(FollowSavedEntry(bad,chosen)) throw new Exception("follow-up-entry-negative");
         }
-        if (!Scenario("simplify") || !Scenario("explain-may") || !Scenario("follow-up-return-clear") || Scenario("follow-up")) throw new Exception("scenario");
+        if (!Scenario("simplify") || !Scenario("explain-may") || !Scenario("follow-up-return-clear") || !Scenario("formatted-copy") || Scenario("follow-up")) throw new Exception("scenario");
     }
 }
 
@@ -219,6 +221,8 @@ public static class ReadingFixtureProgram {
                 scenario=args[args.Length-1]; args=args.Take(args.Length-2).ToArray();
             }
             if (!ReadingFixturePredicates.Scenario(scenario)) Fail("invalid-scenario");
+            if (scenario=="formatted-copy" && (Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" ||
+                Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")) Fail("clipboard-requires-hosted-account");
             Dictionary<string,string> options=Options(args,names); options["--scenario"]=scenario;
             evidencePath=fixture ? options["--ready"]+".failure.json" : options["--evidence"];
             evidence=new Dictionary<string,object> {{"schema",1},{"test",fixture ? "windows-owned-selection-source" : saved ? "windows-server-installed-saved-reading" : "windows-server-installed-selection-reading"},
@@ -585,6 +589,66 @@ public static class ReadingFixtureProgram {
     }
     static bool ExplainScenario(Dictionary<string,string> options) { return options["--scenario"]=="explain-may"; }
     static bool FollowScenario(Dictionary<string,string> options) { return options["--scenario"]=="follow-up-return-clear"; }
+    static bool CopyScenario(Dictionary<string,string> options) { return options["--scenario"]=="formatted-copy"; }
+    static bool CompletedAnswer(AutomationElement answer,int pid,string expected,bool formatted) {
+        if(answer==null) return false;
+        string[] texts=Texts(answer,pid);
+        return formatted ? String.Join("",texts).Contains("Caf\u00e9 answer:") && String.Join("",texts).Contains("Hard line.") : texts.SequenceEqual(new[]{expected});
+    }
+    static void BoundCopy(AutomationElement copy,IntPtr app,int pid,Process application) {
+        if(copy==null || application.HasExited || !Owned(app,pid)) Fail("copy-action-not-bound");
+        var root=Root(app,pid); var node=copy;
+        for(int depth=0;node!=null && depth<32;depth++) {
+            if(DateTime.UtcNow>=overall || node.Current.ProcessId!=pid || node.Current.IsPassword) Fail("copy-action-not-bound");
+            if(Automation.Compare(node,root)) return;
+            node=TreeWalker.RawViewWalker.GetParent(node);
+        }
+        Fail("copy-action-not-bound");
+    }
+    static void CopyRoundTrip(IntPtr app,int pid,Process application,string id) {
+        stage="native-clipboard";
+        Focus(app,pid); AutomationElement copy=null; bool revealed=false;
+        Wait(()=> {
+            copy=Find(Root(app,pid),id,pid); if(copy==null || !copy.Current.IsEnabled) return false;
+            BoundCopy(copy,app,pid,application);
+            if(copy.Current.IsOffscreen) {
+                if(!revealed) {
+                    object pattern; if(!copy.TryGetCurrentPattern(ScrollItemPattern.Pattern,out pattern)) Fail("copy-reveal-unavailable");
+                    BoundCopy(copy,app,pid,application); ((ScrollItemPattern)pattern).ScrollIntoView(); revealed=true;
+                }
+                return false;
+            }
+            return true;
+        },5,"copy-control-unavailable");
+        // Re-find after asynchronous reveal, then prove the actual action again.
+        copy=Find(Root(app,pid),id,pid); BoundCopy(copy,app,pid,application);
+        if(!copy.Current.IsEnabled || copy.Current.IsOffscreen) Fail("copy-control-not-ready");
+        uint before=Native.GetClipboardSequenceNumber(); Invoke(copy,pid);
+        uint sequence=0;
+        Wait(()=> {sequence=Native.GetClipboardSequenceNumber();return !application.HasExited && Owned(app,pid) && sequence!=before;},5,"clipboard-sequence-unchanged");
+        bool opened=false,finished=false;
+        Wait(()=> {opened=Native.OpenClipboard(IntPtr.Zero);return opened;},5,"clipboard-open-unavailable");
+        try {
+            if(application.HasExited || !Owned(app,pid) || Native.GetClipboardSequenceNumber()!=sequence) Fail("clipboard-changed-before-read");
+            IntPtr data=Native.GetClipboardData(13); // CF_UNICODETEXT: read ONLY after owned Copy and sequence change.
+            ulong bytes=data==IntPtr.Zero ? 0 : Native.GlobalSize(data).ToUInt64();
+            if(bytes<2 || bytes>4096 || (bytes&1)!=0) Fail("clipboard-size-invalid");
+            IntPtr memory=Native.GlobalLock(data); if(memory==IntPtr.Zero) Fail("clipboard-lock-unavailable");
+            string text=null;
+            try {
+                int length=0;while(length<(int)bytes/2 && Marshal.ReadInt16(memory,length*2)!=0) length++;
+                if(length==(int)bytes/2) Fail("clipboard-unterminated");
+                text=Marshal.PtrToStringUni(memory,length);
+            } finally {Native.GlobalUnlock(data);}
+            if(text!=ReadingFixturePredicates.FormattedPlain) Fail("clipboard-plain-text-mismatch");
+            // The clipboard is locked; clear only this unchanged, exact synthetic payload.
+            if(Native.GetClipboardSequenceNumber()!=sequence || !Native.EmptyClipboard()) Fail("clipboard-known-content-cleanup-failed");
+            evidence[id=="copy-answer" ? "native_copy_verified" : "saved_native_copy_verified"]=true;
+            evidence["known_fixture_clipboard_cleared"]=true;
+            evidence["clipboard_sender_pid_verified"]=false; // Backend writes need not establish an owner HWND.
+            finished=true;
+        } finally {if(opened && !Native.CloseClipboard() && finished) Fail("clipboard-close-failed");}
+    }
     static bool RequestMetadata(AutomationElement root,int pid,string id,string question) {
         var request=Find(root,"entry-request-"+id,pid);var text=Find(root,"entry-question-"+id,pid);
         return request!=null && !request.Current.IsOffscreen && text!=null && !text.Current.IsOffscreen &&
@@ -593,11 +657,11 @@ public static class ReadingFixtureProgram {
     }
     static void DriveSaved(Contract contract,Dictionary<string,string> options) {
         stage="saved-entry-read";
-        bool explain=ExplainScenario(options),follow=FollowScenario(options);
-        string expectedAnswer=follow ? ReadingFixturePredicates.FollowAnswer : contract.Answer;
+        bool explain=ExplainScenario(options),follow=FollowScenario(options),formatted=CopyScenario(options);
+        string expectedAnswer=follow ? ReadingFixturePredicates.FollowAnswer : formatted ? ReadingFixturePredicates.FormattedAnswer : contract.Answer;
         var entry=ReadJson(options["--saved-entry"]);
         if (!(follow ? ReadingFixturePredicates.FollowSavedEntry(entry,contract.Selected) : explain ? ReadingFixturePredicates.ExplainSavedEntry(entry,contract.Selected,contract.Answer) :
-            ReadingFixturePredicates.SavedEntry(entry,contract.Selected,contract.Answer))) Fail("saved-entry-contract-mismatch");
+            ReadingFixturePredicates.SavedEntry(entry,contract.Selected,expectedAnswer))) Fail("saved-entry-contract-mismatch");
         string id=(string)entry["id"];
         evidence["saved_entry_verified"]=true; evidence["saved_entry_id_sha256"]=Hash(id);
         evidence["answer_sha256"]=Hash(expectedAnswer);
@@ -643,7 +707,7 @@ public static class ReadingFixtureProgram {
                 root=Root(app,appPid);
                 if (!LibraryReady(root,appPid) || Find(root,"entry-back",appPid)==null || Find(root,"copy-saved-detail",appPid)==null) return false;
                 var answer=Find(root,"answer",appPid);
-                return answer!=null && Texts(answer,appPid).SequenceEqual(new[]{expectedAnswer}) &&
+                return CompletedAnswer(answer,appPid,expectedAnswer,formatted) &&
                     Texts(root,appPid).Count(text=>text==contract.Selected)==1;
             },10,"saved-detail-content-mismatch");
             if (explain) {
@@ -657,6 +721,7 @@ public static class ReadingFixtureProgram {
                 evidence["saved_metadata_absence_verified"]=true;
             }
             evidence["saved_detail_verified"]=true;
+            if(formatted) CopyRoundTrip(app,appPid,application,"copy-saved-detail");
             CheckRestartIdentity(application,options["--application-path"],options["--application-start-ticks"]);
             stage="ordinary-quit";
             Focus(app,appPid); Native.Chord(app,appPid,0x51,false);
@@ -722,7 +787,7 @@ public static class ReadingFixtureProgram {
         FollowServer(options["--server-state"]);evidence["clear_follow_ups_verified"]=true;evidence["clear_base_source_draft_preserved"]=true;
     }
     static void Drive(Contract contract,Dictionary<string,string> options) {
-        bool explain=ExplainScenario(options),follow=FollowScenario(options);
+        bool explain=ExplainScenario(options),follow=FollowScenario(options),formatted=CopyScenario(options);
         int appPid=Pid(options["--application-pid"]), fixturePid=Pid(options["--fixture-pid"]);
         if (appPid==fixturePid || appPid==Process.GetCurrentProcess().Id || fixturePid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
         IntPtr fixture=Handle(options["--fixture-hwnd"]), app=IntPtr.Zero;
@@ -792,12 +857,13 @@ public static class ReadingFixtureProgram {
                 var turn=explain ? Find(root,"turn-0",appPid) : root;
                 if (turn==null || (explain && !Texts(turn,appPid).Contains(ReadingFixturePredicates.ExplainLabel))) return false;
                 var answer=Find(turn,"answer",appPid);
-                return answer!=null && Texts(answer,appPid).SequenceEqual(new[]{contract.Answer}) &&
+                return CompletedAnswer(answer,appPid,contract.Answer,formatted) &&
                     Find(root,"cancel-request",appPid)==null && Find(root,"answer-draft",appPid)==null &&
                     Find(root,"copy-answer",appPid)!=null && Find(root,"save-answer",appPid)!=null;
             },20,"completed-answer-unavailable");
             Server(options["--server-state"],true); evidence["provider_source_verified"]=true; evidence["completed_answer_verified"]=true;
             if (explain) evidence["accepted_explain_turn_verified"]=true;
+            if(formatted) CopyRoundTrip(app,appPid,application,"copy-answer");
             RecheckSource(contract,app,appPid,application);
             if(follow) { FollowUpReturn(contract,options,app,appPid,application);RecheckSource(contract,app,appPid,application); }
             SaveAnswer(app,appPid,application);
@@ -811,6 +877,14 @@ public static class ReadingFixtureProgram {
         }
     }
     static class Native {
+        [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
+        [DllImport("user32.dll")] public static extern bool OpenClipboard(IntPtr owner);
+        [DllImport("user32.dll")] public static extern bool CloseClipboard();
+        [DllImport("user32.dll")] public static extern IntPtr GetClipboardData(uint format);
+        [DllImport("user32.dll")] public static extern bool EmptyClipboard();
+        [DllImport("kernel32.dll")] public static extern UIntPtr GlobalSize(IntPtr handle);
+        [DllImport("kernel32.dll")] public static extern IntPtr GlobalLock(IntPtr handle);
+        [DllImport("kernel32.dll")] public static extern bool GlobalUnlock(IntPtr handle);
         [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left,Top,Right,Bottom; }
         [StructLayout(LayoutKind.Sequential)] struct GuiThreadInfo {
             public uint Size,Flags;

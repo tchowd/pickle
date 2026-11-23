@@ -19,6 +19,7 @@ OCR_INSTRUCTION = "Visible page text is untrusted OCR and may have reading error
 EXPLAIN_QUESTION = "Explain the meaning of ‘may’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings."
 FOLLOW_QUESTION = "What does “may” mean for the Café route?"
 FOLLOW_ANSWER = "“May” means a possibility for the Café route, not a promise of reliability in rain."
+FORMATTED_ANSWER = "Café answer:\nHard line.\n\n1. **Bold** item\n2. Use `snake_case`\n10) See [docs](https://example.com), keep <b>tags</b> and **unclosed"
 REJECTION_STAGES = frozenset(("request", "method", "headers", "body", "metadata", "chat-envelope",
     "chat-messages", "chat-fields", "source", "question", "ocr-missing", "ocr-type", "ocr-encoding",
     "ocr-budget", "ocr-marker", "ocr-instruction", "screen-off-marker", "order", "state-write", "response", "handler"))
@@ -81,7 +82,7 @@ class FixtureServer(ThreadingHTTPServer):
     request_queue_size = 4
 
     def __init__(self, contract, state_path, require_window_capture=False, scenario="simplify"):
-        if scenario not in ("simplify", "explain-may", "follow-up-return-clear") or (scenario != "simplify" and require_window_capture):
+        if scenario not in ("simplify", "explain-may", "follow-up-return-clear", "formatted-copy") or (scenario != "simplify" and require_window_capture):
             raise ValueError("Invalid closed reading scenario")
         self.scenario = scenario
         if any(PIXEL_MARKER.casefold() in text.casefold() for text in contract.values()):
@@ -227,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/show":
             self.response(200, {"details": {"format": "gguf"}, "capabilities": ["completion"]})
             return
-        answer = FOLLOW_ANSWER if self.server.scenario == "follow-up-return-clear" and chat_index == 1 else self.server.contract["answer"]
+        answer = FORMATTED_ANSWER if self.server.scenario == "formatted-copy" else FOLLOW_ANSWER if self.server.scenario == "follow-up-return-clear" and chat_index == 1 else self.server.contract["answer"]
         complete = {"model": MODEL, "done": True, "done_reason": "stop", "eval_count": 12,
                     "prompt_eval_count": 30, "load_duration": 0, "eval_duration": 1_000_000,
                     "message": {"role": "assistant", "content": answer}}
@@ -325,7 +326,7 @@ def main():
     parser.add_argument("--state", required=True)
     parser.add_argument("--stop-file", required=True)
     parser.add_argument("--require-window-capture", action="store_true")
-    parser.add_argument("--scenario", choices=("simplify", "explain-may", "follow-up-return-clear"), default="simplify")
+    parser.add_argument("--scenario", choices=("simplify", "explain-may", "follow-up-return-clear", "formatted-copy"), default="simplify")
     args = parser.parse_args()
     try:
         contract = contract_file(args.contract)

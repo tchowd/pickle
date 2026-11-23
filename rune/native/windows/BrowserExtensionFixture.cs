@@ -408,6 +408,7 @@ public static partial class BrowserExtensionFixtureProgram {
     }
     [MTAThread] public static int Main(string[] args) {
         if (args.Length==1 && args[0]=="--self-test") { BrowserExtensionPredicates.SelfTest(); return 0; }
+        if (args.Length==1 && args[0]=="--edge-navigation-self-test") { BrowserExtensionEdgeNavigationPredicates.SelfTest(); return 0; }
         if (args.Length==1 && args[0]=="--delivery-self-test") { BrowserExtensionDeliveryPredicates.SelfTest(); return 0; }
         if (args.Length==1 && args[0]=="--details-self-test") { BrowserExtensionDetailsPredicates.SelfTest(); return 0; }
         if (args.Length==1 && args[0]=="--layout-self-test") { BrowserExtensionLayoutPredicates.SelfTest(); return 0; }
@@ -516,6 +517,7 @@ public static partial class BrowserExtensionFixtureProgram {
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;
             if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card" || stage=="loaded-extension-details")) {
+                if(stage=="developer-mode" && Report.ContainsKey("browser") && (string)Report["browser"]=="edge") ObserveEdgeNavigation(window);
                 if(Report.ContainsKey("browser") && (string)Report["browser"]=="edge") { try { ObserveEdgePolicies(); } catch { } }
                 try { ObserveFailure(window); } catch { Report["failure_observation_unavailable"]=true; }
                 ObserveWindowCapture(window);

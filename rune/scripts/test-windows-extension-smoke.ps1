@@ -27,13 +27,16 @@ if ($calls.Count -ne 1) { throw 'The installed package lost its extension setup 
 $loop=$calls[0].Parent
 while ($null -ne $loop -and $loop -isnot [Management.Automation.Language.ForEachStatementAst]) { $loop=$loop.Parent }
 if ($null -eq $loop) { throw 'The package must run each browser through a separate delegate.' }
-$following=@($loop.Parent.Statements | Where-Object { $_.Extent.StartOffset -gt $loop.Extent.EndOffset } | Select-Object -First 1)
-if ($following.Count -ne 1 -or $following[0] -isnot [Management.Automation.Language.IfStatementAst]) { throw 'The package must fail after collecting safe setup failures.' }
-$actualPair=[scriptblock]::Create($loop.Extent.Text+"`n"+$following[0].Extent.Text)
-foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unknown','chrome-delivery-failed-cleanly')) {
+$aggregate=@($loop.Parent.Statements | Where-Object { $_.Extent.StartOffset -gt $loop.Extent.EndOffset -and $_ -is [Management.Automation.Language.IfStatementAst] -and $_.Clauses[0].Item1.Extent.Text -ceq '$extensionFailures.Count' })
+if ($aggregate.Count -ne 1) { throw 'The package must fail after collecting safe setup failures.' }
+$ordered=@($loop.Parent.Statements | Where-Object { $_.Extent.StartOffset -ge $loop.Extent.StartOffset -and $_.Extent.EndOffset -le $aggregate[0].Extent.EndOffset })
+$actualPair=[scriptblock]::Create(($ordered.Extent.Text -join "`n"))
+foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unknown','chrome-delivery-failed-cleanly','formatted-copy-failed')) {
   & {
     param($ActualPair,[string]$Scenario)
     $testDirectory='owned-installed-package';$observed=[Collections.Generic.List[string]]::new();$deliveries=[Collections.Generic.List[string]]::new();$extensionFailures=[Collections.Generic.List[string]]::new()
+    $application='owned-app';$supportRoot='owned-profile';$Configuration='debug';$copy=[pscustomobject]@{called=0;read=0;validated=0}
+    $copyFails=$Scenario -ceq 'formatted-copy-failed'
     function Invoke-PickleExtensionCore([string]$PackageDirectory,[string]$Browser,[string]$EvidencePath) {
       if ($PackageDirectory -cne 'owned-installed-package' -or $EvidencePath -cne (Join-Path $PWD "artifacts/windows-extension-$Browser-native-smoke.json")) { throw 'The actual package setup call lost installed-payload ownership.' }
       $observed.Add($Browser)
@@ -45,11 +48,27 @@ foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unkn
       $deliveries.Add($Browser)
       return !($Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-delivery-failed-cleanly')
     }
+    function Invoke-PickleReadingCore($Application,$DataDirectory,$EvidencePath,$Configuration,[string]$Scenario,[switch]$RequireWindowCapture) {
+      if (($observed -join ',') -cne 'chrome,edge' -or $copy.called -ne 0 -or $Application -cne 'owned-app' -or $DataDirectory -cne 'owned-profile' -or $Configuration -cne 'debug' -or $Scenario -cne 'formatted-copy' -or $RequireWindowCapture -or $EvidencePath -cne (Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-formatted-copy-reading.json')) { throw 'The native Copy workflow ran before independent browsers or with different arguments.' }
+      $copy.called++
+      if ($copyFails) { throw 'owned formatted Copy failed' }
+    }
+    function Read-PickleReadingJson($Path) {
+      if ($copy.called -ne 1 -or $copy.read -ne 0 -or $Path -cne (Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-formatted-copy-reading.json')) { throw 'The actual Copy report was not read after its workflow.' }
+      $copy.read++;return 'owned-copy-report'
+    }
+    function Assert-PicklePackageReadingEvidence($Evidence,$Required,$Configuration,[string]$Scenario) {
+      if ($copy.read -ne 1 -or $copy.validated -ne 0 -or $Evidence -cne 'owned-copy-report' -or $Required -or $Configuration -cne 'debug' -or $Scenario -cne 'formatted-copy') { throw 'The actual Copy report was not required.' }
+      $copy.validated++
+    }
     $failed=$false;try { & $ActualPair } catch { $failed=$true }
     $expected=if ($Scenario -ceq 'chrome-cleanup-unknown') { 'chrome' } else { 'chrome,edge' }
     if (($observed -join ',') -cne $expected -or $failed -ne ($Scenario -cne 'both-pass')) { throw 'The actual package did not collect safe failures, stop on uncertain cleanup, or fail after a rejected setup.' }
     $expectedDelivery=if ($Scenario -ceq 'chrome-cleanup-unknown') { '' } elseif ($Scenario -ceq 'chrome-failed-cleanly') { 'edge' } else { 'chrome,edge' }
     if (($deliveries -join ',') -cne $expectedDelivery) { throw 'Delivery must follow each successful component independently, and stop on unsafe cleanup.' }
+    $expectedCopy=if ($Scenario -ceq 'chrome-cleanup-unknown') { 0 } else { 1 }
+    $expectedReport=if ($copyFails) { 0 } else { $expectedCopy }
+    if ($copy.called -ne $expectedCopy -or $copy.read -ne $expectedReport -or $copy.validated -ne $expectedReport) { throw 'Safe browser failures must allow Copy before aggregate refusal; unsafe cleanup must stop before Copy.' }
   } $actualPair $scenario
 }
 $python=Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -93,6 +112,45 @@ $bad=$recovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.PSObject.Prope
 Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
 $bad=$layout | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member -NotePropertyName arbitrary_window_text -NotePropertyValue 'not-retained'
 Assert-ExtensionRefused { ConvertTo-PickleExtensionLayout $bad }
+# This exception is limited to safe control labels in the independently proved
+# fresh hosted internal page; it never admits reading text, paths or values.
+foreach ($label in @('Menu','Open navigation','Settings and more','Café (2)','More...')) {
+  if (!(Test-PickleEdgeNavigationLabel $label)) { throw 'A safe fixture navigation label was rejected.' }
+}
+foreach ($label in @($null,'',' leading','trailing ','https://example.invalid','example.invalid','www.example.com','a@b.test','C:\owned','edge:extensions',"line`nnext",'a/b','a\b',"a`t b",('a'*81),'例え.テスト')) {
+  if (Test-PickleEdgeNavigationLabel $label) { throw 'Unsafe fixture control text was admitted.' }
+}
+$navigationControl=[pscustomobject][ordered]@{role=50000;label='Menu';enabled=$true;offscreen=$false;bounds_flags=3;invoke_supported=$true;toggle_supported=$false;toggle_state=-1;expand_supported=$true;expand_state=0;ancestor_roles=@(50000,50026,50030);ancestors_truncated=$false}
+$navigation=[pscustomobject][ordered]@{stage='complete';incomplete=$false;proof_verified=$true;nodes=12;controls=1;property_errors=0;truncated=$false;records=@($navigationControl);work_area_width=1024;work_area_height=768;window_dpi=96}
+$navigationClean=ConvertTo-PickleEdgeNavigation $navigation
+if (!$navigationClean.proof_verified -or $navigationClean.records[0].label -cne 'Menu') { throw 'Proved internal-page controls lost their bounded labels.' }
+$prefix=$navigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$prefix.stage='before-document';$prefix.proof_verified=$false;$prefix.incomplete=$true;$prefix.controls=0;$prefix.records=@()
+$null=ConvertTo-PickleEdgeNavigation $prefix
+foreach ($change in @(@('stage','unknown'),@('proof_verified',$false),@('controls',0),@('truncated',$true),@('nodes',1025),@('window_dpi','96'),@('work_area_height',$null))) {
+  $bad=$navigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleEdgeNavigation $bad }
+}
+foreach ($change in @(@('label','private.example'),@('label','C:\owned'),@('role',50020),@('bounds_flags',8),@('toggle_state',0),@('expand_state',4),@('ancestors_truncated',$true))) {
+  $bad=$navigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.records[0].($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleEdgeNavigation $bad }
+}
+$bad=$navigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.records[0].ancestor_roles=@(50000,50026)
+Assert-ExtensionRefused { ConvertTo-PickleEdgeNavigation $bad }
+$bad=$prefix | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.controls=1;$bad.records=@($navigationControl)
+Assert-ExtensionRefused { ConvertTo-PickleEdgeNavigation $bad }
+$bad=$navigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad | Add-Member -NotePropertyName raw_window_text -NotePropertyValue 'not retained'
+Assert-ExtensionRefused { ConvertTo-PickleEdgeNavigation $bad }
+$failedNavigation=$valid | ConvertTo-Json | ConvertFrom-Json;$failedNavigation.browser='edge';$failedNavigation.passed=$false
+$failedNavigation | Add-Member -NotePropertyName stage -NotePropertyValue 'developer-mode'
+$failedNavigation | Add-Member -NotePropertyName failure -NotePropertyValue 'developer-toggle-unavailable'
+$failedNavigation | Add-Member -NotePropertyName edge_navigation_observation -NotePropertyValue $navigation
+$null=ConvertTo-PickleExtensionStageReport $failedNavigation
+foreach ($change in @(@('browser','chrome'),@('passed',$true),@('stage','browser-cleanup'))) {
+  $bad=$failedNavigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+}
+$successNavigation=$valid | ConvertTo-Json | ConvertFrom-Json;$successNavigation | Add-Member -NotePropertyName edge_navigation_observation -NotePropertyValue $navigation
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $successNavigation 'chrome' }
 $detail=$valid | ConvertTo-Json | ConvertFrom-Json;$detail.extension_identity_proof='detail-view';$detail.extension_card_identity_verified=$false;$detail.extension_details_identity_verified=$true
 $detail | Add-Member -NotePropertyName owned_extension_folder_verified -NotePropertyValue $true
 $detail | Add-Member -NotePropertyName detail_identity_stage -NotePropertyValue 'verified'
@@ -369,7 +427,7 @@ try {
   if ([IO.File]::ReadAllText((Join-Path $hostDir 'existing.json')) -cne 'do not replace') { throw 'Foreign native-host data changed.' }
   if ($IsWindows) {
     $exe=Build-PickleExtensionFixture $root
-    foreach ($mode in @('--self-test','--details-self-test','--layout-self-test')) {
+    foreach ($mode in @('--self-test','--details-self-test','--layout-self-test','--edge-navigation-self-test')) {
       $child=Start-PickleReadingChild $exe @($mode)
       try { if (!$child.WaitForExit(10000) -or $child.ExitCode -ne 0) { throw 'Native fixture non-UI predicates failed.' } }
       finally { if (!$child.HasExited) { $child.Kill();$child.WaitForExit(10000) | Out-Null };$child.Dispose() }

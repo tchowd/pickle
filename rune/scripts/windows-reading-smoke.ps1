@@ -104,9 +104,10 @@ function Assert-PickleFollowUpKeyboardEvidence($Driver,$Server,$Restart) {
 }
 function Get-PickleReadingExpectedAnswer($Contract,[string]$Scenario) {
   if ($Scenario -ceq 'follow-up-return-clear') { return Get-PickleReadingFollowAnswer }
+  if ($Scenario -ceq 'formatted-copy') { return "Café answer:`nHard line.`n`n1. **Bold** item`n2. Use ``snake_case```n10) See [docs](https://example.com), keep <b>tags</b> and **unclosed" }
   return $Contract.answer
 }
-function Read-PickleReadingSavedEntry([string]$Path,$Contract,[string]$FixtureExecutable,[DateTimeOffset]$NotBefore,[ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify') {
+function Read-PickleReadingSavedEntry([string]$Path,$Contract,[string]$FixtureExecutable,[DateTimeOffset]$NotBefore,[ValidateSet('simplify','explain-may','follow-up-return-clear','formatted-copy')][string]$Scenario='simplify') {
   $bytes=Read-PickleReadingBytes $Path 32768
   $expected=@('id','recorded_at','app_name','app_id','action','question','passage','answer','quality','chart','reference')
   # JsonDocument preserves string types across PowerShell 7 versions (newer
@@ -154,7 +155,7 @@ function Read-PickleReadingSavedEntry([string]$Path,$Contract,[string]$FixtureEx
   return [pscustomobject]@{Entry=$entry;Bytes=$bytes;Hash=(Get-PickleReadingHash $bytes)}
 }
 
-function Initialize-PickleReadingArchives($Snapshot,$Contract,[string]$FixtureExecutable,[ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify') {
+function Initialize-PickleReadingArchives($Snapshot,$Contract,[string]$FixtureExecutable,[ValidateSet('simplify','explain-may','follow-up-return-clear','formatted-copy')][string]$Scenario='simplify') {
   # Original archives stay only in the private verified backup. The app and
   # native driver may see only empty/synthetic stores throughout both launches.
   $owned=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -428,8 +429,9 @@ function Build-PickleReadingFixture([string]$Directory) {
   return $executable
 }
 
-function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify') {
+function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may','follow-up-return-clear','formatted-copy')][string]$Scenario='simplify') {
   if ($Scenario -cne 'simplify' -and ($RequireWindowCapture -or $Configuration -cne 'debug')) { throw 'Additional reading scenarios require unsigned debug screen-off acceptance.' }
+  if ($Scenario -ceq 'formatted-copy' -and ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted')) { throw 'Native clipboard acceptance requires a fresh hosted account.' }
   if (!$IsWindows) { throw 'Native installed reading acceptance runs only on Windows; no app was launched.' }
   $actualData=Get-PickleReadingDataDirectory
   if (![string]::Equals([IO.Path]::GetFullPath($DataDirectory),[IO.Path]::GetFullPath($actualData),[StringComparison]::OrdinalIgnoreCase)) { throw 'Reading acceptance requires the app actual KnownFolder data directory, not an environment override.' }

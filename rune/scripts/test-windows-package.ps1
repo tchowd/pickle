@@ -4,7 +4,7 @@ param(
   [ValidateSet('debug','release')][string]$Configuration = 'debug',
   [string]$ExpectedVersion
 )
-function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCapture,[string]$Configuration,[ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify') {
+function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCapture,[string]$Configuration,[ValidateSet('simplify','explain-may','follow-up-return-clear','formatted-copy')][string]$Scenario='simplify') {
   if ($Evidence.scenario -cne $Scenario -or $Evidence.driver.scenario -cne $Scenario -or $Evidence.restart_driver.scenario -cne $Scenario -or $Evidence.server.scenario -cne $Scenario) { throw 'The package reading evidence scenario differed.' }
   if ($Scenario -cne 'simplify' -and ($RequireWindowCapture -or $Configuration -cne 'debug')) { throw 'Additional reading gates require a separate screen-off debug workflow.' }
   if (($Evidence.schema -isnot [int] -and $Evidence.schema -isnot [long]) -or $Evidence.schema -ne 1 -or $Evidence.test -cne 'windows-installed-reading-workflow' -or $Evidence.configuration -cne $Configuration) { throw 'The package reading evidence did not match this acceptance run.' }
@@ -38,6 +38,12 @@ function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCaptu
   } else { $restartKeys+='saved_metadata_absence_verified' }
   foreach ($key in $restartKeys) {
     if ($Evidence.restart_driver.$key -isnot [bool] -or !$Evidence.restart_driver.$key) { throw 'The native saved-answer restart driver did not pass completely.' }
+  }
+  if ($Scenario -ceq 'formatted-copy') {
+    if ($Evidence.driver.native_copy_verified -isnot [bool] -or !$Evidence.driver.native_copy_verified -or $Evidence.restart_driver.saved_native_copy_verified -isnot [bool] -or !$Evidence.restart_driver.saved_native_copy_verified) { throw 'The native formatted-answer Copy roundtrips were not verified.' }
+    foreach ($driver in @($Evidence.driver,$Evidence.restart_driver)) {
+      if ($driver.known_fixture_clipboard_cleared -isnot [bool] -or !$driver.known_fixture_clipboard_cleared -or $driver.clipboard_sender_pid_verified -isnot [bool] -or $driver.clipboard_sender_pid_verified) { throw 'The clipboard cleanup or sender-provenance boundary differed.' }
+    }
   }
   foreach ($driver in @($Evidence.driver,$Evidence.restart_driver)) {
     if (($driver.app_exit_code -isnot [int] -and $driver.app_exit_code -isnot [long]) -or $driver.app_exit_code -ne 0) { throw 'The installed reading application did not quit normally.' }
@@ -152,6 +158,11 @@ if (Test-PickleExtensionSetupGate $Configuration $hasIdentity $PSEdition ([Envir
     if (!(Invoke-PickleExtensionCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-native-smoke.json"))) { $extensionFailures.Add($browser) }
     elseif (!(Invoke-PickleExtensionDeliveryCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-delivery-native-smoke.json"))) { $extensionFailures.Add("$browser-delivery") }
   }
+  # Each browser delegate has certified cleanup before returning a safe failure.
+  # Preserve those independent reports before exercising the OS clipboard.
+  $copyEvidence=Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-formatted-copy-reading.json'
+  Invoke-PickleReadingCore $application $supportRoot $copyEvidence $Configuration -Scenario 'formatted-copy'
+  Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $copyEvidence) $false $Configuration -Scenario 'formatted-copy'
   if ($extensionFailures.Count) { throw 'One or more Stable extension setup or article-delivery stages failed; scoped reports were retained.' }
 }
 if ($hasIdentity) {
