@@ -163,7 +163,7 @@ function ConvertTo-PickleExtensionFailureObservation($Observation) {
     $clean[($group+'_records_truncated')]=$truncated
     $clean[($group+'_records')]=@(foreach ($record in $records) {
       $bools=@();$ranges=@{};$extra=@()
-      if ($group -eq 'title') { $bools=@('offscreen','bounds_nonempty','bounds_intersect_window','bounds_clipped');$ranges=@{flags=@(1,31);known_error_flags=@(0,31);automation_id_flags=@(1,64);control_type_id=@(50000,59999)};$extra=@('ancestor_role_ids','ancestor_automation_id_flags') }
+      if ($group -eq 'title') { $bools=@('offscreen','bounds_nonempty','bounds_intersect_window','bounds_clipped');$ranges=@{flags=@(1,31);known_error_flags=@(0,31);automation_id_flags=@(1,512);control_type_id=@(50000,59999)};$extra=@('ancestor_role_ids','ancestor_automation_id_flags') }
       elseif ($group -eq 'developer') { $bools=@('labeled_by_bound','enabled','offscreen','toggle_supported','invoke_supported');$ranges=@{name_flags=@(0,15);help_flags=@(0,15);labeled_by_flags=@(0,15);control_type_id=@(50000,59999);toggle_state=@(-1,2)} }
       else { $bools=@('original_window','owner_is_original','root_is_original','foreground','scan_truncated','scan_unavailable');$ranges=@{class_kind=@(0,2);known_error_count=@(0,128);scan_nodes=@(0,128)} }
       $recordKeys=@($bools)+@($ranges.Keys)+$extra
@@ -179,8 +179,8 @@ function ConvertTo-PickleExtensionFailureObservation($Observation) {
         if (!$roles.Count -or $roles.Count -gt 8 -or $roles[0] -ne $item.control_type_id -or (($item.flags -band 1) -and !($item.flags -band 2))) { throw 'Title ancestry or flags were inconsistent.' }
         foreach ($role in $roles) { if (($role -isnot [int] -and $role -isnot [long]) -or $role -lt 50000 -or $role -gt 59999) { throw 'An ancestor role was invalid.' } };$item.ancestor_role_ids=$roles
         $authorIds=@($record.ancestor_automation_id_flags)
-        if ($authorIds.Count -ne $roles.Count -or $item.automation_id_flags -notin @(1,2,4,8,16,32,64) -or $authorIds[0] -ne $item.automation_id_flags) { throw 'Closed author-ID ancestry was inconsistent.' }
-        foreach ($flags in $authorIds) { if (($flags -isnot [int] -and $flags -isnot [long]) -or $flags -notin @(1,2,4,8,16,32,64)) { throw 'An author-ID classification was invalid.' } };$item.ancestor_automation_id_flags=$authorIds
+        if ($authorIds.Count -ne $roles.Count -or $item.automation_id_flags -notin @(1,2,4,8,16,32,64,128,256,512) -or $authorIds[0] -ne $item.automation_id_flags) { throw 'Closed author-ID ancestry was inconsistent.' }
+        foreach ($flags in $authorIds) { if (($flags -isnot [int] -and $flags -isnot [long]) -or $flags -notin @(1,2,4,8,16,32,64,128,256,512)) { throw 'An author-ID classification was invalid.' } };$item.ancestor_automation_id_flags=$authorIds
         if ((($item.flags -band 16) -ne 0) -ne ($item.known_error_flags -ne 0) -or
             (!$item.bounds_nonempty -and ($item.bounds_intersect_window -or $item.bounds_clipped)) -or
             ($item.known_error_flags -eq 0 -and ($item.bounds_nonempty -or $item.bounds_intersect_window -or $item.bounds_clipped))) { throw 'Known-error bounds or classifications were inconsistent.' }

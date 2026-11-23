@@ -24,22 +24,40 @@ public interface ExtensionCardReader<T> where T:class {
     int Role(T node);string Name(T node);string AutomationId(T node);bool Visible(T node);
 }
 public sealed class ExtensionCardObservation<T> where T:class {
-    public T Card;public string Id;public int TargetCount,IdCount;public bool VersionFound;
+    public T Card,Main,NameNode,IdGroup,VersionNode;public string Id;public int TargetCount,IdCount;public bool VersionFound;
 }
 public static class ExtensionCardMatcher {
     const int Group=50026,Document=50030,Text=50020,Limit=1024;
     public static bool SameObservation<T>(ExtensionCardObservation<T> first,ExtensionCardObservation<T> last,ExtensionCardReader<T> reader) where T:class {
         return first!=null && last!=null && first.TargetCount==1 && last.TargetCount==1 && first.Id!=null && first.Id==last.Id &&
-            first.Card!=null && last.Card!=null && reader.Same(first.Card,last.Card);
+            first.Card!=null && last.Card!=null && reader.Same(first.Card,last.Card) &&
+            first.Main!=null && last.Main!=null && reader.Same(first.Main,last.Main) &&
+            first.NameNode!=null && last.NameNode!=null && reader.Same(first.NameNode,last.NameNode) &&
+            first.IdGroup!=null && last.IdGroup!=null && reader.Same(first.IdGroup,last.IdGroup) &&
+            first.VersionNode!=null && last.VersionNode!=null && reader.Same(first.VersionNode,last.VersionNode);
     }
-    static bool Bound<T>(T node,T document,T card,ExtensionCardReader<T> reader) where T:class {
-        bool sawCard=card==null;
+    static bool GroupId<T>(T node,string id,ExtensionCardReader<T> reader) where T:class {
+        return node!=null && reader.Owned(node) && reader.Role(node)==Group && reader.AutomationId(node)==id;
+    }
+    static bool Bound<T>(T node,T document,T content,T main,ExtensionCardReader<T> reader) where T:class {
+        bool sawContent=content==null,sawMain=content==null,sawOuterCard=false;
         for(int depth=0;node!=null && depth<32;depth++) {
             if(!reader.Owned(node)) return false;
-            if(reader.Same(node,document)) return sawCard;
+            if(reader.Same(node,document)) return sawContent && sawMain;
             if(reader.Role(node)==Document) return false;
-            if(reader.Role(node)==Group && reader.AutomationId(node)=="card") {
-                if(card==null || !reader.Same(node,card)) return false;sawCard=true;
+            if(reader.Role(node)==Group) {
+                string id=reader.AutomationId(node);
+                if(id=="content") {
+                    if(content==null || sawContent || !reader.Same(node,content)) return false;
+                    sawContent=true;var parent=reader.Parent(node);
+                    if(!GroupId(parent,"main",reader) || !reader.Same(parent,main)) return false;
+                } else if(content!=null && id=="main") {
+                    if(!sawContent || sawMain || !reader.Same(node,main)) return false;sawMain=true;
+                } else if(content!=null && id=="card") {
+                    // The source #card can survive ABOVE #main. Never cross
+                    // another item/card boundary inside the selected content.
+                    if(!sawContent || !sawMain || sawOuterCard) return false;sawOuterCard=true;
+                }
             }
             node=reader.Parent(node);
         }
@@ -49,46 +67,97 @@ public static class ExtensionCardMatcher {
         foreach(var child in reader.Children(node)) { if(child==null || visited+queue.Count>=Limit) return false;queue.Enqueue(child); }
         return true;
     }
-    static bool StableLabels<T>(List<KeyValuePair<T,string>> labels,T card,T document,ExtensionCardReader<T> reader) where T:class {
-        foreach(var label in labels) if(!Bound(label.Key,document,card,reader) || reader.Role(label.Key)!=Text || reader.Name(label.Key)!=label.Value) return false;
-        return Bound(card,document,card,reader) && reader.Role(card)==Group && reader.AutomationId(card)=="card" && reader.Visible(card);
+    sealed class ContentFacts<T> where T:class {
+        public T Main,NameNode,IdGroup,VersionNode;public string Id;public int IdCount;public bool Target,VersionFound;
+        public readonly List<KeyValuePair<T,string>> Labels=new List<KeyValuePair<T,string>>();
+        public readonly List<T> IdGroups=new List<T>();
     }
-    static List<KeyValuePair<T,string>> Labels<T>(T card,T document,ExtensionCardReader<T> reader,ref int visited) where T:class {
-        var queue=new Queue<T>();queue.Enqueue(card);var labels=new List<KeyValuePair<T,string>>();
+    static bool StableLabels<T>(ContentFacts<T> facts,T content,T document,ExtensionCardReader<T> reader) where T:class {
+        foreach(var label in facts.Labels) if(!Bound(label.Key,document,content,facts.Main,reader) || reader.Role(label.Key)!=Text || reader.Name(label.Key)!=label.Value) return false;
+        return Bound(content,document,content,facts.Main,reader) && GroupId(content,"content",reader) && reader.Visible(content);
+    }
+    static bool WithinIdGroup<T>(T node,T idGroup,T content,T document,T main,ExtensionCardReader<T> reader) where T:class {
+        if(!Bound(node,document,content,main,reader)) return false;
+        for(int depth=0;node!=null && depth<32;depth++) {
+            if(!reader.Owned(node) || reader.Same(node,content)) return false;
+            if(reader.Same(node,idGroup)) return true;
+            if(reader.Role(node)==Document || GroupId(node,"extension-id",reader)) return false;
+            node=reader.Parent(node);
+        }
+        return false;
+    }
+    static ContentFacts<T> ReadContent<T>(T content,T document,ExtensionCardReader<T> reader,string name,string version,ref int visited) where T:class {
+        var facts=new ContentFacts<T>();facts.Main=reader.Parent(content);
+        if(!GroupId(facts.Main,"main",reader)) return null;
+        var queue=new Queue<T>();queue.Enqueue(content);
         while(queue.Count>0) {
             if(++visited>Limit) return null;
-            var node=queue.Dequeue();if(!Bound(node,document,card,reader)) return null;
+            var node=queue.Dequeue();if(!Bound(node,document,content,facts.Main,reader)) return null;
             if(reader.Role(node)==Text) {
-                string name=reader.Name(node);if(name==null || name.Length>4096) return null;labels.Add(new KeyValuePair<T,string>(node,name));
+                string label=reader.Name(node);if(label==null || label.Length>4096) return null;facts.Labels.Add(new KeyValuePair<T,string>(node,label));
             }
+            if(GroupId(node,"extension-id",reader)) facts.IdGroups.Add(node);
             if(!Enqueue(node,queue,reader,visited)) return null;
         }
-        // Detect reparenting/value changes between enumeration and acceptance.
-        return StableLabels(labels,card,document,reader) ? labels : null;
+        if(!StableLabels(facts,content,document,reader)) return null;
+        var names=new List<KeyValuePair<T,string>>();
+        foreach(var label in facts.Labels) {
+            // A later label's getter may have invalidated an earlier node
+            // since StableLabels visited it. Gate THIS string read afresh.
+            if(!Bound(label.Key,document,content,facts.Main,reader)) return null;
+            if(reader.AutomationId(label.Key)=="name") names.Add(label);
+        }
+        if(names.Count!=1) return facts;
+        facts.NameNode=names[0].Key;facts.Target=names[0].Value==name;
+        if(!facts.Target) return facts;
+        // The tag has name/version siblings. Require their actual accessible
+        // parent to be the SAME object, without assuming #name-and-version is
+        // exposed when an intermediate DOM node was ignored by accessibility.
+        var nameParent=reader.Parent(facts.NameNode);
+        if(nameParent==null || !Bound(nameParent,document,content,facts.Main,reader) || reader.Role(nameParent)!=Group) return facts;
+        var versions=facts.Labels.Where(label=>label.Value==version && reader.Same(reader.Parent(label.Key),nameParent)).ToArray();
+        facts.VersionFound=versions.Length==1;if(facts.VersionFound) facts.VersionNode=versions[0].Key;
+        if(facts.IdGroups.Count!=1) return facts;
+        facts.IdGroup=facts.IdGroups[0];
+        if(!reader.Same(reader.Parent(facts.IdGroup),content)) return facts;
+        var ids=facts.Labels.Where(label=>WithinIdGroup(label.Key,facts.IdGroup,content,document,facts.Main,reader))
+            .Select(label=>BrowserExtensionPredicates.IdFromLabel(label.Value)).Where(id=>id!=null).Distinct().ToArray();
+        facts.IdCount=ids.Length;facts.Id=facts.VersionFound && ids.Length==1 ? ids[0] : null;
+        return facts;
+    }
+    static bool StableFacts<T>(ContentFacts<T> facts,T content,T document,ExtensionCardReader<T> reader,string name,string version) where T:class {
+        if(!StableLabels(facts,content,document,reader) || facts.NameNode==null) return false;
+        if(!Bound(facts.NameNode,document,content,facts.Main,reader) || reader.AutomationId(facts.NameNode)!="name") return false;
+        if(!Bound(facts.NameNode,document,content,facts.Main,reader) || reader.Name(facts.NameNode)!=name) return false;
+        if(facts.Id!=null) {
+            if(!GroupId(facts.IdGroup,"extension-id",reader) || !reader.Same(reader.Parent(facts.IdGroup),content) || facts.VersionNode==null ||
+                !Bound(facts.VersionNode,document,content,facts.Main,reader) || reader.Name(facts.VersionNode)!=version ||
+                !reader.Same(reader.Parent(facts.NameNode),reader.Parent(facts.VersionNode))) return false;
+        }
+        return true;
     }
     public static ExtensionCardObservation<T> Observe<T>(T document,ExtensionCardReader<T> reader,string name,string version) where T:class {
         if(document==null || !reader.Owned(document) || reader.Role(document)!=Document || reader.Name(document)!="Extensions" || !reader.Visible(document)) return null;
-        var result=new ExtensionCardObservation<T>();var queue=new Queue<T>();queue.Enqueue(document);int visited=0;List<KeyValuePair<T,string>> selectedLabels=null;
+        var result=new ExtensionCardObservation<T>();var queue=new Queue<T>();queue.Enqueue(document);int visited=0;ContentFacts<T> selectedFacts=null;
         while(queue.Count>0) {
             if(++visited>Limit) return null;
             var node=queue.Dequeue();if(!reader.Owned(node)) return null;
             // No frame/secondary document can supply a card for this document.
             if(!reader.Same(node,document) && reader.Role(node)==Document) continue;
-            bool card=reader.Role(node)==Group && reader.AutomationId(node)=="card";
-            if(!Bound(node,document,card ? node : null,reader)) return null;
+            bool card=reader.Role(node)==Group && reader.AutomationId(node)=="content";
+            T main=card ? reader.Parent(node) : null;
+            if(!Bound(node,document,card ? node : null,main,reader)) return null;
             if(card) {
-                var labels=Labels(node,document,reader,ref visited);if(labels==null) return null;
-                if(!labels.Any(label=>label.Value==name)) continue;
-                result.TargetCount++;result.Card=node;selectedLabels=labels;
-                result.VersionFound=labels.Any(label=>label.Value==version);
-                var ids=labels.Select(label=>BrowserExtensionPredicates.IdFromLabel(label.Value)).Where(id=>id!=null).Distinct().ToArray();
-                result.IdCount=ids.Length;result.Id=result.VersionFound && ids.Length==1 ? ids[0] : null;
+                var facts=ReadContent(node,document,reader,name,version,ref visited);if(facts==null) return null;
+                if(!facts.Target) continue;
+                result.TargetCount++;result.Card=node;selectedFacts=facts;result.Main=facts.Main;result.NameNode=facts.NameNode;result.IdGroup=facts.IdGroup;result.VersionNode=facts.VersionNode;
+                result.VersionFound=facts.VersionFound;result.IdCount=facts.IdCount;result.Id=facts.Id;
                 continue;
             }
             if(!Enqueue(node,queue,reader,visited)) return null;
         }
         if(result.TargetCount!=1) { result.Id=null;result.Card=null; }
-        else if(!StableLabels(selectedLabels,result.Card,document,reader)) return null;
+        else if(!StableFacts(selectedFacts,result.Card,document,reader,name,version)) return null;
         if(!reader.Owned(document) || reader.Role(document)!=Document || reader.Name(document)!="Extensions" || !reader.Visible(document)) return null;
         return result;
     }
@@ -128,12 +197,13 @@ public static class BrowserExtensionPredicates {
     }
     public static int WindowClassKind(string value) { return value=="Chrome_WidgetWin_1" ? 1 : value=="#32770" ? 2 : 0; }
     // Closed source-backed author-ID observations, never retained ID strings.
-    // Chromium main extensions/item.html.ts: card/name/version/extension-id;
-    // item_list.html.ts: extensions-item id=item.id. Not a Stable157 guarantee.
+    // Chromium157.0.8103.79 item.html.ts and item_list.html.ts author IDs.
+    // Projection into native accessibility remains an observation, not assumed.
     public static int AutomationIdFlags(string value) {
         if(String.IsNullOrEmpty(value)) return 1;
         if(value.Length>4096) return 64;
         if(value=="card") return 2;if(value=="name") return 4;if(value=="version") return 8;if(value=="extension-id") return 16;
+        if(value=="main") return 128;if(value=="content") return 256;if(value=="name-and-version") return 512;
         return ExtensionId(value) ? 32 : 64;
     }
     public static string PolicyState(string policy,int result,uint type,uint bytes,uint value) {
@@ -182,6 +252,7 @@ public static class BrowserExtensionPredicates {
             PolicyState("unreviewed-policy",0,4,4,0)!="unavailable") throw new Exception("closed-policy-scope");
         string[] aids={"","card","name","version","extension-id","abcdefghijklmnopabcdefghijklmnop","private unrelated text"};
         for(int i=0;i<aids.Length;i++) if(AutomationIdFlags(aids[i])!=(1<<i)) throw new Exception("closed-author-id-observations");
+        if(AutomationIdFlags("main")!=128 || AutomationIdFlags("content")!=256 || AutomationIdFlags("name-and-version")!=512) throw new Exception("tagged-inner-author-ids");
         foreach(string other in new[]{"Card","card ","id: abcdefghijklmnopabcdefghijklmnop","qbcdefghijklmnopabcdefghijklmnop",new string('x',4097)})
             if(AutomationIdFlags(other)!=64) throw new Exception("closed-author-id-refusal");
         if(!CaptureSize(1920,1080) || CaptureSize(0,1080) || CaptureSize(4097,1) || CaptureSize(4096,2160) || CaptureSize(Int64.MaxValue,2) ||
@@ -229,44 +300,84 @@ public static class BrowserExtensionPredicates {
         CardTests();
     }
     sealed class CardNode {
-        public int Role;public string Name="",Aid="";public bool Owned=true,Visible=true;public CardNode Parent;public readonly List<CardNode> Children=new List<CardNode>();public Action ReadName;
+        public int Role,NameReads,ForeignNameReads,ForeignAidReads;public string Name="",Aid="";public bool Owned=true,Visible=true;public CardNode Parent;public readonly List<CardNode> Children=new List<CardNode>();public Action ReadName;public Action<int> OnNameRead;
         public CardNode Add(int role,string name,string aid) { var node=new CardNode {Role=role,Name=name,Aid=aid,Parent=this};Children.Add(node);return node; }
     }
     sealed class CardReader : ExtensionCardReader<CardNode> {
         public bool Owned(CardNode node) { return node.Owned; }public bool Same(CardNode left,CardNode right) { return Object.ReferenceEquals(left,right); }
         public CardNode Parent(CardNode node) { return node.Parent; }public IEnumerable<CardNode> Children(CardNode node) { return node.Children; }
-        public int Role(CardNode node) { return node.Role; }public string Name(CardNode node) { var action=node.ReadName;node.ReadName=null;if(action!=null) action();return node.Name; }
-        public string AutomationId(CardNode node) { return node.Aid; }public bool Visible(CardNode node) { return node.Visible; }
+        public int Role(CardNode node) { return node.Role; }public string Name(CardNode node) {
+            node.NameReads++;if(!node.Owned) node.ForeignNameReads++;
+            if(node.OnNameRead!=null) node.OnNameRead(node.NameReads);
+            var action=node.ReadName;node.ReadName=null;if(action!=null) action();return node.Name;
+        }
+        public string AutomationId(CardNode node) { if(!node.Owned) node.ForeignAidReads++;return node.Aid; }public bool Visible(CardNode node) { return node.Visible; }
     }
     static CardNode CardDocument() { return new CardNode {Role=50030,Name="Extensions"}; }
     static CardNode FullCard(CardNode document,string id) {
-        var card=document.Add(50026,"","card");card.Add(50020,"Pickle — page and video context","");card.Add(50020,"0.1.0","");card.Add(50020,"ID: "+id,"");return card;
+        var main=document.Add(50026,"","main");var content=main.Add(50026,"","content");
+        var names=content.Add(50026,"","name-and-version");names.Add(50020,"Pickle — page and video context","name");names.Add(50020,"0.1.0","");
+        content.Add(50026,"","extension-id").Add(50020,"ID: "+id,"");return content;
     }
+    static CardNode CardName(CardNode content) { return content.Children[0].Children[0]; }
+    static CardNode CardVersion(CardNode content) { return content.Children[0].Children[1]; }
+    static CardNode CardIdLabel(CardNode content) { return content.Children[1].Children[0]; }
+    static void MoveNode(CardNode node,CardNode parent) { node.Parent.Children.Remove(node);node.Parent=parent;parent.Children.Add(node); }
     static ExtensionCardObservation<CardNode> CardObserve(CardNode document) { return ExtensionCardMatcher.Observe(document,new CardReader(),"Pickle — page and video context","0.1.0"); }
     static void CardRefused(CardNode document,string category) { var result=CardObserve(document);if(result!=null && result.Id!=null) throw new Exception(category); }
     static void CardTests() {
         const string id="abcdefghijklmnopabcdefghijklmnop";var document=CardDocument();var card=FullCard(document,id);
-        // Name is deliberately empty: the actual Chromium #card Group is not a
-        // named container. Nested repeated title text is not a second card.
-        card.Children[0].Add(50020,"Pickle — page and video context","");
+        // Real observations contain #name plus its repeated static-text child.
+        // No named container or unobserved #card projection is required.
+        CardName(card).Add(50020,"Pickle — page and video context","");
         var accepted=CardObserve(document);if(accepted==null || accepted.Id!=id || accepted.TargetCount!=1 || !Object.ReferenceEquals(accepted.Card,card)) throw new Exception("card-anchor-positive");
         if(!ExtensionCardMatcher.SameObservation(accepted,CardObserve(document),new CardReader())) throw new Exception("card-stable-two-observations");
-        card.Children[2].Name=new string('a',32);
+        CardIdLabel(card).Name=new string('a',32);
         if(ExtensionCardMatcher.SameObservation(accepted,CardObserve(document),new CardReader()) ||
             ExtensionCardMatcher.SameObservation(accepted,CardObserve(FullDocument(id)),new CardReader())) throw new Exception("card-changed-id-or-identity");
-        foreach(int missing in new[]{0,1,2}) { document=CardDocument();card=FullCard(document,id);card.Children.RemoveAt(missing);CardRefused(document,"card-missing-fact"); }
-        document=CardDocument();card=FullCard(document,id);card.Aid="card ";CardRefused(document,"card-exact-aid");
+        foreach(int missing in new[]{0,1,2}) { document=CardDocument();card=FullCard(document,id);var label=missing==0 ? CardName(card) : missing==1 ? CardVersion(card) : CardIdLabel(card);label.Parent.Children.Remove(label);CardRefused(document,"card-missing-fact"); }
+        document=CardDocument();card=FullCard(document,id);card.Aid="content ";CardRefused(document,"card-exact-aid");
         document=CardDocument();card=FullCard(document,id);card.Aid="";card.Name="Pickle — page and video context";CardRefused(document,"card-arbitrary-common-ancestor");
-        document=CardDocument();card=FullCard(document,id);card.Children.RemoveAt(2);var other=FullCard(document,new string('a',32));other.Children[0].Name="Other extension";CardRefused(document,"card-cross-id");
-        document=CardDocument();card=FullCard(document,id);card.Children.RemoveAt(1);other=FullCard(document,new string('a',32));other.Children[0].Name="Other extension";CardRefused(document,"card-cross-version");
-        document=CardDocument();card=FullCard(document,id);card.Children.RemoveAt(0);document.Add(50000,"Pickle — page and video context","");CardRefused(document,"card-toolbar-title");
+        document=CardDocument();card=FullCard(document,id);card.Parent.Aid="";CardRefused(document,"content-wrong-main-parent");
+        document=CardDocument();card=FullCard(document,id);CardName(card).Aid="";CardRefused(document,"card-name-anchor-required");
+        document=CardDocument();card=FullCard(document,id);card.Children[1].Aid="";CardRefused(document,"card-id-group-required");
+        document=CardDocument();card=FullCard(document,id);card.Children[0].Add(50020,"Pickle — page and video context","name");CardRefused(document,"card-duplicate-name-anchors");
+        document=CardDocument();card=FullCard(document,id);MoveNode(card.Children[1],card.Add(50026,"","wrapper"));CardRefused(document,"card-id-group-not-direct-child");
+        document=CardDocument();card=FullCard(document,id);card.Children[1].Children.Clear();var other=FullCard(document,new string('a',32));CardName(other).Name="Other extension";CardRefused(document,"card-cross-id");
+        document=CardDocument();card=FullCard(document,id);CardVersion(card).Parent.Children.Remove(CardVersion(card));other=FullCard(document,new string('a',32));CardName(other).Name="Other extension";CardRefused(document,"card-cross-version");
+        document=CardDocument();card=FullCard(document,id);CardName(card).Parent.Children.Remove(CardName(card));document.Add(50000,"Pickle — page and video context","name");CardRefused(document,"card-toolbar-title");
         document=CardDocument();FullCard(document,id);FullCard(document,id);CardRefused(document,"card-duplicate-targets");
-        document=CardDocument();card=FullCard(document,id);card.Add(50020,new string('a',32),"");CardRefused(document,"card-duplicate-ids");
-        document=CardDocument();card=FullCard(document,id);var moving=card.Children[2];moving.ReadName=()=>moving.Parent=other;CardRefused(document,"card-reparented-label");
-        document=CardDocument();card=FullCard(document,id);card.Children[2].Owned=false;CardRefused(document,"card-foreign-label-pid");
+        document=CardDocument();card=FullCard(document,id);card.Children[1].Add(50020,new string('a',32),"");CardRefused(document,"card-duplicate-ids");
+        document=CardDocument();card=FullCard(document,id);card.Add(50026,"","extension-id");CardRefused(document,"card-duplicate-id-groups");
+        document=CardDocument();card=FullCard(document,id);var moving=CardIdLabel(card);moving.ReadName=()=>moving.Parent=other;CardRefused(document,"card-reparented-label");
+        document=CardDocument();card=FullCard(document,id);var changingGroup=card.Children[1];CardIdLabel(card).ReadName=()=>changingGroup.Aid="";CardRefused(document,"card-id-marker-changed-after-read");
+        document=CardDocument();card=FullCard(document,id);var movingVersion=CardVersion(card);var changedParent=card;movingVersion.ReadName=()=>MoveNode(movingVersion,changedParent);CardRefused(document,"card-version-parent-changed");
+        foreach(int invalidateAt in new[]{2,3}) {
+            document=CardDocument();card=FullCard(document,id);var protectedName=CardName(card);var lastLabel=CardIdLabel(card);
+            lastLabel.OnNameRead=count=> { if(count==invalidateAt) protectedName.Owned=false; };
+            CardRefused(document,"card-earlier-name-invalidated-by-later-getter");
+            if(lastLabel.NameReads<invalidateAt || protectedName.Owned || protectedName.ForeignAidReads!=0 || protectedName.ForeignNameReads!=0) throw new Exception("card-no-foreign-name-or-aid-read");
+        }
+        document=CardDocument();card=FullCard(document,id);var protectedVersion=CardVersion(card);var versionInvalidator=CardIdLabel(card);
+        versionInvalidator.OnNameRead=count=> { if(count==3) protectedVersion.Owned=false; };
+        CardRefused(document,"card-version-invalidated-by-later-getter");
+        if(versionInvalidator.NameReads<3 || protectedVersion.Owned || protectedVersion.ForeignNameReads!=0 || protectedVersion.ForeignAidReads!=0) throw new Exception("card-no-foreign-version-string-read");
+        document=CardDocument();card=FullCard(document,id);CardIdLabel(card).Owned=false;CardRefused(document,"card-foreign-label-pid");
         document=CardDocument();card=FullCard(document,id);document.Owned=false;CardRefused(document,"card-foreign-document-root");
         document=CardDocument();card=FullCard(document,id);card.Parent=CardDocument();CardRefused(document,"card-reparented-root");
         document=CardDocument();var frame=document.Add(50030,"Extensions","");FullCard(frame,id);CardRefused(document,"card-secondary-document");
+        document=CardDocument();var manager=document.Add(50026,"","main").Add(50026,"","content");FullCard(manager,id);CardRefused(document,"manager-wide-content-no-escalation");
+        foreach(string boundary in new[]{"card","main","content"}) { document=CardDocument();card=FullCard(document,id);MoveNode(CardIdLabel(card),card.Children[1].Add(50026,"",boundary));CardRefused(document,"card-nested-item-boundary"); }
+        document=CardDocument();card=FullCard(document,id);var wrongVersion=CardVersion(card);MoveNode(wrongVersion,card);CardRefused(document,"version-outside-name-parent");
+        document=CardDocument();card=FullCard(document,id);var labelOutside=CardIdLabel(card);card.Children[1].Children.Clear();card.Add(50020,labelOutside.Name,"");CardRefused(document,"id-outside-id-group");
+        document=CardDocument();card=FullCard(document,id);card.Children[0].Aid="";
+        if(CardObserve(document).Id!=id) throw new Exception("name-version-parent-aid-not-assumed");
+        document=CardDocument();card=FullCard(document,id);var nameNode=CardName(card);var versionNode=CardVersion(card);var empty=card.Children[0];MoveNode(nameNode,card);MoveNode(versionNode,card);card.Children.Remove(empty);
+        if(CardObserve(document).Id!=id) throw new Exception("ignored-name-version-wrapper");
+        document=CardDocument();var outerCard=document.Add(50026,"","card");FullCard(outerCard,id);
+        if(CardObserve(document).Id!=id) throw new Exception("source-outer-card-permitted");
+        document=CardDocument();card=FullCard(document,id);accepted=CardObserve(document);MoveNode(card,document.Add(50026,"","main"));
+        if(ExtensionCardMatcher.SameObservation(accepted,CardObserve(document),new CardReader())) throw new Exception("replaced-main-identity");
         document=CardDocument();FullCard(document,id);for(int i=0;i<1024;i++) document.Add(50026,"","");CardRefused(document,"card-node-cap");
     }
     static CardNode FullDocument(string id) { var document=CardDocument();FullCard(document,id);return document; }
@@ -536,11 +647,12 @@ public static class BrowserExtensionFixtureProgram {
         public string AutomationId(AutomationElement node) { Check();string value=node.Current.AutomationId;if(value==null || value.Length>4096) Fail("uia-label-bound");return value; }
         public bool Visible(AutomationElement node) { Check();return !node.Current.IsOffscreen; }
     }
-    // Source basis (Chromium default branch, not an exact Stable157 source tag):
-    // extensions/item.html.ts places name/version/extension-id INSIDE #card;
-    // ax_platform_node_win.cc exposes author unique ID as UIA AutomationId.
-    // Only exact Group AutomationId "card" is admitted; runtime absence stays
-    // unavailable. There is no Group.Name/LCA/manager-wide label fallback.
+    // Source basis: Chromium157.0.8103.79, chrome/browser/resources/extensions/
+    // item.html.ts (#main > #content; name/version sibling branch and direct
+    // #extension-id child). item_list.html.ts instantiates one item per ID.
+    // UIA projection can ignore DOM nodes: only actually observed exact Group
+    // IDs main/content and Text #name are admitted. There is no Group.Name,
+    // LCA, manager-wide label fallback or assumption that #card must survive.
     static void NavigateExtensions(IntPtr window,string kind) {
         if(!browser.OwnsWindow(window) || !Native.IsWindowVisible(window)) Fail("navigation-window-not-owned");
         Native.SetForegroundWindow(window);

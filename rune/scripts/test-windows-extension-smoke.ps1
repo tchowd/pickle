@@ -167,11 +167,11 @@ foreach ($change in @(@('flags',0),@('known_error_flags',32),@('known_error_flag
   $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.title_records[0].($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
 }
-foreach ($change in @(@('automation_id_flags',0),@('automation_id_flags',3),@('automation_id_flags',65),@('automation_id_flags',2),@('automation_id_flags','4'),@('ancestor_automation_id_flags',@(4,2)),@('ancestor_automation_id_flags',@(4,3,1)),@('ancestor_automation_id_flags',@(4,'card',1)),@('ancestor_automation_id_flags',@(4,2,1.0)))) {
+foreach ($change in @(@('automation_id_flags',0),@('automation_id_flags',3),@('automation_id_flags',65),@('automation_id_flags',129),@('automation_id_flags',513),@('automation_id_flags',2),@('automation_id_flags','4'),@('ancestor_automation_id_flags',@(4,2)),@('ancestor_automation_id_flags',@(4,3,1)),@('ancestor_automation_id_flags',@(4,'card',1)),@('ancestor_automation_id_flags',@(4,2,1.0)))) {
   $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.title_records[0].($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
 }
-foreach ($flags in @(1,2,4,8,16,32,64)) {
+foreach ($flags in @(1,2,4,8,16,32,64,128,256,512)) {
   $mapped=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$mapped.title_records[0].automation_id_flags=$flags;$mapped.title_records[0].ancestor_automation_id_flags[0]=$flags
   $mappedClean=ConvertTo-PickleExtensionFailureObservation $mapped
   if ($mappedClean.title_records[0].automation_id_flags -ne $flags) { throw 'A closed author-ID category was lost.' }
