@@ -154,6 +154,12 @@ public sealed class DocumentFixtureForm : Form {
         pane.PidOverride=pid;
         pane.HwndOverride=new IntPtr(unchecked((long)handle));
         MainDocument=Document("fixture-document",true,Expected);
+        if (Mode=="native-embedded-anchor") {
+            // The actual WS_CHILD helper is already exposed by the native
+            // host provider. A second synthetic Pane alias would duplicate
+            // that same helper document and correctly fail uniqueness.
+            FocusedNode=Root; return;
+        }
         if (Mode=="native-outside-anchor") {
             pane.Add(Document("outside-anchor-decoy",true,Expected));
             Root.Add(pane); Root.Add(MainDocument);
