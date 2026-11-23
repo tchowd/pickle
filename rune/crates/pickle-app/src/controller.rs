@@ -27,6 +27,10 @@ mod term_matching_tests;
 #[path = "recorded_intent_tests.rs"]
 mod recorded_intent_tests;
 
+#[cfg(test)]
+#[path = "recorded_privacy_tests.rs"]
+mod recorded_privacy_tests;
+
 #[path = "library_controller.rs"]
 pub(crate) mod library_controller;
 
