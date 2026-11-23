@@ -30,6 +30,8 @@ pub const SCENES: &[Scene] = &[
     ("history-damaged", damaged_history),
     ("saved-quality", saved_quality),
     ("saved-quality-detail", saved_quality_detail),
+    ("saved-metadata", saved_metadata),
+    ("saved-metadata-detail", saved_metadata_detail),
 ];
 
 /// Normalize common flag spellings before Rune parses value pairs. Classify
@@ -243,6 +245,40 @@ fn saved_quality_detail(state: &mut AppState) {
     state.library_selected = Some(uuid::Uuid::from_u128(5).to_string());
 }
 
+const SAVED_REQUEST: &str = "How do the two batches compare?";
+const SAVED_REFERENCE_URL: &str = "https://example.com/study?fixture=saved";
+const SAVED_REFERENCE_TITLE: &str = "Controlled Café study reference";
+fn saved_metadata(state: &mut AppState) {
+    bar_chart(state);
+    state.route = Route::Library(true);
+    state.bookmarks.push(crate::storage::Entry {
+        id: uuid::Uuid::from_u128(6).to_string(),
+        recorded_at: "2026-01-01T00:00:00Z".into(),
+        app_name: "Fixed UI fixture".into(),
+        app_id: "fixture".into(),
+        action: "Visualize".into(),
+        question: Some(SAVED_REQUEST.into()),
+        passage: BAR_SOURCE.into(),
+        answer: state
+            .result
+            .as_ref()
+            .expect("validated bar fixture")
+            .text
+            .clone(),
+        quality: QualityStatus::ChartValidated.visible_label(),
+        chart: Some(ChartKind::Bar.as_str().into()),
+        reference: Some(crate::storage::EntryReference {
+            url: SAVED_REFERENCE_URL.into(),
+            title: SAVED_REFERENCE_TITLE.into(),
+            kind: "article".into(),
+        }),
+    });
+}
+fn saved_metadata_detail(state: &mut AppState) {
+    saved_metadata(state);
+    state.library_selected = Some(uuid::Uuid::from_u128(6).to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +341,20 @@ mod tests {
                     QualityStatus::NotChecked(SAVED_QUALITY_REASON.into()).visible_label()
                 );
                 assert!(entry.chart.is_none() && entry.reference.is_none());
+            } else if matches!(*name, "saved-metadata" | "saved-metadata-detail") {
+                assert_eq!(state.bookmarks.len(), 1);
+                let entry = &state.bookmarks[0];
+                assert_eq!(entry.id, uuid::Uuid::from_u128(6).to_string());
+                assert_eq!(entry.app_id, "fixture");
+                assert_eq!(entry.recorded_at, "2026-01-01T00:00:00Z");
+                assert_eq!(entry.passage, BAR_SOURCE);
+                assert_eq!(entry.answer, state.result.as_ref().unwrap().text);
+                assert_eq!(entry.chart.as_deref(), Some("bar_chart"));
+                assert_eq!(entry.question.as_deref(), Some(SAVED_REQUEST));
+                let reference = entry.reference.as_ref().unwrap();
+                assert_eq!(reference.url, SAVED_REFERENCE_URL);
+                assert_eq!(reference.title, SAVED_REFERENCE_TITLE);
+                assert_eq!(reference.kind, "article");
             } else {
                 assert!(state.bookmarks.is_empty(), "{name}");
             }

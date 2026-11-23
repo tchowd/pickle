@@ -224,10 +224,26 @@ impl Entry {
         Ok(())
     }
     pub fn matches(&self, query: &str) -> bool {
-        let q = query.to_lowercase();
-        [&self.passage, &self.answer, &self.app_name]
-            .iter()
-            .any(|s| s.to_lowercase().contains(&q))
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return true;
+        }
+        [
+            self.passage.as_str(),
+            self.answer.as_str(),
+            self.app_name.as_str(),
+            self.question.as_deref().unwrap_or_default(),
+            self.reference
+                .as_ref()
+                .map(|reference| reference.title.as_str())
+                .unwrap_or_default(),
+            self.reference
+                .as_ref()
+                .map(|reference| reference.url.as_str())
+                .unwrap_or_default(),
+        ]
+        .iter()
+        .any(|text| text.to_lowercase().contains(&q))
     }
 }
 
@@ -426,6 +442,83 @@ mod tests {
         assert!(repo.history().unwrap()[0].matches("answer 1"));
         repo.remove(false, "1").unwrap();
         assert!(repo.history().unwrap().is_empty());
+    }
+    #[test]
+    fn saved_search_reopens_both_stores_and_matches_full_questions_and_pointers() {
+        let directory = tempfile::tempdir().unwrap();
+        let reference = pickle_core::WebReference {
+            url: format!(
+                "https://example.com/video?{}pointer-end",
+                "source=owned&".repeat(250)
+            ),
+            title: format!("{}TITLE-END-Éléphant", "t".repeat(850)),
+            kind: "video captions".into(),
+            text: "REFERENCE_BODY_MUST_NOT_BE_STORED_OR_SEARCHED".into(),
+            timestamp: Some(86.25),
+        };
+        reference.validate().unwrap();
+        for bookmark in [false, true] {
+            let mut with_pointer = entry(1);
+            with_pointer.passage = format!("{}PASSAGE-END-東京", "p".repeat(10_000));
+            with_pointer.answer = format!("{}ANSWER-END-Résumé", "a".repeat(10_000));
+            with_pointer.app_name = "Éditeur Application".into();
+            with_pointer.question = Some(format!("{}QUESTION-END-Café", "q".repeat(1800)));
+            with_pointer.reference = Some(EntryReference {
+                url: reference.url.clone(),
+                title: reference.title.clone(),
+                kind: reference.kind.clone(),
+            });
+            let without_pointer = entry(2);
+            let repository = Repository::new(directory.path().into()).unwrap();
+            repository.append(bookmark, with_pointer.clone()).unwrap();
+            repository
+                .append(bookmark, without_pointer.clone())
+                .unwrap();
+            drop(repository);
+
+            let path = directory.path().join(if bookmark {
+                "bookmarks.json"
+            } else {
+                "history.json"
+            });
+            let before_search = fs::read(&path).unwrap();
+            let encoded = String::from_utf8(before_search.clone()).unwrap();
+            assert!(!encoded.contains(&reference.text));
+            assert!(!encoded.contains("\"timestamp\""));
+            let repository = Repository::new(directory.path().into()).unwrap();
+            let reopened = if bookmark {
+                repository.bookmarks().unwrap()
+            } else {
+                repository.history().unwrap()
+            };
+            let saved = reopened.iter().find(|entry| entry.id == "1").unwrap();
+            assert_eq!(saved, &with_pointer);
+            for query in [
+                "passage-end-東京",
+                "answer-end-RÉSUMÉ",
+                "  ÉDITEUR APPLICATION\n",
+                "\tquestion-end-CAFÉ \u{2003}",
+                "title-end-ÉLÉPHANT",
+                "  EXAMPLE.COM/VIDEO? ",
+                "POINTER-END",
+            ] {
+                assert!(
+                    saved.matches(query),
+                    "Search missed full saved field: {query}"
+                );
+            }
+            for query in ["", " \t\n\u{2003}"] {
+                assert!(reopened.iter().all(|entry| entry.matches(query)));
+            }
+            assert!(reopened.iter().all(|entry| !entry.matches(&reference.text)));
+            assert!(!saved.matches("video captions"));
+            let absent = reopened.iter().find(|entry| entry.id == "2").unwrap();
+            assert_eq!(absent, &without_pointer);
+            assert!(absent.question.is_none() && absent.reference.is_none());
+            assert!(!absent.matches("QUESTION-END"));
+            assert!(!absent.matches("POINTER-END"));
+            assert_eq!(fs::read(&path).unwrap(), before_search);
+        }
     }
     #[test]
     fn corruption_and_unknown_versions_block_overwrites() {

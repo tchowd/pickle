@@ -1,4 +1,4 @@
-use crate::storage::{Entry, Repository, Settings};
+use crate::storage::{Entry, EntryReference, Repository, Settings};
 use pickle_core::*;
 use pickle_providers::{
     CloudflareProvider, JevClient, LocalAIConfiguration, OllamaProvider, SampleProvider,
@@ -13,6 +13,18 @@ use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 #[path = "context_lifecycle_tests.rs"]
 mod context_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "answer_reference_tests.rs"]
+mod answer_reference_tests;
+
+/// Pointer metadata belongs to accepted answers, not to mutable source context.
+/// Explicit Save exposes only the base answer or the latest follow-up.
+#[derive(Default)]
+pub struct AnswerReferences {
+    base: Option<EntryReference>,
+    follow_up: Option<EntryReference>,
+}
 
 pub const SAMPLE: &str = "The treatment may reduce symptoms in some patients, but the evidence remains limited. Larger studies are needed before the findings can be applied more broadly.";
 pub const SAMPLE_ANSWER: &str = "The treatment **might help some people**, but there is not enough evidence yet.\n\nLarger studies are needed to find out how well it works and who could benefit.\n\nThis is a fixed demonstration. Your passage stays on this device.";
@@ -134,6 +146,7 @@ pub struct AppState {
     pub snapshot: Option<SelectionSnapshot>,
     pub result: Option<ReadingResult>,
     pub conversation: Vec<ConversationTurn>,
+    pub answer_references: AnswerReferences,
     pub draft: String,
     pub demo: bool,
     pub paused: bool,
@@ -198,6 +211,7 @@ impl Default for AppState {
             snapshot: None,
             result: None,
             conversation: vec![],
+            answer_references: AnswerReferences::default(),
             draft: String::new(),
             demo: false,
             paused: false,
@@ -392,6 +406,7 @@ impl AppState {
         self.snapshot = None;
         self.result = None;
         self.conversation.clear();
+        self.answer_references = AnswerReferences::default();
         self.source.clear();
         self.context.clear();
         self.question.clear();
@@ -481,6 +496,7 @@ impl AppState {
         self.demo = false;
         self.result = None;
         self.conversation.clear();
+        self.answer_references = AnswerReferences::default();
         self.snapshot = Some(SelectionSnapshot::new(
             self.source.text.clone(),
             "Pasted passage",
@@ -578,6 +594,7 @@ impl AppState {
         self.cancel_request();
         self.stop_reader_follow();
         self.conversation.clear();
+        self.answer_references.follow_up = None;
         self.last = self.result.as_ref().map(|result| Pending {
             chart: result.chart.as_ref().map(ValidatedChart::kind),
             ..Pending::action(result.action)
@@ -735,6 +752,7 @@ impl AppState {
                     self.sample_result();
                 } else {
                     self.result = Some(Self::demonstration_result());
+                    self.answer_references.base = None;
                     self.activity = Activity::Idle;
                 }
             } else {
@@ -782,7 +800,7 @@ impl AppState {
                     Ok(PipelineOutcome::Result(result)) => {
                         if should_record_result(&result, record, s.settings.history_enabled) {
                             let mut entry = make_entry(&input_for_record.snapshot, &result, &pending);
-                            entry.reference = input_for_record.reference.as_ref().map(|r| crate::storage::EntryReference { url: r.url.clone(), title: r.title.clone(), kind: r.kind.clone() });
+                            entry.reference = reference_pointer(input_for_record.reference.as_ref());
                             if let Some(repo) = worker_services.repository.clone() {
                                 let h = s.handle.clone();
                                 worker_services.runtime.spawn_blocking(move || {
@@ -791,7 +809,7 @@ impl AppState {
                                 });
                             }
                         }
-                        s.complete_reading_result(id, &pending, result);
+                        s.complete_reading_result_with_reference(id, &pending, result, reference_pointer(input_for_record.reference.as_ref()));
                     }
                     Ok(PipelineOutcome::NeedsContext(flags)) => s.activity = Activity::NeedsContext(pending, flags),
                     Ok(PipelineOutcome::ChooseChart) => s.activity = Activity::ChooseChart(pending),
@@ -805,11 +823,21 @@ impl AppState {
         self.revision == id
             && matches!(self.activity, Activity::Running { id: current, .. } if current == id)
     }
+    #[cfg(test)]
     pub(crate) fn complete_reading_result(
         &mut self,
         id: u64,
         pending: &Pending,
         result: ReadingResult,
+    ) -> bool {
+        self.complete_reading_result_with_reference(id, pending, result, None)
+    }
+    fn complete_reading_result_with_reference(
+        &mut self,
+        id: u64,
+        pending: &Pending,
+        result: ReadingResult,
+        reference: Option<EntryReference>,
     ) -> bool {
         if !self.is_current(id) {
             return false;
@@ -831,9 +859,18 @@ impl AppState {
             {
                 self.conversation.remove(0);
             }
+            self.answer_references.follow_up = if self.conversation.is_empty() {
+                None
+            } else {
+                reference
+            };
         } else {
             self.result = Some(result);
             self.conversation.clear();
+            self.answer_references = AnswerReferences {
+                base: reference,
+                follow_up: None,
+            };
         }
         self.draft.clear();
         self.activity = Activity::Idle;
@@ -1232,7 +1269,7 @@ impl AppState {
     }
     pub(crate) fn current_answer_entry(&self) -> Option<Entry> {
         let snapshot = self.snapshot.as_ref()?;
-        let mut entry = if let Some(turn) = self.conversation.last() {
+        let entry = if let Some(turn) = self.conversation.last() {
             Entry {
                 id: uuid::Uuid::new_v4().to_string(),
                 recorded_at: chrono::Utc::now().to_rfc3339(),
@@ -1244,21 +1281,14 @@ impl AppState {
                 answer: turn.answer.clone(),
                 quality: turn.quality.visible_label(),
                 chart: None,
-                reference: None,
+                reference: self.answer_references.follow_up.clone(),
             }
         } else {
             let result = self.result.as_ref()?;
-            make_entry(snapshot, result, &Pending::action(result.action))
+            let mut entry = make_entry(snapshot, result, &Pending::action(result.action));
+            entry.reference = self.answer_references.base.clone();
+            entry
         };
-        entry.reference =
-            self.context_state
-                .reference
-                .as_ref()
-                .map(|reference| crate::storage::EntryReference {
-                    url: reference.url.clone(),
-                    title: reference.title.clone(),
-                    kind: reference.kind.clone(),
-                });
         Some(entry)
     }
     pub fn remove_entry(&mut self, bookmark: bool, id: String) {
@@ -1360,6 +1390,13 @@ pub(crate) fn should_record_result(
     record_at_start
         && enabled_now
         && (result.action != ReadingAction::Chart || result.chart.is_some())
+}
+fn reference_pointer(reference: Option<&WebReference>) -> Option<EntryReference> {
+    reference.map(|reference| EntryReference {
+        url: reference.url.clone(),
+        title: reference.title.clone(),
+        kind: reference.kind.clone(),
+    })
 }
 fn make_entry(snapshot: &SelectionSnapshot, result: &ReadingResult, pending: &Pending) -> Entry {
     Entry {

@@ -10,6 +10,9 @@ use rune_kit::{Markdown, MarkdownStyle};
 #[path = "reader_scroll_tests.rs"]
 mod reader_scroll_tests;
 #[cfg(test)]
+#[path = "saved_metadata_tests.rs"]
+mod saved_metadata_tests;
+#[cfg(test)]
 #[path = "saved_quality_tests.rs"]
 mod saved_quality_tests;
 
@@ -1013,6 +1016,97 @@ fn saved_quality(entry: &crate::storage::Entry) -> Option<El> {
     })
 }
 
+fn saved_metadata_text(key: String, value: &str) -> El {
+    note(value.to_owned())
+        .key(key)
+        .w_full()
+        .wrap_anywhere()
+        .selectable(true)
+}
+
+fn saved_metadata(entry: &crate::storage::Entry) -> Vec<El> {
+    let mut fields = Vec::new();
+    if let Some(kind) = match entry.chart.as_deref() {
+        Some("bar_chart") => Some("Bar chart · saved text alternative"),
+        Some("flow_diagram") => Some("Flow diagram · saved text alternative"),
+        _ => None,
+    } {
+        fields.push(saved_metadata_text(
+            format!("entry-chart-kind-{}", entry.id),
+            kind,
+        ));
+    }
+    if let Some(question) = &entry.question {
+        fields.push(
+            col()
+                .key(format!("entry-request-{}", entry.id))
+                .w_full()
+                .gap(4.0)
+                .child(note("Question or request"))
+                .child(saved_metadata_text(
+                    format!("entry-question-{}", entry.id),
+                    question,
+                )),
+        );
+    }
+    if let Some(reference) = &entry.reference {
+        fields.push(
+            col()
+                .key(format!("entry-reference-{}", entry.id))
+                .w_full()
+                .gap(4.0)
+                .child(note("Reference"))
+                .child(saved_metadata_text(
+                    format!("entry-reference-kind-{}", entry.id),
+                    &reference.kind,
+                ))
+                .child(saved_metadata_text(
+                    format!("entry-reference-title-{}", entry.id),
+                    &reference.title,
+                ))
+                .child(saved_metadata_text(
+                    format!("entry-reference-url-{}", entry.id),
+                    &reference.url,
+                )),
+        );
+    }
+    fields
+}
+
+fn has_saved_chart_alternative(entry: &crate::storage::Entry) -> bool {
+    matches!(entry.chart.as_deref(), Some("bar_chart" | "flow_diagram"))
+}
+
+fn saved_answer_plain_text(entry: &crate::storage::Entry) -> String {
+    if has_saved_chart_alternative(entry) {
+        entry.answer.clone()
+    } else {
+        pickle_core::answer_plain_text(&entry.answer)
+    }
+}
+
+fn saved_answer(entry: &crate::storage::Entry, size: f32, preview: bool) -> El {
+    let value = if preview {
+        entry.answer.chars().take(500).collect::<String>()
+    } else {
+        entry.answer.clone()
+    };
+    if has_saved_chart_alternative(entry) {
+        // Validated chart alternatives contain literal source quotes and rows,
+        // not Markdown. Preserve their line breaks without recreating a graph.
+        text(value)
+            .key("answer")
+            .font(TextStyle::new(size, 400.0).lh(size * 1.55))
+            .color(INK)
+            .wrap_anywhere()
+            .w_full()
+            .shrink()
+            .selectable(true)
+    } else {
+        answer(&value, size, false)
+    }
+}
+
 fn library(s: &AppState, bookmark: bool) -> El {
     let entries = if bookmark { &s.bookmarks } else { &s.entries };
     let mut content = col()
@@ -1063,14 +1157,15 @@ fn library(s: &AppState, bookmark: bool) -> El {
         .as_ref()
         .and_then(|id| entries.iter().find(|entry| &entry.id == id))
     {
-        let copied = pickle_core::answer_plain_text(&entry.answer);
+        let copied = saved_answer_plain_text(entry);
         content = content
             .child(action(s, "entry-back", "Back to results", false, |s, _| {
                 s.library_selected = None
             }))
             .child(note(format!("{} · {}", entry.app_name, entry.recorded_at)))
+            .children(saved_metadata(entry))
             .children(saved_quality(entry))
-            .child(answer(&entry.answer, s.settings.text_size, false))
+            .child(saved_answer(entry, s.settings.text_size, false))
             .child(
                 section("Original passage")
                     .child(paragraph(entry.passage.clone()).selectable(true)),
@@ -1093,7 +1188,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
     }
     let search = text_input(&s.search, TextStyle::new(14.0, 400.0).lh(22.0))
         .key("search-library")
-        .label("Search passages and answers")
+        .label("Search passages, answers, questions and sources")
         .single_line()
         .w_full()
         .color(INK)
@@ -1103,7 +1198,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
         col()
             .w_full()
             .gap(6.0)
-            .child(note("Search passages and answers"))
+            .child(note("Search passages, answers, questions and sources"))
             .child(
                 el().w_full()
                     .h(38.0)
@@ -1134,7 +1229,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
     for entry in matches.iter().skip(page * 20).take(20) {
         let id = entry.id.clone();
         let selected = entry.id.clone();
-        let answer_text = pickle_core::answer_plain_text(&entry.answer);
+        let answer_text = saved_answer_plain_text(entry);
         content = content.child(
             col()
                 .key(format!("entry-{}", entry.id))
@@ -1144,12 +1239,9 @@ fn library(s: &AppState, bookmark: bool) -> El {
                 .radius(10.0)
                 .fill(SURFACE)
                 .child(note(format!("{} · {}", entry.app_name, entry.action)))
+                .children(saved_metadata(entry))
                 .children(saved_quality(entry))
-                .child(answer(
-                    &entry.answer.chars().take(500).collect::<String>(),
-                    s.settings.text_size,
-                    false,
-                ))
+                .child(saved_answer(entry, s.settings.text_size, true))
                 .child(note(entry.passage.chars().take(250).collect::<String>()))
                 .child(
                     row()

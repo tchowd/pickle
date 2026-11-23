@@ -34,3 +34,5 @@ cargo run --locked -p pickle-app -- --scene streaming --snap artifacts/streaming
 cargo run --locked -p pickle-app -- --scene consent-online --snap artifacts/consent-online.png --tree artifacts/consent-online-tree.json
 cargo run --locked -p pickle-app -- --scene saved-quality --snap artifacts/saved-quality.png --tree artifacts/saved-quality-tree.json
 cargo run --locked -p pickle-app -- --scene saved-quality-detail --snap artifacts/saved-quality-detail.png --tree artifacts/saved-quality-detail-tree.json
+cargo run --locked -p pickle-app -- --scene saved-metadata --size 480x900 --snap artifacts/saved-metadata.png --tree artifacts/saved-metadata-tree.json
+cargo run --locked -p pickle-app -- --scene saved-metadata-detail --size 480x900 --snap artifacts/saved-metadata-detail.png --tree artifacts/saved-metadata-detail-tree.json
