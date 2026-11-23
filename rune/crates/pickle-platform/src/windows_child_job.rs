@@ -21,15 +21,15 @@ use windows::{
         },
         System::{
             JobObjects::{
-                CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-                SetInformationJobObject, TerminateJobObject,
+                CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
             },
             Pipes::CreatePipe,
             Threading::{
-                CREATE_NO_WINDOW, CreateProcessW, DeleteProcThreadAttributeList,
-                EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE,
-                InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+                CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CreateProcessW,
+                DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+                INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
                 PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
                 PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
                 UpdateProcThreadAttribute, WaitForSingleObject,
@@ -469,7 +469,7 @@ fn command_line(command: &Command) -> io::Result<Vec<u16>> {
 /// Environment/cwd overrides are rejected rather than silently ignored. The
 /// exact absolute .exe and argument builder still come from validated settings.
 pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
-    spawn_with_stdio(command, StdioMode::Piped)
+    spawn_with_stdio(command, StdioMode::Piped, false)
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -514,16 +514,67 @@ fn version_control_command(executable: &Path) -> Command {
     command.arg("--version");
     command
 }
+fn capture_fixture_command(executable: &Path) -> Command {
+    let mut command = Command::new(executable);
+    command.arg("--windows-capture-owned-fixture");
+    command
+}
 /// A failure-only diagnostic control, never a capture fallback. There is no
 /// caller-supplied executable, argument, environment, or working directory.
 pub(crate) fn spawn_self_version_control() -> io::Result<Child> {
     spawn_with_stdio(
         &version_control_command(&std::env::current_exe()?),
         StdioMode::None,
+        false,
     )
 }
 
-fn spawn_with_stdio(command: &Command, mode: StdioMode) -> io::Result<Child> {
+fn fixture_breakaway_eligible(native: Option<(&str, i32)>, flags: Option<u32>) -> bool {
+    native == Some(("Start contained transcriber", 0x80070005_u32 as i32))
+        && flags.is_some_and(|flags| flags & JOB_OBJECT_LIMIT_BREAKAWAY_OK.0 != 0)
+}
+pub(crate) fn fixture_creation_flags(breakaway: bool) -> u32 {
+    (CREATE_NO_WINDOW
+        | EXTENDED_STARTUPINFO_PRESENT
+        | if breakaway {
+            CREATE_BREAKAWAY_FROM_JOB
+        } else {
+            Default::default()
+        })
+    .0
+}
+/// Retry only this fixed diagnostic helper after the exact initial native
+/// access-denied failure and a fresh successful query permitting breakaway.
+/// The parent's job is not ours to change. Our own JOB_LIST/KILL_ON_CLOSE job
+/// remains mandatory and is assigned before the new initial thread can run.
+pub(crate) fn retry_capture_fixture_breakaway(original: &io::Error) -> Option<io::Result<Child>> {
+    use windows::Win32::System::JobObjects::QueryInformationJobObject;
+    if native_failure(original) != Some(("Start contained transcriber", 0x80070005_u32 as i32)) {
+        return None;
+    }
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    let queried = unsafe {
+        QueryInformationJobObject(
+            None,
+            JobObjectExtendedLimitInformation,
+            (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32,
+            None,
+        )
+    };
+    let flags = queried
+        .ok()
+        .map(|_| limits.BasicLimitInformation.LimitFlags.0);
+    if !fixture_breakaway_eligible(native_failure(original), flags) {
+        return None;
+    }
+    Some((|| {
+        let command = capture_fixture_command(&std::env::current_exe()?);
+        spawn_with_stdio(&command, StdioMode::Piped, true)
+    })())
+}
+
+fn spawn_with_stdio(command: &Command, mode: StdioMode, breakaway: bool) -> io::Result<Child> {
     let program = Path::new(command.get_program());
     if !program.is_absolute()
         || !program
@@ -586,7 +637,9 @@ fn spawn_with_stdio(command: &Command, mode: StdioMode) -> io::Result<Child> {
             None,
             None,
             mode.inherits(),
-            CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+            windows::Win32::System::Threading::PROCESS_CREATION_FLAGS(fixture_creation_flags(
+                breakaway,
+            )),
             None,
             PCWSTR::null(),
             &startup.StartupInfo,
@@ -692,5 +745,48 @@ mod diagnostic_tests {
         );
         assert!(is_extended_path(Path::new(r"\\?\C:\Owned\PickleRune.exe")));
         assert!(!is_extended_path(Path::new(r"C:\Owned\PickleRune.exe")));
+    }
+    #[test]
+    fn fixture_breakaway_requires_exact_native_failure_and_explicit_parent_permission() {
+        let denied = Some(("Start contained transcriber", 0x80070005_u32 as i32));
+        let allowed = Some(JOB_OBJECT_LIMIT_BREAKAWAY_OK.0);
+        assert!(fixture_breakaway_eligible(denied, allowed));
+        assert!(!fixture_breakaway_eligible(denied, None));
+        assert!(!fixture_breakaway_eligible(denied, Some(0)));
+        assert!(!fixture_breakaway_eligible(denied, Some(0x1000))); // silent-only isn't explicit permission
+        assert!(!fixture_breakaway_eligible(None, allowed));
+        assert!(!fixture_breakaway_eligible(
+            Some(("Set contained process job attribute", 0x80070005_u32 as i32)),
+            allowed
+        ));
+        assert!(!fixture_breakaway_eligible(
+            Some(("Start contained transcriber", 0x80070057_u32 as i32)),
+            allowed
+        ));
+    }
+    #[test]
+    fn fixture_retry_changes_only_breakaway_flag_and_keeps_fixed_helper_argv() {
+        let ordinary = fixture_creation_flags(false);
+        let retry = fixture_creation_flags(true);
+        assert_eq!(retry ^ ordinary, CREATE_BREAKAWAY_FROM_JOB.0);
+        assert_eq!(
+            ordinary,
+            (CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT).0
+        );
+        assert_eq!(
+            retry & windows::Win32::System::Threading::CREATE_SUSPENDED.0,
+            0
+        );
+        let path = Path::new(r"C:\Owned directory\PickleRune.exe");
+        let command = capture_fixture_command(path);
+        assert_eq!(command.get_program(), path.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("--windows-capture-owned-fixture")]
+        );
+        assert!(command.get_envs().next().is_none());
+        assert!(command.get_current_dir().is_none());
+        assert_eq!(StdioMode::Piped.attributes(), 2);
+        assert!(StdioMode::Piped.inherits());
     }
 }

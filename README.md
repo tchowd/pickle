@@ -1,6 +1,6 @@
 # Pickle
 
-The cross-platform Rust/Rune rebuild is being developed alongside this Swift app. See [Rune build/setup instructions](rune/README.md) and the [macOS/Windows implementation plan](docs/RUNE-CROSS-PLATFORM-PLAN.md). The Rune build is developmental; native Windows and release-distribution verification are still in progress.
+The cross-platform Rust/Rune rebuild is being developed alongside this Swift app. See [Rune build/setup instructions](rune/README.md), the [macOS/Windows implementation plan](docs/RUNE-CROSS-PLATFORM-PLAN.md), and the [current implementation status](docs/RUNE-IMPLEMENTATION-STATUS.md). The Rune build is development-only, with native acceptance still in progress. Production signing, update hosting and publication are deferred.
 
 A native macOS menu-bar reading assistant. Highlight a passage, press and release **Control + Option** together, then choose **Simplify**, **Expand**, or **Chart**. Results appear in a movable, resizable floating panel. Pickle never edits the source app.
 

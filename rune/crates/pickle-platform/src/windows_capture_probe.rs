@@ -38,20 +38,56 @@ fn error(category: &'static str) -> PlatformError {
 
 fn start_io_failure(stage: &'static str, failure: &std::io::Error) -> PlatformError {
     let native = windows_child_job::native_failure(failure);
-    // One extra process only after the real fixture's contained launch failed.
-    // This is evidence, never an alternate path to capture or a success gate.
-    let parent = (stage == "spawn").then(windows_child_job::parent_spawn_snapshot);
-    let control = (stage == "spawn").then(version_control_evidence);
     eprintln!(
         "{}",
         serde_json::json!({"schema":1,"test":FAILURE_TEST,"passed":false,
             "stage":stage,"io_kind":format!("{:?}",failure.kind()),
             "raw_os_error":failure.raw_os_error(),
             "native_operation":native.map(|value|value.0),
-            "hresult":native.map(|value|value.1),
-            "parent":parent,"self_version_control":control})
+            "hresult":native.map(|value|value.1)})
     );
     error("fixture-start")
+}
+fn spawn_fixture(command: &Command) -> Result<windows_child_job::Child, PlatformError> {
+    match windows_child_job::spawn(command) {
+        Ok(child) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"schema":1,
+                "test":"windows-owned-window-capture-fixture-launch",
+                "breakaway_retry":false,"creation_flags":windows_child_job::fixture_creation_flags(false),
+                "atomic_job_membership_verified":true})
+            );
+            Ok(child)
+        }
+        Err(original) => {
+            let parent = windows_child_job::parent_spawn_snapshot();
+            let control = version_control_evidence();
+            let retry = windows_child_job::retry_capture_fixture_breakaway(&original);
+            let retry_evidence = match &retry {
+                None => serde_json::json!({"attempted":false}),
+                Some(Ok(_)) => serde_json::json!({"attempted":true,"spawned":true,
+                    "creation_flags":windows_child_job::fixture_creation_flags(true),
+                    "atomic_job_membership_verified":true}),
+                Some(Err(failure)) => serde_json::json!({"attempted":true,"spawned":false,
+                    "creation_flags":windows_child_job::fixture_creation_flags(true),
+                    "failure":io_evidence(failure)}),
+            };
+            let native = windows_child_job::native_failure(&original);
+            eprintln!(
+                "{}",
+                serde_json::json!({"schema":1,"test":FAILURE_TEST,"passed":false,
+                "stage":"spawn","io_kind":format!("{:?}",original.kind()),
+                "raw_os_error":original.raw_os_error(),"native_operation":native.map(|value|value.0),
+                "hresult":native.map(|value|value.1),"parent":parent,
+                "self_version_control":control,"breakaway_retry":retry_evidence})
+            );
+            match retry {
+                Some(Ok(child)) => Ok(child),
+                _ => Err(error("fixture-start")),
+            }
+        }
+    }
 }
 fn io_evidence(failure: &std::io::Error) -> serde_json::Value {
     let native = windows_child_job::native_failure(failure);
@@ -176,8 +212,7 @@ impl FixtureChild {
             .map_err(|failure| start_io_failure("current-executable", &failure))?;
         let mut command = Command::new(executable);
         command.arg("--windows-capture-owned-fixture");
-        let mut child = windows_child_job::spawn(&command)
-            .map_err(|failure| start_io_failure("spawn", &failure))?;
+        let mut child = spawn_fixture(&command)?;
         drop(child.stdin.take());
         let output = child.stdout.take().ok_or_else(|| {
             start_io_failure("stdout-missing", &std::io::Error::other("missing pipe"))
