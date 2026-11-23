@@ -2,7 +2,7 @@
 
 The Rust/Rune rebuild of Pickle for macOS and Windows. It lives beside the original Swift app while native compatibility and release validation continue.
 
-This is a **development build**. macOS execution has been exercised on the development Mac. Native Windows CI has passed workspace tests, rendering, ordinary installer/runtime/lifecycle checks and signed identity installation; the complete signed-identity OCR/lifecycle run is still being validated. See the [execution record](../docs/RUNE-IMPLEMENTATION-STATUS.md). Developer ID signing/notarization, Windows production signing, published update hosting, and the full compatibility matrix remain release work.
+This is a **development build**. macOS execution has been exercised on the development Mac. Native Windows CI has passed workspace tests, rendering, ordinary installer/runtime/lifecycle checks, and complete test-signed identity/OCR/lifecycle checks in debug and optimized builds. See the [execution record](../docs/RUNE-IMPLEMENTATION-STATUS.md). Developer ID signing/notarization, Windows production signing, published update hosting, and the full compatibility matrix remain release work.
 
 ## Build and run
 

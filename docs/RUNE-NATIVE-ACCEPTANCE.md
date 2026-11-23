@@ -129,4 +129,31 @@ The old app was quit normally and its absence verified. The new optimized bundle
 
 Apple's current [NSEvent contract](https://developer.apple.com/documentation/appkit/nsevent/addglobalmonitorforevents(matching:handler:)) requires Accessibility trust for key monitoring. [Apple DTS, May 2026](https://developer.apple.com/forums/thread/828052?page=1), states that Accessibility grants event listening as well as posting; no evidence justified requesting a separate Input Monitoring grant. Neither accepted registration nor these permissions prove delivery of a physical gesture.
 
+### Physical conventional shortcut observation
+
+With the same installed `4a99cdf` optimized bundle, the modifier gesture was temporarily disabled and OCR enabled. The user physically pressed Control + Option + P. Pickle opened its chooser with selected text and nonempty source-window OCR. The recorded source was **ChatGPT**, rather than the intended controlled native fixture. This establishes actual conventional hotkey delivery, Accessibility selection and nonempty local OCR for that source; it does **not** pass the controlled Café fixture or the modifier-only gesture. OCR contained recognition errors, so nonempty output is not an accuracy claim.
+
+No reading, visual-analysis or context-sharing action was submitted. The unintended OCR context and selected passage were cleared through the native UI without exporting their contents. Teardown restored OCR off, modifier gesture on and automatic chooser off; Save settings succeeded and the empty reader was visible. An independent read of only those three stored booleans confirmed their saved values. A subsequent controlled-fixture retest is separate evidence and must record its own teardown.
+
 For the earlier Mac CI success and artifact hashes, see the [implementation status](RUNE-IMPLEMENTATION-STATUS.md). Do not combine evidence from different commits into one claimed release pass.
+
+## Complete hosted CI at `88f483e4a7402b941d90525f3f8601f3a754e3b2`
+
+[Run 45097151814](https://github.com/tchowd/pickle/actions/runs/45097151814) completed successfully in all four jobs: Mac workspace/debug, Windows workspace/debug, optimized Mac package, and optimized Windows package. The source changes from `4a99cdf` adjust only the owned Windows OCR fixture and related documentation; the locally installed Mac remains the separately identified `4a99cdf` artifact.
+
+Both Windows profiles passed ordinary NSIS installation/runtime/lifecycle, followed by test-signed external-identity installation and its complete runtime/lifecycle checks. The debug job additionally passed unsigned full-MSIX SDK inspection and pure identity ownership fixtures. The optimized evidence specifically records:
+
+- The production BGRA/Ignore recognition path returned exact **PICKLE**, with `matched: true` and `passed: true`, using Segoe UI at 48 pixels on a 768×180 canvas. The `en-US` recognizer consumed pixels that round-tripped exactly; 1,268 dark pixels, 3,072-byte stride and 96-DPI metadata were recorded. This is real Windows OCR of a generated test image, not real source-window capture or a universal OCR-accuracy guarantee.
+- Ordinary and identity-installed sample processes each owned a visible, uncloaked 560×300 Pickle window at the exact installed executable path. Two bounded native responsiveness probes passed for each: 2/0 ms ordinary and 3/0 ms identity. Release tooling stayed disabled. This is window/event-loop evidence, not interactive focus, pixel correctness or performance-budget acceptance.
+- Installed version `0.1.0`, runtime package identity/capabilities, same-version repair, conflicting-directory refusal, same-path identity migration refusal before copying, running-instance install/uninstall/browser-cleanup guards, retryable locked-file uninstall, exact owned identity/browser removal, unrelated-file preservation and application-data retention passed. No real Chrome/Edge session or cross-version migration was exercised.
+- Both packaged PE images passed the direct/delayed VC/UCRT import audit. Strict notices had zero inventory gaps. The hosted harness verified removal of its exact test package, certificate and private key. Test-only signing remains distinct from production publisher trust.
+
+| Ordinary optimized artifact from this run | SHA-256 |
+|---|---|
+| Mac ZIP | `11dae503c4933ede124371c5841a2aac37b1bfb1e5010d081efa1c54854e2784` |
+| Windows NSIS setup | `4128e138b792b854ee0ea2bea880adbfd01c110da64fe46346d2dbf858eefd45` |
+| Windows ZIP | `c09d007553af6ca7f7c4a6037d2cab5f827177d3c305440da1f5cb9306319140` |
+
+The enclosing optimized GitHub artifact digests are Mac `sha256:b0ee8d5a76a0907c3307c6faceb70d6aabd106b1dc24db8b450fe85e08b197c9` and Windows `sha256:0b767f4da98ba023a45c3416ead4317088967d529b37513303ec6b59513d0859`. The Windows ordinary ZIP contains no test identity payload. Clearly named identity-CI artifacts use a disposable publisher whose trust was removed; they are test evidence, not distributable signed releases.
+
+These jobs ran on hosted development environments, including Windows Server 2025. The user declined a Windows 11 machine/VM; its interactive matrix remains unverified. Production signing/notarization, oldest supported OS versions, clean standard-user installation, browser/audio/cross-app capture, screen readers and owned update hosting remain release gates.
