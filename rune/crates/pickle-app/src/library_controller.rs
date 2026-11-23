@@ -55,7 +55,8 @@ impl Reservation {
     }
     fn complete(&self, outcome: &mut LibraryOutcome, previous: Failures) {
         // A newer successful read cannot silently clear an earlier unreadable
-        // result in this admitted chain. Only an explicit subsequent Retry does.
+        // result in this admitted chain. A fresh operation after that chain
+        // publishes may retry the current archive; these queued writes may not.
         if outcome.entries.is_ok()
             && let Some(error) = previous.read
         {
@@ -242,13 +243,6 @@ impl AppState {
         });
     }
     pub(super) fn append_saved_entry(&mut self, entry: Entry) {
-        if let Some(error) = self.library_error(true) {
-            self.library_notice(
-                true,
-                format!("This answer was not saved. Open Saved and choose Try again. {error}"),
-            );
-            return;
-        }
         if self.library_busy(true) {
             self.library_notice(
                 true,
@@ -275,12 +269,6 @@ impl AppState {
         self.start_library_operation(bookmark, LibraryOperation::Remove(id), None);
     }
     pub(super) fn record_history_entry(&mut self, entry: Entry) {
-        if let Some(error) = self.library_error(false) {
-            self.library_notice(false, format!(
-                "This answer was not recorded. Open the knowledge base and choose Try again. {error}"
-            ));
-            return;
-        }
         if self.library_busy(false) {
             if self.library_delete_confirmation == Some(false) {
                 self.cancel_remove_all();
@@ -349,6 +337,10 @@ impl AppState {
         if self.library_state.operations[index] != Some(operation) {
             return;
         }
+        let preserve_unrelated_notice = self.library_errors[index].is_some()
+            && self.notice.is_some()
+            && self.notice != self.library_errors[index]
+            && self.notice != self.library_state.notices[index];
         self.library_state.operations[index] = None;
         self.library_state.tails[index] = None;
         if !bookmark {
@@ -367,17 +359,18 @@ impl AppState {
                         self.entries = entries.into();
                     }
                 }
-                if reload {
-                    if (self.library_errors[index].is_some()
-                        && self.notice == self.library_errors[index])
-                        || (self.library_state.notices[index].is_some()
-                            && self.notice == self.library_state.notices[index])
-                    {
-                        self.notice = None;
-                    }
-                    self.library_state.notices[index] = None;
-                    self.library_errors[index] = None;
+                // Every operation rereads and validates the current archive.
+                // Recover after a fresh append too, without replaying any
+                // failed answer or bypassing a preceding chain's read failure.
+                if (self.library_errors[index].is_some()
+                    && self.notice == self.library_errors[index])
+                    || (self.library_state.notices[index].is_some()
+                        && self.notice == self.library_state.notices[index])
+                {
+                    self.notice = None;
                 }
+                self.library_state.notices[index] = None;
+                self.library_errors[index] = None;
                 if (reload || changed) && self.route == Route::Library(bookmark) {
                     self.library_selected = None;
                     self.library_page = 0;
@@ -393,6 +386,7 @@ impl AppState {
         if let Some(error) = outcome.operation_error {
             self.library_notice(bookmark, error);
         } else if self.library_error(bookmark).is_none()
+            && !preserve_unrelated_notice
             && let Some(notice) = success_notice
         {
             self.library_notice(bookmark, notice.into());
