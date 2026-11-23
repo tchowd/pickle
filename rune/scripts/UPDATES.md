@@ -40,6 +40,7 @@ Example publisher command, using placeholder locations:
 python3 rune/scripts/sign-update.py \
   --openssl /path/to/openssl-3 \
   --key /protected/signing/pickle-updates.pem \
+  --expected-public-key-hex "$PICKLE_UPDATE_PUBLIC_KEY_HEX" \
   --version 1.0.0 \
   --channel stable \
   --notes "Release notes for this version." \
@@ -50,9 +51,27 @@ python3 rune/scripts/sign-update.py \
 
 The script prints only completion and the public verification key. It reads installers in bounded chunks, computes SHA-256/size, constructs canonical payload bytes, invokes OpenSSL signing, and writes the envelope through atomic replacement. It never prints or copies the private key. Temporary signing inputs contain the public payload and are removed after signing.
 
-Verify that the resulting public key matches the trust root compiled into the application. Publish immutable installers first, then publish the signed manifest. URLs must return the actual bytes directly over HTTPS; redirects are refused. A GitHub release asset URL that redirects to another host is therefore not a working update URL without a publisher endpoint that serves the file directly.
+Supply the exact public key compiled into both platform builds through the required `--expected-public-key-hex` argument. The signer derives the selected private key's public key and refuses a mismatch before signing or replacing an existing manifest. Output paths may not alias the private key or any installer, including through hard links. OpenSSL receives no interactive input and has a 30-second deadline; provide an existing key accessible to the controlled signing process.
+
+Publish immutable installers first, then publish the signed manifest. URLs must return the actual bytes directly over HTTPS; redirects are refused. A GitHub release asset URL that redirects to another host is therefore not a working update URL without a publisher endpoint that serves the file directly.
 
 Refresh the signed manifest before its expiry. Expiry enforcement depends on the user's system clock; clock errors produce a recovery message rather than disabling signature checks.
+
+## Verify a candidate before publication
+
+After removing signing-key access, run the finalized candidate's offline command:
+
+```sh
+"/owner/release/Pickle Rune.app/Contents/MacOS/PickleRune" \
+  --verify-update-manifest /owner/release/stable.json \
+  --from-version 0.0.0
+```
+
+Use the actual previous supported version as `--from-version`, or `0.0.0` for an initial `0.1.0` candidate. On Windows, run the finalized `PickleRune.exe` with the same arguments and capture its exit code/stdout/stderr through the process launcher, since the optimized executable uses the Windows GUI subsystem. Run this check on each candidate platform; a Mac result does not validate the Windows target.
+
+This command uses only the public trust root, channel, target and candidate version compiled into that binary. No key/channel/target/version overrides are accepted. It requires the signed offered version to equal the candidate's Cargo version and be newer than `--from-version`. It checks the normal signature, canonical schema, dates, channel and artifact policies, and reads at most 65,537 manifest bytes before rejecting oversized input. An unconfigured development binary fails instead of accepting an alternate verification key.
+
+Exit zero returns only `version`, `target`, `channel`, `sha256` and `size` as JSON. Match that checksum and size against the exact finalized deliverable's independent release report. The command does not hash a local installer, contact the feed, download or execute an installer, create app storage, acquire a running-instance lease, access the vault or open a window. It verifies signed metadata; final platform-signature checks, artifact-byte comparison, clean-machine acceptance and a live client check/download remain separate gates.
 
 ## Download and installation behavior
 

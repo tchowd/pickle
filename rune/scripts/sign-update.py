@@ -61,7 +61,8 @@ def artifact_record(target, filename, url):
 
 
 def openssl(command, *arguments):
-    result = subprocess.run([command, *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    result = subprocess.run([command, *arguments], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=30)
     if result.returncode:
         raise ValueError("OpenSSL signing failed; verify OpenSSL 3 and the Ed25519 PEM key")
     return result.stdout
@@ -70,6 +71,8 @@ def openssl(command, *arguments):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--key", required=True, type=pathlib.Path, help="Existing private Ed25519 PEM key outside the repository")
+    parser.add_argument("--expected-public-key-hex", required=True,
+                        help="Ed25519 public key compiled into both release applications (64 hex characters)")
     parser.add_argument("--version", required=True)
     parser.add_argument("--channel", choices=("stable", "beta"), default="stable")
     parser.add_argument("--notes", default="", help="Release notes text, at most 4,000 UTF-8 bytes")
@@ -78,6 +81,14 @@ def main():
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--openssl", default="openssl", help="Path to OpenSSL 3")
     args = parser.parse_args()
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", args.expected_public_key_hex):
+        raise ValueError("The expected update verification key must contain 64 hexadecimal characters")
+    # Refuse aliases as well as identical spellings: publishing must never replace
+    # the private key or an installer with JSON, including through a hard link.
+    for source in [args.key, *(pathlib.Path(record[1]) for record in args.artifact)]:
+        if (args.output.resolve() == source.resolve()
+                or (args.output.exists() and source.exists() and args.output.samefile(source))):
+            raise ValueError("Manifest output must be separate from the signing key and every installer")
     version = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?", args.version)
     if (version is None or any(int(part) > 2**64 - 1 for part in version.groups()[:3])
             or (version.group(4) is not None and any(part.isdigit() and len(part) > 1 and part.startswith("0") for part in version.group(4).split(".")))):
@@ -96,6 +107,12 @@ def main():
                          "artifacts": records})
     if len(payload) > 24000:
         raise ValueError("The signed payload exceeds its size budget")
+    public_der = openssl(args.openssl, "pkey", "-in", str(args.key), "-pubout", "-outform", "DER")
+    prefix = bytes.fromhex("302a300506032b6570032100")
+    if len(public_der) != len(prefix) + 32 or not public_der.startswith(prefix):
+        raise ValueError("The configured signing key is not Ed25519")
+    if public_der[len(prefix):].hex() != args.expected_public_key_hex.lower():
+        raise ValueError("The signing key does not match the update verification key compiled into the release")
     with tempfile.TemporaryDirectory(prefix="pickle-update-sign-") as temporary:
         root = pathlib.Path(temporary)
         message = root / "message.bin"
@@ -105,22 +122,20 @@ def main():
         signature = signature_file.read_bytes()
     if len(signature) != 64:
         raise ValueError("OpenSSL did not produce an Ed25519 signature")
-    public_der = openssl(args.openssl, "pkey", "-in", str(args.key), "-pubout", "-outform", "DER")
-    prefix = bytes.fromhex("302a300506032b6570032100")
-    if len(public_der) != len(prefix) + 32 or not public_der.startswith(prefix):
-        raise ValueError("The configured signing key is not Ed25519")
     envelope = {"schema": 1, "payload_hex": payload.hex(), "signature_hex": signature.hex()}
     encoded = json.dumps(envelope, indent=2).encode("utf-8") + b"\n"
     if len(encoded) > 65536:
         raise ValueError("The signed envelope exceeds its size budget")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=args.output.parent, prefix=".pickle-manifest-", delete=False) as temporary:
-        staged = pathlib.Path(temporary.name)
-        temporary.write(encoded)
+    staged = None
     try:
+        with tempfile.NamedTemporaryFile(dir=args.output.parent, prefix=".pickle-manifest-", delete=False) as temporary:
+            staged = pathlib.Path(temporary.name)
+            temporary.write(encoded)
         staged.replace(args.output)
     finally:
-        staged.unlink(missing_ok=True)
+        if staged is not None:
+            staged.unlink(missing_ok=True)
     print("Signed update manifest written.")
     print("PICKLE_UPDATE_PUBLIC_KEY_HEX=" + public_der[len(prefix):].hex())
 
@@ -128,5 +143,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except subprocess.TimeoutExpired:
+        raise SystemExit("OpenSSL exceeded its 30-second deadline; no manifest was published")
     except (OSError, ValueError) as error:
         raise SystemExit(str(error))

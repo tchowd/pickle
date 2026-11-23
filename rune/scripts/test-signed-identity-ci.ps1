@@ -49,6 +49,15 @@ foreach ($file in @('PickleRune-setup.exe','PickleRune-windows.zip')) {
   }
 }
 try {
+  if ($Configuration -eq 'release') {
+    # Complete all Cargo/dependency execution before creating the disposable signing key.
+    $prepared=Join-Path $work 'prepared'
+    $sourceCommit=(& git rev-parse HEAD).Trim()
+    & ./scripts/prepare-windows-release.ps1 -PackageName $name -Publisher $subject -PublisherDisplayName 'Pickle CI test only' -IdentityVersion '0.1.0.0' -ExpectedSourceCommit $sourceCommit -OutputDirectory $prepared -Configuration release
+    $receiptPath=Join-Path $prepared 'prepared-receipt.json'
+    $receiptDigest=(Get-FileHash -LiteralPath $receiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $preparedReceipt=Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json
+  }
   $certificate = New-SelfSignedCertificate -Type Custom -KeyUsage DigitalSignature `
     -CertStoreLocation 'Cert:\CurrentUser\My' -Subject $subject -FriendlyName 'Disposable Pickle CI signing test' `
     -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3','2.5.29.19={text}') `
@@ -65,15 +74,32 @@ try {
   $trustStores += $trustStore
   Import-Certificate -FilePath $publicCertificate -CertStoreLocation $trustStore | Out-Null
   if (!(Test-Path -LiteralPath $trustPath)) { throw 'The exact disposable certificate was not imported into machine TrustedPeople.' }
-  & ./scripts/build-identity.ps1 -Configuration $Configuration -PackageName $name -Publisher $certificate.Subject `
-    -PublisherDisplayName 'Pickle CI test only' -Version '0.1.0.0' -CertificateThumbprint $certificate.Thumbprint -Installer
-  $stage = Get-ChildItem artifacts/windows-* -Directory | Where-Object {
-    $metadata = Join-Path $_.FullName 'PickleIdentity.json'
-    (Test-Path -LiteralPath $metadata) -and (Get-Content -Raw -LiteralPath $metadata | ConvertFrom-Json).name -ceq $name
-  } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if (!$stage) { throw 'The signed build did not produce this test identity payload.' }
-  Copy-Item -LiteralPath artifacts/PickleRune-setup.exe -Destination artifacts/PickleRune-identity-ci-test-setup.exe
-  Copy-Item -LiteralPath artifacts/PickleRune-windows.zip -Destination artifacts/PickleRune-identity-ci-test-windows.zip
+  if ($Configuration -eq 'release') {
+    $finalized=Join-Path $work 'finalized'
+    & ./scripts/finalize-windows-release.ps1 -PreparedDirectory (Join-Path $prepared 'payload') -ReceiptPath $receiptPath -ExpectedReceiptSha256 $receiptDigest -ExpectedSourceCommit $sourceCommit -ExpectedAppVersion $preparedReceipt.app_version -PackageName $name -Publisher $certificate.Subject -IdentityVersion '0.1.0.0' -ExpectedPackageFamily $preparedReceipt.identity.family -CertificateThumbprint $certificate.Thumbprint -OutputDirectory $finalized
+    $stage=Get-Item -LiteralPath (Join-Path $prepared 'payload')
+    Copy-Item -LiteralPath (Join-Path $finalized 'PickleRune-setup.exe') -Destination artifacts/PickleRune-identity-ci-test-setup.exe
+    Copy-Item -LiteralPath (Join-Path $finalized 'PickleRune-windows.zip') -Destination artifacts/PickleRune-identity-ci-test-windows.zip
+    Copy-Item -LiteralPath (Join-Path $finalized 'release-report.json') -Destination artifacts/identity-ci-test-release-report.json
+    # Staged app/installer execution starts only after this test private key has been removed.
+    $privatePath=Join-Path 'Cert:\CurrentUser\My' $certificate.Thumbprint
+    Remove-Item -Path $privatePath -DeleteKey -ErrorAction Stop
+    if (Test-Path -LiteralPath $privatePath) { throw 'The disposable signing key remains before staged application execution.' }
+    $publicThumbprint=$certificate.Thumbprint;$publicSubject=$certificate.Subject
+    $certificate.Dispose()
+    $certificate=[pscustomobject]@{Thumbprint=$publicThumbprint;Subject=$publicSubject}
+  } else {
+    # Preserve the established developer/debug path; production release uses isolation above.
+    & ./scripts/build-identity.ps1 -Configuration $Configuration -PackageName $name -Publisher $certificate.Subject `
+      -PublisherDisplayName 'Pickle CI test only' -Version '0.1.0.0' -CertificateThumbprint $certificate.Thumbprint -Installer
+    $stage = Get-ChildItem artifacts/windows-* -Directory | Where-Object {
+      $metadata = Join-Path $_.FullName 'PickleIdentity.json'
+      (Test-Path -LiteralPath $metadata) -and (Get-Content -Raw -LiteralPath $metadata | ConvertFrom-Json).name -ceq $name
+    } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (!$stage) { throw 'The signed build did not produce this test identity payload.' }
+    Copy-Item -LiteralPath artifacts/PickleRune-setup.exe -Destination artifacts/PickleRune-identity-ci-test-setup.exe
+    Copy-Item -LiteralPath artifacts/PickleRune-windows.zip -Destination artifacts/PickleRune-identity-ci-test-windows.zip
+  }
   & ./scripts/test-windows-package.ps1 -InstallerPath artifacts/PickleRune-identity-ci-test-setup.exe -InstallDirectory $install -Configuration $Configuration -ExpectedVersion $ExpectedVersion
 }
 finally {

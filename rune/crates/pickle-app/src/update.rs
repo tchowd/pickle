@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 const DOMAIN: &[u8] = b"Pickle update manifest v1\0";
-const MAX_ENVELOPE: usize = 65_536;
+pub(crate) const MAX_ENVELOPE: usize = 65_536;
 const MAX_PAYLOAD: usize = 24_000;
 const MAX_ARTIFACT: u64 = 512 * 1024 * 1024;
 
@@ -57,6 +57,30 @@ impl Config {
     }
 }
 
+/// Offline release validation bound to this binary's compiled trust root. The
+/// opaque constructor prevents the CLI from injecting a different verification key.
+pub(crate) struct CandidateVerifier(Config);
+impl CandidateVerifier {
+    pub(crate) fn from_build_environment() -> Result<Self, String> {
+        Config::from_build_environment()?.map(Self).ok_or_else(|| {
+            "This binary has no compiled update trust configuration. No candidate was verified."
+                .into()
+        })
+    }
+
+    pub(crate) fn verify(&self, bytes: &[u8], from_version: &str) -> Result<Release, String> {
+        self.0.validate()?;
+        let release = verify_manifest(&self.0, from_version, bytes, current_target()?, Utc::now())?
+            .ok_or_else(|| "The offered update is not newer than --from-version.".to_string())?;
+        if release.version != env!("CARGO_PKG_VERSION") {
+            return Err(
+                "The offered version does not match this candidate binary's Cargo version.".into(),
+            );
+        }
+        Ok(release)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Release {
     pub version: String,
@@ -69,6 +93,28 @@ pub struct Release {
 impl Release {
     pub fn artifact(&self) -> &Artifact {
         &self.artifact
+    }
+    #[cfg(test)]
+    pub(crate) fn test_report_fixture() -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").into(),
+            channel: "stable".into(),
+            published_at: Utc::now().to_rfc3339(),
+            notes: "private fixture note".into(),
+            artifact: Artifact {
+                target: current_target().unwrap().into(),
+                url: "https://private.example/installer".into(),
+                sha256: "ab".repeat(32),
+                size: 4,
+                filename: if cfg!(windows) {
+                    "fixture.exe"
+                } else {
+                    "fixture.zip"
+                }
+                .into(),
+            },
+            expires_at: Utc::now() + chrono::Duration::days(7),
+        }
     }
 }
 
@@ -631,6 +677,80 @@ mod tests {
     }
 
     #[test]
+    fn offline_candidate_requires_exact_binary_version_and_newer_precedence() {
+        let mut value = manifest();
+        value.version = env!("CARGO_PKG_VERSION").into();
+        let verifier = CandidateVerifier(config());
+        let release = verifier.verify(&signed(&value), "0.0.0-0").unwrap();
+        assert_eq!(release.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(release.artifact().target, current_target().unwrap());
+        for from in [env!("CARGO_PKG_VERSION"), "99999.0.0"] {
+            assert!(
+                verifier
+                    .verify(&signed(&value), from)
+                    .unwrap_err()
+                    .contains("not newer")
+            );
+        }
+        value.version = "9999.0.0".into();
+        assert!(
+            verifier
+                .verify(&signed(&value), "0.0.0-0")
+                .unwrap_err()
+                .contains("candidate binary")
+        );
+    }
+
+    #[test]
+    fn offline_candidate_rejects_wrong_trust_root_channel_target_and_metadata() {
+        let mut value = manifest();
+        value.version = env!("CARGO_PKG_VERSION").into();
+        let mut wrong_key = config();
+        wrong_key.public_key_hex =
+            hex::encode(SigningKey::from_bytes(&[42; 32]).verifying_key().as_bytes());
+        assert!(
+            CandidateVerifier(wrong_key)
+                .verify(&signed(&value), "0.0.0-0")
+                .unwrap_err()
+                .contains("signature")
+        );
+        let mut wrong_channel = config();
+        wrong_channel.channel = "beta".into();
+        assert!(
+            CandidateVerifier(wrong_channel)
+                .verify(&signed(&value), "0.0.0-0")
+                .unwrap_err()
+                .contains("channel")
+        );
+        let verifier = CandidateVerifier(config());
+        let mut wrong_target = manifest();
+        wrong_target.version = value.version.clone();
+        wrong_target.artifacts[0].target = match current_target().unwrap() {
+            "aarch64-apple-darwin" => "x86_64-apple-darwin",
+            "x86_64-apple-darwin" => "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc" => "aarch64-pc-windows-msvc",
+            _ => "x86_64-pc-windows-msvc",
+        }
+        .into();
+        assert!(
+            verifier
+                .verify(&signed(&wrong_target), "0.0.0-0")
+                .unwrap_err()
+                .contains("no installer")
+        );
+        for size in [0, MAX_ARTIFACT + 1] {
+            value.artifacts[0].size = size;
+            assert!(verifier.verify(&signed(&value), "0.0.0-0").is_err());
+        }
+        assert!(
+            verifier
+                .verify(&vec![b' '; MAX_ENVELOPE + 1], "0.0.0-0")
+                .unwrap_err()
+                .contains("too large")
+        );
+    }
+
+    #[test]
     fn signature_is_checked_before_any_payload_url_is_parsed() {
         let mut value = manifest();
         value.artifacts[0].url = "http://127.0.0.1/private".into();
@@ -978,6 +1098,8 @@ mod tests {
             .arg(script)
             .arg("--key")
             .arg(&pem_path)
+            .arg("--expected-public-key-hex")
+            .arg(hex::encode(key().verifying_key().to_bytes()))
             .args([
                 "--version",
                 "1.1.0",

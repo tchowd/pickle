@@ -54,6 +54,12 @@ Windows page OCR requires package identity; it is disabled in the unpackaged ZIP
 
 The preferred complete Windows installer uses NSIS with a signed external identity package, retaining a stable application path and ownership-checked uninstall cleanup. `scripts/build-identity.ps1` requires an existing trusted publisher certificate. The [runtime audit](packaging/windows/RUNTIME.md) scopes static CRT compilation to the Windows application target and checks packaged PE imports before distribution. Production builders never create certificates or modify certificate trust. The separate signed-identity CI test changes trust only within a disposable GitHub-hosted runner and removes its test certificate/private key afterward.
 
+### Release candidates
+
+Use the [release runbook](../docs/RUNE-RELEASE-RUNBOOK.md) to separate unsigned builds from production signing access. The [Mac finalizer](packaging/macos/RELEASING.md) notarizes and staples a copy of an already authorized Developer ID-signed bundle. The [Windows preparation/finalization path](packaging/windows/RELEASING.md) compiles before signing-key access, then verifies and signs the selected payload without executing the app. Both require explicit owner inputs and fresh output locations; neither publishes a release.
+
+After removing signing access, each candidate can verify its signed update metadata offline with `--verify-update-manifest FILE --from-version VERSION`. It uses only the trust root/channel/target/version compiled into that binary, emits bounded metadata, and initializes no app storage or network. See [update publishing](scripts/UPDATES.md) for required public-key matching and artifact-byte checks. Production credentials, real notarization/signing evidence and device acceptance remain necessary.
+
 ## First reading session
 
 1. Launch the app and choose **Try a sample** to test a clearly labeled fixed, network-free demonstration.

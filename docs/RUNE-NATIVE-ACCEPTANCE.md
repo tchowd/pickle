@@ -135,6 +135,12 @@ With the same installed `4a99cdf` optimized bundle, the modifier gesture was tem
 
 No reading, visual-analysis or context-sharing action was submitted. The unintended OCR context and selected passage were cleared through the native UI without exporting their contents. Teardown restored OCR off, modifier gesture on and automatic chooser off; Save settings succeeded and the empty reader was visible. An independent read of only those three stored booleans confirmed their saved values. A subsequent controlled-fixture retest is separate evidence and must record its own teardown.
 
+### Reported modifier chooser; capture not independently observed
+
+The next prompt explicitly asked the tester to use Cmd + Tab to the actual native fixture before pressing/releasing Control + Option without P. The user reported **“Invoked; chooser appeared.”** On inspection, Rune's accessibility tree and screenshot still showed its Settings page, with no selected passage or session-context preview. A read-only process inventory showed only the current Rune app and fixture, rather than another running Pickle executable. This discrepancy does not establish whether a chooser appeared transiently, which source it represented, or whether the modifier callback/capture completed. No controlled OCR result was available to verify; do not count this as a fixture pass or claim a proven cause.
+
+Temporary OCR was turned off through the native UI and saved. The original modifier gesture remained on and automatic chooser off; an independent read of those three stored booleans confirmed the values. Returning to the reader and obtaining a fresh app binding showed the empty passage input. No inference, visual analysis, screenshot export or context-sharing action was submitted. Further investigation should gather evidence of native event delivery/state transitions rather than repeatedly refreshing already granted permissions.
+
 For the earlier Mac CI success and artifact hashes, see the [implementation status](RUNE-IMPLEMENTATION-STATUS.md). Do not combine evidence from different commits into one claimed release pass.
 
 ## Complete hosted CI at `88f483e4a7402b941d90525f3f8601f3a754e3b2`

@@ -13,6 +13,7 @@ mod local_connection;
 mod maintenance;
 mod migration;
 mod preferences_view;
+mod release_verify;
 #[cfg(test)]
 mod review_tests;
 mod scenes;
@@ -30,6 +31,9 @@ use std::sync::Arc;
 
 fn main() {
     let arguments = scenes::normalize_arguments(std::env::args().skip(1).collect());
+    if let Some(exit_code) = release_verify::handle(&arguments) {
+        std::process::exit(exit_code);
+    }
     if arguments.iter().any(|arg| arg == "--verify-windows-ocr") {
         if arguments.len() != 1 {
             eprintln!("The fixed OCR probe cannot be combined with other options.");

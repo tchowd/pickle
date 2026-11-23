@@ -8,7 +8,12 @@ Unicode True
 !if /FileExists "${PICKLE_STAGE}\PickleIdentity.msix"
   !define PICKLE_HAS_IDENTITY
 !endif
-!ifdef PICKLE_SIGN_CERT_THUMBPRINT
+!ifdef PICKLE_RELEASE_FINALIZE_CONFIG
+  !ifndef PICKLE_RELEASE_FINALIZE_SCRIPT
+    !error "Release uninstaller finalization requires the reviewed hook script"
+  !endif
+  !uninstfinalize 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${PICKLE_RELEASE_FINALIZE_SCRIPT}" -Path "%1" -ConfigurationFile "${PICKLE_RELEASE_FINALIZE_CONFIG}"'
+!else ifdef PICKLE_SIGN_CERT_THUMBPRINT
   !ifndef PICKLE_SIGNTOOL
     !error "PICKLE_SIGNTOOL must identify the resolved Windows SDK signtool.exe"
   !endif

@@ -10,6 +10,8 @@ cargo clippy --manifest-path tools/icon-builder/Cargo.toml --target-dir target/i
 cargo test --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked
 python3 packaging/test_notices.py
 python3 packaging/test_windows_runtime.py
+python3 scripts/test_sign_update.py
+python3 scripts/test_finalize_macos_release.py
 (
   cd ..
   node Tests/BrowserExtensionTests/extract.test.js
