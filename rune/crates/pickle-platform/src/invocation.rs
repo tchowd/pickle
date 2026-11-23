@@ -303,6 +303,17 @@ mod tests {
         assert!(state.flags(false, false, false));
         assert!(!state.flags(false, false, false));
         assert!(!state.flags(false, true, false));
+        // The original second chord starts with Option, then adds Control.
+        assert!(!state.flags(true, true, false));
+        assert!(state.flags(false, false, false));
+        assert!(!state.flags(false, false, false));
+    }
+    #[test]
+    fn standalone_control_and_option_release_cycles_never_invoke() {
+        let mut state = ModifierChord::default();
+        assert!(!state.flags(true, false, false));
+        assert!(!state.flags(false, false, false));
+        assert!(!state.flags(false, true, false));
         assert!(!state.flags(false, false, false));
     }
     #[test]
@@ -310,13 +321,17 @@ mod tests {
         let mut state = ModifierChord::default();
         state.flags(true, true, false);
         state.interrupt(true, true);
+        assert!(!state.flags(true, true, false));
         assert!(!state.flags(false, false, false));
-        state.flags(true, true, false);
-        state.flags(true, true, true);
+        assert!(!state.flags(true, true, true));
+        assert!(!state.flags(true, true, false));
         assert!(!state.flags(false, false, false));
         state.flags(true, true, false);
         state.reset();
         assert!(!state.flags(false, false, false));
+        // Every interrupted sequence must still allow a later clean chord.
+        assert!(!state.flags(true, true, false));
+        assert!(state.flags(false, false, false));
     }
     #[test]
     fn mouse_chooser_debounces_drag_and_stale_timer_events() {
