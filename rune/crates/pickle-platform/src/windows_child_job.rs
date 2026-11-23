@@ -93,6 +93,134 @@ impl Child {
     }
 }
 
+// Read-only ownership and bounded teardown for hosted, owned-process fixtures.
+// These helpers never expose the job handle and do not exist in shipping code.
+#[cfg(test)]
+impl Child {
+    pub(crate) fn id(&self) -> io::Result<u32> {
+        let pid = unsafe { windows::Win32::System::Threading::GetProcessId(raw(&self.process)) };
+        if pid == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(pid)
+        }
+    }
+    pub(crate) fn contains_pid(&self, pid: u32) -> io::Result<bool> {
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        let job = self
+            .job
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Owned fixture job is closed"))?;
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+            .map_err(|error| failure("Inspect fixture process", error))?;
+        let process = unsafe { OwnedHandle::from_raw_handle(process.0) };
+        let mut belongs = BOOL::default();
+        unsafe { IsProcessInJob(raw(&process), Some(raw(job)), &mut belongs) }
+            .map_err(|error| failure("Check fixture job membership", error))?;
+        Ok(belongs.as_bool())
+    }
+    pub(crate) fn job_pids(&self) -> io::Result<Vec<u32>> {
+        use windows::Win32::System::JobObjects::{
+            JobObjectBasicProcessIdList, QueryInformationJobObject,
+        };
+        const MAX_PROCESSES: usize = 256;
+        // Same header/ULONG_PTR array layout as JOBOBJECT_BASIC_PROCESS_ID_LIST,
+        // with a fixed upper bound. Never return a truncated membership list.
+        #[repr(C)]
+        struct ProcessList {
+            assigned: u32,
+            count: u32,
+            pids: [usize; MAX_PROCESSES],
+        }
+        let job = self
+            .job
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Owned fixture job is closed"))?;
+        let mut list = ProcessList {
+            assigned: 0,
+            count: 0,
+            pids: [0; MAX_PROCESSES],
+        };
+        unsafe {
+            QueryInformationJobObject(
+                Some(raw(job)),
+                JobObjectBasicProcessIdList,
+                (&mut list as *mut ProcessList).cast(),
+                std::mem::size_of::<ProcessList>() as u32,
+                None,
+            )
+        }
+        .map_err(|error| failure("Read fixture job members", error))?;
+        if list.count as usize > MAX_PROCESSES || list.assigned != list.count {
+            return Err(io::Error::other(
+                "Owned fixture job membership exceeded its bound",
+            ));
+        }
+        let mut pids = list.pids[..list.count as usize]
+            .iter()
+            .map(|pid| {
+                u32::try_from(*pid)
+                    .ok()
+                    .filter(|pid| *pid != 0)
+                    .ok_or_else(|| io::Error::other("Invalid owned fixture process identifier"))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        pids.sort_unstable();
+        if pids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(io::Error::other(
+                "Duplicate owned fixture process identifier",
+            ));
+        }
+        Ok(pids)
+    }
+    pub(crate) fn stop_and_wait(&mut self, timeout: std::time::Duration) -> io::Result<()> {
+        use windows::Win32::System::JobObjects::{
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+            QueryInformationJobObject,
+        };
+        let deadline = std::time::Instant::now() + timeout.min(std::time::Duration::from_secs(10));
+        let job = self
+            .job
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Owned fixture job is closed"))?;
+        self.stdin.take();
+        unsafe { TerminateJobObject(raw(job), 1) }
+            .map_err(|error| failure("Stop owned fixture job", error))?;
+        loop {
+            let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            unsafe {
+                QueryInformationJobObject(
+                    Some(raw(job)),
+                    JobObjectBasicAccountingInformation,
+                    (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                    std::mem::size_of_val(&accounting) as u32,
+                    None,
+                )
+            }
+            .map_err(|error| failure("Read stopped fixture job", error))?;
+            let root = unsafe { WaitForSingleObject(raw(&self.process), 0) };
+            if root != WAIT_OBJECT_0 && root != WAIT_TIMEOUT {
+                return Err(io::Error::other("Could not confirm owned fixture exit"));
+            }
+            if root == WAIT_OBJECT_0 && accounting.ActiveProcesses == 0 {
+                self.job.take();
+                self.stdout.take();
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                // Retain the job: Drop still kills only this exact contained
+                // process tree. Never report successful profile cleanup yet.
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Owned fixture job did not stop in time",
+                ));
+            }
+            std::thread::sleep(remaining.min(std::time::Duration::from_millis(20)));
+        }
+    }
+}
+
 struct Attributes {
     _storage: Vec<usize>,
     pointer: LPPROC_THREAD_ATTRIBUTE_LIST,

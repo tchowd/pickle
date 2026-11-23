@@ -28,6 +28,15 @@ const WEB_ROOT: GUID = GUID::from_u128(0xc5fdc049_4eec_4299_87bb_ca9fc718a681);
 // https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation2-put_connectiontimeout
 const UIA_REQUEST_TIMEOUT_MS: u32 = 500;
 
+// Both hosted fixture types own foreground windows. Serialize their native UI
+// work inside this test binary without changing ordinary parallel unit checks.
+#[cfg(test)]
+fn native_browser_fixture_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 // TreeWalker navigation explicitly returns S_OK + NULL at the end. The
 // windows 0.62 non-null interface projection converts that successful NULL to
 // Error::empty(), losing its distinction from a real HRESULT failure. Preserve
@@ -480,6 +489,10 @@ impl DocumentReader {
 #[cfg(test)]
 #[path = "windows_browser_page_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "windows_browser_real_tests.rs"]
+mod real_tests;
 
 #[cfg(test)]
 mod nullable_navigation_tests {

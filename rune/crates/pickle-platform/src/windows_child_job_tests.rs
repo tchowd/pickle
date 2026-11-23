@@ -118,9 +118,33 @@ fn fixture_parent() {
     // successful atomic containment and the defensive membership verification.
     child.stdin.take().unwrap().write_all(FIXTURE).unwrap();
     wait_for(&directory.join("child"));
+    let child_pid: u32 = std::fs::read_to_string(directory.join("child"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let grandchild_pid: u32 = std::fs::read_to_string(directory.join("grandchild"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(child.id().unwrap(), child_pid);
+    assert!(child.contains_pid(child_pid).unwrap());
+    assert!(child.contains_pid(grandchild_pid).unwrap());
+    assert!(!child.contains_pid(std::process::id()).unwrap());
+    let members = child.job_pids().unwrap();
+    assert!(members.contains(&child_pid) && members.contains(&grandchild_pid));
+    assert!(!members.contains(&std::process::id()));
     let mode = std::env::var("PICKLE_JOB_FIXTURE_MODE").unwrap();
-    if mode == "close" || mode == "finished" {
-        if mode == "close" {
+    if mode == "close" || mode == "finished" || mode == "stop" {
+        if mode == "stop" {
+            wait_for(&directory.join("close"));
+            let mut output = child.stdout.take().unwrap();
+            child.stop_and_wait(Duration::from_secs(5)).unwrap();
+            assert!(child.job.is_none());
+            assert!(child.contains_pid(std::process::id()).is_err());
+            assert!(child.job_pids().is_err());
+            let mut discarded = Vec::new();
+            output.read_to_end(&mut discarded).unwrap();
+        } else if mode == "close" {
             wait_for(&directory.join("close"));
             drop(child);
         } else {
@@ -204,8 +228,8 @@ fn lifecycle(mode: &str) {
     let child = opened_fixture(&root.path().join("child"));
     let grandchild = opened_fixture(&root.path().join("grandchild"));
     assert!(parent.0.try_wait().unwrap().is_none());
-    if mode == "close" || mode == "finished" {
-        let signal = if mode == "close" {
+    if mode == "close" || mode == "finished" || mode == "stop" {
+        let signal = if mode == "close" || mode == "stop" {
             "close"
         } else {
             "exit-child"
@@ -227,7 +251,7 @@ fn lifecycle(mode: &str) {
             "Owned child/descendant survived job close or forced parent termination"
         );
     }
-    if mode == "close" || mode == "finished" {
+    if mode == "close" || mode == "finished" || mode == "stop" {
         std::fs::write(root.path().join("finish"), b"exit owned fixture").unwrap();
         let began = Instant::now();
         loop {
@@ -244,6 +268,11 @@ fn lifecycle(mode: &str) {
 #[test]
 fn closing_owned_job_terminates_child_and_descendant_with_parent_still_alive() {
     lifecycle("close");
+}
+
+#[test]
+fn bounded_stop_confirms_exact_job_empty_root_signaled_and_pipe_closed() {
+    lifecycle("stop");
 }
 
 #[test]

@@ -442,6 +442,7 @@ fn owned_native_document_provider() {
         );
         return;
     }
+    let _native = native_browser_fixture_lock();
     let artifacts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts");
     let evidence = artifacts.join("windows-browser-page-native-smoke.json");
     let mut trace = Trace::new(&artifacts);
