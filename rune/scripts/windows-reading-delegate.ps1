@@ -17,16 +17,17 @@ function ConvertTo-PickleReadingWindowsArgument([AllowEmptyString()][string]$Val
   return $result.ToString()
 }
 
-function New-PickleReadingCoreStart([string]$PowerShell,[string]$Script,[string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture) {
+function New-PickleReadingCoreStart([string]$PowerShell,[string]$Script,[string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
   $start=[Diagnostics.ProcessStartInfo]::new()
   $start.FileName=$PowerShell;$start.UseShellExecute=$false
   $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$Script,'-Application',$Application,'-DataDirectory',$DataDirectory,'-EvidencePath',$EvidencePath,'-Configuration',$Configuration)
+  $arguments+=@('-Scenario',$Scenario)
   if ($RequireWindowCapture) { $arguments+= '-RequireWindowCapture' }
   $start.Arguments=(($arguments | ForEach-Object { ConvertTo-PickleReadingWindowsArgument $_ }) -join ' ')
   return $start
 }
 
-function Invoke-PickleReadingCore([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[ValidateSet('debug','release')][string]$Configuration,[switch]$RequireWindowCapture) {
+function Invoke-PickleReadingCore([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[ValidateSet('debug','release')][string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
   if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'The reading delegate runs only on Windows.' }
   $command=Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1
   $powerShell=[IO.Path]::GetFullPath($command.Source)
@@ -34,7 +35,7 @@ function Invoke-PickleReadingCore([string]$Application,[string]$DataDirectory,[s
   if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or [IO.Path]::GetFileName($powerShell) -ine 'pwsh.exe') { throw 'The reading acceptance requires the runner installed PowerShell 7 executable.' }
   $entry=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'invoke-windows-reading-core.ps1'))
   if (Test-Path -LiteralPath $EvidencePath) { throw 'The delegated reading evidence must be new.' }
-  $process=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $entry $Application $DataDirectory $EvidencePath $Configuration -RequireWindowCapture:$RequireWindowCapture))
+  $process=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $entry $Application $DataDirectory $EvidencePath $Configuration -RequireWindowCapture:$RequireWindowCapture -Scenario $Scenario))
   try {
     if (!$process.WaitForExit(300000)) {
       # The dedicated entry establishes its kill-on-close job before any child
@@ -48,6 +49,7 @@ function Invoke-PickleReadingCore([string]$Application,[string]$DataDirectory,[s
     }
     if ($process.ExitCode -ne 0) { throw 'The PowerShell 7 reading acceptance failed; inspect its controlled evidence.' }
     $evidence=Read-PickleReadingJson $EvidencePath
+    if ($evidence.scenario -cne $Scenario) { throw 'The reading delegate scenario differed.' }
     if ($evidence.schema -ne 1 -or $evidence.test -cne 'windows-installed-reading-workflow' -or $evidence.configuration -cne $Configuration -or $evidence.require_window_capture -isnot [bool] -or $evidence.require_window_capture -ne [bool]$RequireWindowCapture -or $evidence.marker_in_context -isnot [bool] -or $evidence.marker_in_context -ne [bool]$RequireWindowCapture -or $evidence.passed -ne $true -or $evidence.profile_restored -ne $true -or $evidence.owned_children_stopped -ne $true) { throw 'The PowerShell 7 reading delegate omitted successful cleanup evidence.' }
   } finally {
     if (!$process.HasExited) {

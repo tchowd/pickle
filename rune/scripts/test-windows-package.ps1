@@ -4,7 +4,9 @@ param(
   [ValidateSet('debug','release')][string]$Configuration = 'debug',
   [string]$ExpectedVersion
 )
-function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCapture,[string]$Configuration) {
+function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCapture,[string]$Configuration,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
+  if ($Evidence.scenario -cne $Scenario -or $Evidence.driver.scenario -cne $Scenario -or $Evidence.restart_driver.scenario -cne $Scenario -or $Evidence.server.scenario -cne $Scenario) { throw 'The package reading evidence scenario differed.' }
+  if ($Scenario -ceq 'explain-may' -and ($RequireWindowCapture -or $Configuration -cne 'debug')) { throw 'The Explain gate requires a separate screen-off debug workflow.' }
   if (($Evidence.schema -isnot [int] -and $Evidence.schema -isnot [long]) -or $Evidence.schema -ne 1 -or $Evidence.test -cne 'windows-installed-reading-workflow' -or $Evidence.configuration -cne $Configuration) { throw 'The package reading evidence did not match this acceptance run.' }
   foreach ($key in @('passed','ordinary_exit','lease_released','control_removed','restart_ordinary_exit','restart_lease_released','restart_control_removed','saved_archive_verified','saved_archive_unchanged','profile_restored','owned_children_stopped')) {
     if ($Evidence.$key -isnot [bool] -or !$Evidence.$key) { throw 'The installed reading, Save, restart and cleanup workflow did not pass completely.' }
@@ -23,7 +25,14 @@ function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCaptu
   foreach ($key in @('passed','initial_compose_ready','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','source_retained_verified','window_marker_painted','window_marker_absent_from_accessibility','completed_answer_verified','saved_answer_verified','ordinary_quit_verified')) {
     if ($Evidence.driver.$key -isnot [bool] -or !$Evidence.driver.$key) { throw 'The native reading driver omitted a required acceptance step.' }
   }
-  foreach ($key in @('passed','application_identity_verified','saved_entry_verified','saved_detail_verified','saved_metadata_absence_verified','ordinary_quit_verified')) {
+  $restartKeys=@('passed','application_identity_verified','saved_entry_verified','saved_detail_verified','ordinary_quit_verified')
+  if ($Scenario -ceq 'explain-may') {
+    foreach ($key in @('explain_before_base_verified','explain_term_value_verified','accepted_explain_turn_verified')) {
+      if ($Evidence.driver.$key -isnot [bool] -or !$Evidence.driver.$key) { throw 'The accepted before-base Explain request was not verified.' }
+    }
+    $restartKeys+=@('saved_card_explain_metadata_verified','saved_detail_raw_term_verified')
+  } else { $restartKeys+='saved_metadata_absence_verified' }
+  foreach ($key in $restartKeys) {
     if ($Evidence.restart_driver.$key -isnot [bool] -or !$Evidence.restart_driver.$key) { throw 'The native saved-answer restart driver did not pass completely.' }
   }
   foreach ($driver in @($Evidence.driver,$Evidence.restart_driver)) {
@@ -117,6 +126,13 @@ Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "
 $readingEvidence=Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json"
 Invoke-PickleReadingCore $application $supportRoot $readingEvidence $Configuration -RequireWindowCapture:$hasIdentity
 Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $readingEvidence) $hasIdentity $Configuration
+if (!$hasIdentity -and $Configuration -ceq 'debug' -and $env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_ENVIRONMENT -ceq 'github-hosted') {
+  # Additional real term/action intent acceptance; the default Simplify absence
+  # workflow above remains independently required for every package variant.
+  $explainEvidence=Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-explain-reading.json'
+  Invoke-PickleReadingCore $application $supportRoot $explainEvidence $Configuration -Scenario 'explain-may'
+  Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $explainEvidence) $false $Configuration -Scenario 'explain-may'
+}
 . (Join-Path $PSScriptRoot 'windows-extension-smoke.ps1')
 if (Test-PickleExtensionSetupGate $Configuration $hasIdentity $PSEdition ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) $env:GITHUB_ACTIONS $env:RUNNER_ENVIRONMENT) {
   # Real Stable setup discovery only, with no Pickle window alive. Each browser

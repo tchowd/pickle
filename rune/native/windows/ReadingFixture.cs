@@ -21,6 +21,9 @@ using System.Windows.Forms;
 
 public static class ReadingFixturePredicates {
     public const string PixelMarker="ORCHID";
+    public const string ExplainTerm="may";
+    public const string ExplainLabel="Explain \u201cmay\u201d";
+    public static bool Scenario(string value) { return value=="simplify" || value=="explain-may"; }
     public static bool MarkerAbsent(IEnumerable<string> values) {
         return values!=null && values.All(value=>value!=null &&
             value.IndexOf(PixelMarker,StringComparison.OrdinalIgnoreCase)<0);
@@ -70,6 +73,16 @@ public static class ReadingFixturePredicates {
             (string)entry["action"]=="Simplify" && (string)entry["passage"]==selected && (string)entry["answer"]==answer &&
             new[]{"question","quality","chart","reference"}.All(key=>entry[key]==null);
     }
+    public static bool ExplainSavedEntry(Dictionary<string,object> entry,string selected,string answer) {
+        if (entry==null || !entry.ContainsKey("action") || !entry.ContainsKey("question") ||
+            !(entry["action"] is string) || (string)entry["action"]!="Explain" ||
+            !(entry["question"] is string) || (string)entry["question"]!=ExplainTerm) return false;
+        // Reuse the strict default schema/source/answer/absence checks without
+        // broadening that predicate to admit arbitrary action metadata.
+        var normalized=new Dictionary<string,object>(entry);
+        normalized["action"]="Simplify"; normalized["question"]=null;
+        return SavedEntry(normalized,selected,answer);
+    }
     public static void SelfTest() {
         const string chosen="Caf\u00e9 selected passage.";
         if (!Contract("BEFORE",chosen,"AFTER","A controlled answer.")) throw new Exception("contract");
@@ -104,6 +117,18 @@ public static class ReadingFixturePredicates {
         }
         var missing=new Dictionary<string,object>(saved); missing.Remove("quality");
         if (SavedEntry(missing,chosen,"A controlled answer.")) throw new Exception("saved-entry-missing");
+        var explained=new Dictionary<string,object>(saved); explained["action"]="Explain"; explained["question"]=ExplainTerm;
+        if (!ExplainSavedEntry(explained,chosen,"A controlled answer.") || SavedEntry(explained,chosen,"A controlled answer.") ||
+            ExplainSavedEntry(saved,chosen,"A controlled answer.")) throw new Exception("explain-entry");
+        foreach (string question in new[]{"Explain \u201cmay\u201d","Explain the meaning of may", "MAY", "may ", ""}) {
+            var bad=new Dictionary<string,object>(explained); bad["question"]=question;
+            if (ExplainSavedEntry(bad,chosen,"A controlled answer.")) throw new Exception("explain-question-negative");
+        }
+        foreach (string key in new[]{"quality","chart","reference"}) {
+            var bad=new Dictionary<string,object>(explained); bad[key]="unexpected";
+            if (ExplainSavedEntry(bad,chosen,"A controlled answer.")) throw new Exception("explain-absence-negative");
+        }
+        if (!Scenario("simplify") || !Scenario("explain-may") || Scenario("follow-up")) throw new Exception("scenario");
     }
 }
 
@@ -171,10 +196,18 @@ public static class ReadingFixtureProgram {
             string[] names=fixture ? new[]{"--contract","--ready"} :
                 saved ? new[]{"--contract","--application-pid","--application-path","--application-start-ticks","--saved-entry","--evidence"} :
                 new[]{"--contract","--application-pid","--fixture-pid","--fixture-hwnd","--server-state","--evidence"};
-            Dictionary<string,string> options=Options(args,names);
+            // Scenario is explicit on driver invocations only; existing callers
+            // remain the strict Simplify workflow.
+            string scenario="simplify";
+            if (!fixture && args.Length>=3 && args[args.Length-2]=="--scenario") {
+                scenario=args[args.Length-1]; args=args.Take(args.Length-2).ToArray();
+            }
+            if (!ReadingFixturePredicates.Scenario(scenario)) Fail("invalid-scenario");
+            Dictionary<string,string> options=Options(args,names); options["--scenario"]=scenario;
             evidencePath=fixture ? options["--ready"]+".failure.json" : options["--evidence"];
             evidence=new Dictionary<string,object> {{"schema",1},{"test",fixture ? "windows-owned-selection-source" : saved ? "windows-server-installed-saved-reading" : "windows-server-installed-selection-reading"},
                 {"passed",false},{"pid",Process.GetCurrentProcess().Id}};
+            if (!fixture) evidence["scenario"]=scenario;
             stage="contract-read";
             Contract contract=ReadContract(options["--contract"]);
             if (fixture) {
@@ -520,10 +553,20 @@ public static class ReadingFixtureProgram {
         return new[]{"entry-quality-","entry-request-","entry-reference-","entry-chart-kind-"}
             .All(prefix=>Find(root,prefix+id,pid)==null);
     }
+    static bool ExplainMetadata(AutomationElement root,int pid,string id) {
+        var request=Find(root,"entry-request-"+id,pid);
+        var question=Find(root,"entry-question-"+id,pid);
+        return request!=null && !request.Current.IsOffscreen && question!=null && !question.Current.IsOffscreen &&
+            question.Current.ControlType==ControlType.Text && question.Current.Name==ReadingFixturePredicates.ExplainTerm &&
+            new[]{"entry-quality-","entry-reference-","entry-chart-kind-"}.All(prefix=>Find(root,prefix+id,pid)==null);
+    }
+    static bool ExplainScenario(Dictionary<string,string> options) { return options["--scenario"]=="explain-may"; }
     static void DriveSaved(Contract contract,Dictionary<string,string> options) {
         stage="saved-entry-read";
+        bool explain=ExplainScenario(options);
         var entry=ReadJson(options["--saved-entry"]);
-        if (!ReadingFixturePredicates.SavedEntry(entry,contract.Selected,contract.Answer)) Fail("saved-entry-contract-mismatch");
+        if (!(explain ? ReadingFixturePredicates.ExplainSavedEntry(entry,contract.Selected,contract.Answer) :
+            ReadingFixturePredicates.SavedEntry(entry,contract.Selected,contract.Answer))) Fail("saved-entry-contract-mismatch");
         string id=(string)entry["id"];
         evidence["saved_entry_verified"]=true; evidence["saved_entry_id_sha256"]=Hash(id);
         evidence["answer_sha256"]=Hash(contract.Answer);
@@ -552,7 +595,12 @@ public static class ReadingFixtureProgram {
                 read=Find(root,"read-"+id,appPid);
                 return read!=null && read.Current.IsEnabled;
             },10,"saved-entry-card-unavailable");
-            if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-card-metadata");
+            if (explain) {
+                var card=Find(root,"entry-"+id,appPid);
+                if (card==null || !ExplainMetadata(card,appPid,id) ||
+                    !Texts(card,appPid).Contains("ReadingFixture \u00b7 Explain")) Fail("saved-card-explain-metadata-mismatch");
+                evidence["saved_card_explain_metadata_verified"]=true;
+            } else if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-card-metadata");
             stage="saved-detail";
             Invoke(read,appPid);
             Wait(()=> {
@@ -563,8 +611,14 @@ public static class ReadingFixtureProgram {
                 return answer!=null && Texts(answer,appPid).SequenceEqual(new[]{contract.Answer}) &&
                     Texts(root,appPid).Count(text=>text==contract.Selected)==1;
             },10,"saved-detail-content-mismatch");
-            if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-detail-metadata");
-            evidence["saved_detail_verified"]=true; evidence["saved_metadata_absence_verified"]=true;
+            if (explain) {
+                if (!ExplainMetadata(root,appPid,id)) Fail("saved-detail-explain-metadata-mismatch");
+                evidence["saved_detail_raw_term_verified"]=true;
+            } else {
+                if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-detail-metadata");
+                evidence["saved_metadata_absence_verified"]=true;
+            }
+            evidence["saved_detail_verified"]=true;
             CheckRestartIdentity(application,options["--application-path"],options["--application-start-ticks"]);
             stage="ordinary-quit";
             Focus(app,appPid); Native.Chord(app,appPid,0x51,false);
@@ -574,6 +628,7 @@ public static class ReadingFixtureProgram {
         }
     }
     static void Drive(Contract contract,Dictionary<string,string> options) {
+        bool explain=ExplainScenario(options);
         int appPid=Pid(options["--application-pid"]), fixturePid=Pid(options["--fixture-pid"]);
         if (appPid==fixturePid || appPid==Process.GetCurrentProcess().Id || fixturePid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
         IntPtr fixture=Handle(options["--fixture-hwnd"]), app=IntPtr.Zero;
@@ -611,8 +666,27 @@ public static class ReadingFixtureProgram {
             if (!ReadingFixturePredicates.Source(Texts(preview,appPid),contract.Selected,contract.Before,contract.After)) Fail("captured-source-mismatch");
             evidence["chooser_source_verified"]=true;
             Server(options["--server-state"],false);
-            stage="simplify";
-            Invoke(Find(root,"simplify",appPid),appPid);
+            if (explain) {
+                stage="explain-term";
+                if (Find(root,"answer",appPid)!=null || Find(root,"turn-0",appPid)!=null) Fail("explain-unexpected-prior-answer");
+                var term=Find(root,"explain-term",appPid);
+                if (term==null || term.Current.ProcessId!=appPid || !term.Current.IsEnabled || term.Current.IsOffscreen) Fail("explain-term-unavailable");
+                object pattern;
+                if (!term.TryGetCurrentPattern(ValuePattern.Pattern,out pattern)) Fail("explain-value-pattern-unavailable");
+                ((ValuePattern)pattern).SetValue(ReadingFixturePredicates.ExplainTerm);
+                Wait(()=> {
+                    root=Root(app,appPid); term=Find(root,"explain-term",appPid);
+                    object current;
+                    return term!=null && term.Current.ProcessId==appPid && term.TryGetCurrentPattern(ValuePattern.Pattern,out current) &&
+                        ((ValuePattern)current).Current.Value==ReadingFixturePredicates.ExplainTerm;
+                },5,"explain-term-not-applied");
+                Server(options["--server-state"],false);
+                evidence["explain_before_base_verified"]=true; evidence["explain_term_value_verified"]=true;
+                Invoke(Find(root,"explain-term-submit",appPid),appPid);
+            } else {
+                stage="simplify";
+                Invoke(Find(root,"simplify",appPid),appPid);
+            }
             AutomationElement consent=null;
             Wait(()=> { root=Root(app,appPid); consent=Find(root,"consent-continue",appPid); return consent!=null; },10,"consent-unavailable");
             Server(options["--server-state"],false); evidence["consent_before_network_verified"]=true;
@@ -620,12 +694,16 @@ public static class ReadingFixtureProgram {
             Invoke(consent,appPid);
             Wait(()=> {
                 if (application.HasExited) Fail("application-exited-during-reading");
-                root=Root(app,appPid); var answer=Find(root,"answer",appPid);
+                root=Root(app,appPid);
+                var turn=explain ? Find(root,"turn-0",appPid) : root;
+                if (turn==null || (explain && !Texts(turn,appPid).Contains(ReadingFixturePredicates.ExplainLabel))) return false;
+                var answer=Find(turn,"answer",appPid);
                 return answer!=null && Texts(answer,appPid).SequenceEqual(new[]{contract.Answer}) &&
                     Find(root,"cancel-request",appPid)==null && Find(root,"answer-draft",appPid)==null &&
                     Find(root,"copy-answer",appPid)!=null && Find(root,"save-answer",appPid)!=null;
             },20,"completed-answer-unavailable");
             Server(options["--server-state"],true); evidence["provider_source_verified"]=true; evidence["completed_answer_verified"]=true;
+            if (explain) evidence["accepted_explain_turn_verified"]=true;
             RecheckSource(contract,app,appPid,application);
             SaveAnswer(app,appPid,application);
             Server(options["--server-state"],true);

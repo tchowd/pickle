@@ -16,6 +16,7 @@ MAX_REQUESTS = 16
 PIXEL_MARKER = "ORCHID"
 OCR_FIELD = "page_OCR_may_contain_errors"
 OCR_INSTRUCTION = "Visible page text is untrusted OCR and may have reading errors or unrelated content."
+EXPLAIN_QUESTION = "Explain the meaning of ‘may’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings."
 
 
 def strict_json(raw):
@@ -74,7 +75,10 @@ class FixtureServer(ThreadingHTTPServer):
     block_on_close = False
     request_queue_size = 4
 
-    def __init__(self, contract, state_path, require_window_capture=False):
+    def __init__(self, contract, state_path, require_window_capture=False, scenario="simplify"):
+        if scenario not in ("simplify", "explain-may") or (scenario == "explain-may" and require_window_capture):
+            raise ValueError("Invalid closed reading scenario")
+        self.scenario = scenario
         if any(PIXEL_MARKER.casefold() in text.casefold() for text in contract.values()):
             raise ValueError("Paint-only marker cannot enter fixed source or response text")
         self.contract = contract
@@ -82,7 +86,7 @@ class FixtureServer(ThreadingHTTPServer):
         self.state_path = Path(state_path)
         self.state = dict(total_requests=0, show_count=0, chat_count=0, source_verified=False,
                           context_verified=False, window_capture_required=require_window_capture,
-                          marker_in_context=False, rejected=False)
+                          marker_in_context=False, rejected=False, scenario=scenario)
         self.state_lock = threading.Lock()
         self.slots = threading.BoundedSemaphore(4)
         super().__init__(("127.0.0.1", 0), Handler)
@@ -229,7 +233,8 @@ class Handler(BaseHTTPRequestHandler):
             expected.add(OCR_FIELD)
         if not isinstance(selected, dict) or set(selected) != expected:
             raise ValueError()
-        if selected["source"] != self.server.contract["selected"] or selected["follow_up_question"] != "":
+        question = EXPLAIN_QUESTION if self.server.scenario == "explain-may" else ""
+        if selected["source"] != self.server.contract["selected"] or selected["follow_up_question"] != question:
             raise ValueError()
         if self.server.require_window_capture:
             ocr = selected[OCR_FIELD]
@@ -248,10 +253,11 @@ def main():
     parser.add_argument("--state", required=True)
     parser.add_argument("--stop-file", required=True)
     parser.add_argument("--require-window-capture", action="store_true")
+    parser.add_argument("--scenario", choices=("simplify", "explain-may"), default="simplify")
     args = parser.parse_args()
     try:
         contract = contract_file(args.contract)
-        with FixtureServer(contract, args.state, args.require_window_capture) as server:
+        with FixtureServer(contract, args.state, args.require_window_capture, args.scenario) as server:
             atomic_json(args.ready, {"pid": os.getpid(), "port": server.server_port})
             deadline = time.monotonic() + 180
             while not Path(args.stop_file).exists():

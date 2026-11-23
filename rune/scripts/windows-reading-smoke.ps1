@@ -88,7 +88,7 @@ function Get-PickleReadingHash([byte[]]$Bytes) {
   return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes))
 }
 
-function Read-PickleReadingSavedEntry([string]$Path,$Contract,[string]$FixtureExecutable,[DateTimeOffset]$NotBefore) {
+function Read-PickleReadingSavedEntry([string]$Path,$Contract,[string]$FixtureExecutable,[DateTimeOffset]$NotBefore,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
   $bytes=Read-PickleReadingBytes $Path 32768
   $expected=@('id','recorded_at','app_name','app_id','action','question','passage','answer','quality','chart','reference')
   # JsonDocument preserves string types across PowerShell 7 versions (newer
@@ -120,23 +120,28 @@ function Read-PickleReadingSavedEntry([string]$Path,$Contract,[string]$FixtureEx
   $id=[guid]::Empty
   $date=[DateTimeOffset]::MinValue
   if (![guid]::TryParseExact($entry.id,'D',[ref]$id) -or $id -eq [guid]::Empty -or $id.ToString('D') -cne $entry.id -or $entry.id[14] -cne '4' -or $entry.id[19] -cnotin @('8','9','a','b') -or $entry.recorded_at -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|\+00:00)$' -or ![DateTimeOffset]::TryParse($entry.recorded_at,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$date) -or $date -lt $NotBefore.AddSeconds(-2) -or $date -gt [DateTimeOffset]::UtcNow.AddSeconds(2)) { throw 'The owned saved entry identity or recording time was invalid.' }
-  if ($entry.passage -cne $Contract.selected -or $entry.answer -cne $Contract.answer -or $entry.action -cne 'Simplify' -or $entry.app_name -cne [IO.Path]::GetFileNameWithoutExtension($FixtureExecutable) -or !$entry.app_id.StartsWith('windows:',[StringComparison]::Ordinal) -or $entry.app_id -cne $entry.app_id.ToLowerInvariant()) { throw 'The saved entry did not match the accepted owned answer.' }
+  $expectedAction=if ($Scenario -ceq 'explain-may') { 'Explain' } else { 'Simplify' }
+  if ($entry.passage -cne $Contract.selected -or $entry.answer -cne $Contract.answer -or $entry.action -cne $expectedAction -or $entry.app_name -cne [IO.Path]::GetFileNameWithoutExtension($FixtureExecutable) -or !$entry.app_id.StartsWith('windows:',[StringComparison]::Ordinal) -or $entry.app_id -cne $entry.app_id.ToLowerInvariant()) { throw 'The saved entry did not match the accepted owned answer.' }
   $observed=Get-PickleReadingCanonicalExecutable $entry.app_id.Substring(8)
   $fixture=Get-PickleReadingCanonicalExecutable $FixtureExecutable
   if (![string]::Equals($observed,$fixture,[StringComparison]::OrdinalIgnoreCase)) { throw 'The saved source executable was not the owned fixture.' }
-  foreach ($key in @('question','quality','chart','reference')) {
-    if ($null -ne $entry.$key) { throw 'The Local Simplify fixture unexpectedly persisted optional metadata.' }
+  if ($Scenario -ceq 'explain-may') {
+    if ($entry.question -isnot [string] -or $entry.question -cne 'may') { throw 'The accepted Explain request did not preserve its exact raw term.' }
+  } elseif ($null -ne $entry.question) { throw 'The Local Simplify fixture unexpectedly persisted a question.' }
+  foreach ($key in @('quality','chart','reference')) {
+    if ($null -ne $entry.$key) { throw 'The Local fixture unexpectedly persisted unrelated optional metadata.' }
   }
   return [pscustomobject]@{Entry=$entry;Bytes=$bytes;Hash=(Get-PickleReadingHash $bytes)}
 }
 
-function Initialize-PickleReadingArchives($Snapshot,$Contract,[string]$FixtureExecutable) {
+function Initialize-PickleReadingArchives($Snapshot,$Contract,[string]$FixtureExecutable,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
   # Original archives stay only in the private verified backup. The app and
   # native driver may see only empty/synthetic stores throughout both launches.
   $owned=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
   $Snapshot | Add-Member -NotePropertyName OwnedArchives -NotePropertyValue $owned
   $Snapshot | Add-Member -NotePropertyName FixtureContract -NotePropertyValue $Contract
   $Snapshot | Add-Member -NotePropertyName FixtureExecutable -NotePropertyValue $FixtureExecutable
+  $Snapshot | Add-Member -NotePropertyName ReadingScenario -NotePropertyValue $Scenario
   $Snapshot | Add-Member -NotePropertyName SaveNotBefore -NotePropertyValue ([DateTimeOffset]::UtcNow)
   $Snapshot | Add-Member -NotePropertyName SaveAdmitted -NotePropertyValue $false
   $empty=[Text.UTF8Encoding]::new($false).GetBytes('{"version":1,"data":[]}')
@@ -171,7 +176,7 @@ function Assert-PickleReadingOwnedArchives($Snapshot) {
     if ($hash -ceq $guard.SeedHash) { continue }
     if (!$guard.Seeded -and $Snapshot.Hashes.ContainsKey($name) -and $hash -ceq $Snapshot.Hashes[$name]) { continue }
     if ($name -cne 'bookmarks.json' -or !$Snapshot.SaveAdmitted) { throw 'An archive contains unexpected data; profile restoration was refused.' }
-    $saved=Read-PickleReadingSavedEntry $path $Snapshot.FixtureContract $Snapshot.FixtureExecutable $Snapshot.SaveNotBefore
+    $saved=Read-PickleReadingSavedEntry $path $Snapshot.FixtureContract $Snapshot.FixtureExecutable $Snapshot.SaveNotBefore -Scenario $Snapshot.ReadingScenario
     if ($saved.Hash -cne $hash) { throw 'The saved archive changed during validation; profile restoration was refused.' }
   }
 }
@@ -403,7 +408,8 @@ function Build-PickleReadingFixture([string]$Directory) {
   return $executable
 }
 
-function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture) {
+function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
+  if ($Scenario -ceq 'explain-may' -and ($RequireWindowCapture -or $Configuration -cne 'debug')) { throw 'The Explain acceptance is an additional unsigned debug screen-off scenario only.' }
   if (!$IsWindows) { throw 'Native installed reading acceptance runs only on Windows; no app was launched.' }
   $actualData=Get-PickleReadingDataDirectory
   if (![string]::Equals([IO.Path]::GetFullPath($DataDirectory),[IO.Path]::GetFullPath($actualData),[StringComparison]::OrdinalIgnoreCase)) { throw 'Reading acceptance requires the app actual KnownFolder data directory, not an environment override.' }
@@ -411,7 +417,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
   $work=Join-Path ([IO.Path]::GetTempPath()) ('pickle-reading-'+[guid]::NewGuid().ToString('N'))
   Assert-PickleReadingDirectory $work | Out-Null
   New-Item -ItemType Directory -Path $work | Out-Null
-  $evidence=[ordered]@{schema=1;test='windows-installed-reading-workflow';passed=$false;configuration=$Configuration;require_window_capture=[bool]$RequireWindowCapture;marker_in_context=$false;driver=$null;restart_driver=$null;server=$null;fixture=$null;application_pid=$null;restart_application_pid=$null;ordinary_exit=$false;lease_released=$false;control_removed=$false;restart_ordinary_exit=$false;restart_lease_released=$false;restart_control_removed=$false;saved_archive_verified=$false;saved_archive_unchanged=$false;profile_restored=$false;owned_children_stopped=$false;owned_processes=[ordered]@{};cleanup_categories=@()}
+  $evidence=[ordered]@{schema=1;test='windows-installed-reading-workflow';passed=$false;configuration=$Configuration;scenario=$Scenario;require_window_capture=[bool]$RequireWindowCapture;marker_in_context=$false;driver=$null;restart_driver=$null;server=$null;fixture=$null;application_pid=$null;restart_application_pid=$null;ordinary_exit=$false;lease_released=$false;control_removed=$false;restart_ordinary_exit=$false;restart_lease_released=$false;restart_control_removed=$false;saved_archive_verified=$false;saved_archive_unchanged=$false;profile_restored=$false;owned_children_stopped=$false;owned_processes=[ordered]@{};cleanup_categories=@()}
   $applicationProcess=$null;$restartApplication=$null;$fixture=$null;$server=$null;$driver=$null;$restartDriver=$null;$snapshot=$null;$failure=$null;$stage='prepare'
   try {
     # If the supervising Core owner must be terminated, leave only the private
@@ -422,15 +428,16 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $evidence.original_profile_files=$snapshot.Hashes.Count
     $contractPath=Join-Path $work 'contract.json';$serverState=Join-Path $work 'server-state.json';$serverReady=Join-Path $work 'server-ready.json';$fixtureReady=Join-Path $work 'fixture-ready.json';$serverStop=Join-Path $work 'server-stop';$driverEvidence=Join-Path $work 'driver-evidence.json'
     $contract=[ordered]@{before='BEFORE owned fixture marker is outside the selected paragraph.';selected='Café shuttle service may reduce waiting on this route in dry weather. Evidence from one route does not establish reliability in rain.';after='AFTER owned fixture marker is outside the selected paragraph.';answer='The Café shuttle may reduce waiting on this route in dry weather. This does not establish reliability in rain.'}
+    if ($Scenario -ceq 'explain-may') { $contract.answer='Here, “may” means the shuttle might help on this one route in dry weather; the passage does not establish reliability in rain.' }
     [IO.File]::WriteAllText($contractPath,($contract | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
     $stage='compile-owned-fixture'
     $fixtureExe=Build-PickleReadingFixture $work
     $stage='isolate-owned-archives'
-    Initialize-PickleReadingArchives $snapshot $contract $fixtureExe
+    Initialize-PickleReadingArchives $snapshot $contract $fixtureExe -Scenario $Scenario
     $stage='start-owned-provider'
     $python=(Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $provider=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'windows-reading-provider.py'))
-    $providerArguments=@($provider,'--contract',$contractPath,'--ready',$serverReady,'--state',$serverState,'--stop-file',$serverStop)
+    $providerArguments=@($provider,'--contract',$contractPath,'--ready',$serverReady,'--state',$serverState,'--stop-file',$serverStop,'--scenario',$Scenario)
     if ($RequireWindowCapture) { $providerArguments+= '--require-window-capture' }
     $server=Start-PickleReadingChild $python $providerArguments
     $serverInfo=Wait-PickleReadingReady $server $python $serverReady
@@ -448,11 +455,16 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $applicationProcess=Start-PickleReadingChild $Application @()
     $evidence.application_pid=$applicationProcess.Id
     Invoke-PickleReadingIdentityBarrier { Assert-PickleReadingChild $applicationProcess $Application } ([DateTime]::UtcNow.AddSeconds(10))
-    $driver=Start-PickleReadingChild $fixtureExe @('drive','--contract',$contractPath,'--application-pid',([string]$applicationProcess.Id),'--fixture-pid',([string]$fixture.Id),'--fixture-hwnd',([string]$fixtureInfo.hwnd),'--server-state',$serverState,'--evidence',$driverEvidence)
+    $driver=Start-PickleReadingChild $fixtureExe @('drive','--contract',$contractPath,'--application-pid',([string]$applicationProcess.Id),'--fixture-pid',([string]$fixture.Id),'--fixture-hwnd',([string]$fixtureInfo.hwnd),'--server-state',$serverState,'--evidence',$driverEvidence,'--scenario',$Scenario)
     $snapshot.SaveAdmitted=$true
     if (!$driver.WaitForExit(90000) -or $driver.ExitCode -ne 0) { throw 'Owned reading driver failed or exceeded 90 seconds.' }
     $evidence.driver=Read-PickleReadingJson $driverEvidence
-    if ($evidence.driver.schema -ne 1 -or $evidence.driver.test -cne 'windows-server-installed-selection-reading' -or $evidence.driver.pid -ne $driver.Id -or $evidence.driver.passed -ne $true) { throw 'Owned reading driver did not attest its checks.' }
+    if ($evidence.driver.schema -ne 1 -or $evidence.driver.test -cne 'windows-server-installed-selection-reading' -or $evidence.driver.scenario -cne $Scenario -or $evidence.driver.pid -ne $driver.Id -or $evidence.driver.passed -ne $true) { throw 'Owned reading driver did not attest its checks.' }
+    if ($Scenario -ceq 'explain-may') {
+      foreach ($attestation in @('explain_before_base_verified','explain_term_value_verified','accepted_explain_turn_verified')) {
+        if ($evidence.driver.$attestation -ne $true) { throw 'The owned Explain driver did not prove an accepted term request before any base answer.' }
+      }
+    }
     foreach ($attestation in @('initial_compose_ready','window_marker_painted','window_marker_absent_from_accessibility','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','completed_answer_verified','source_retained_verified','saved_answer_verified','ordinary_quit_verified')) {
       if ($evidence.driver.$attestation -ne $true) { throw 'Owned reading driver omitted a required attestation.' }
     }
@@ -466,7 +478,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $evidence.control_removed=$true
     $stage='verify-owned-saved-archive'
     $savedPath=Join-Path $DataDirectory 'bookmarks.json'
-    $saved=Read-PickleReadingSavedEntry $savedPath $contract $fixtureExe $snapshot.SaveNotBefore
+    $saved=Read-PickleReadingSavedEntry $savedPath $contract $fixtureExe $snapshot.SaveNotBefore -Scenario $Scenario
     $snapshot.OwnedArchives['bookmarks.json'].SavedHash=$saved.Hash
     Assert-PickleReadingOwnedArchives $snapshot
     $evidence.saved_archive_verified=$true
@@ -478,12 +490,16 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $evidence.restart_application_pid=$restartApplication.Id
     Invoke-PickleReadingIdentityBarrier { Assert-PickleReadingChild $restartApplication $Application } ([DateTime]::UtcNow.AddSeconds(10))
     $restartEvidence=Join-Path $work 'saved-driver-evidence.json'
-    $restartDriver=Start-PickleReadingChild $fixtureExe @('drive-saved','--contract',$contractPath,'--application-pid',([string]$restartApplication.Id),'--application-path',([IO.Path]::GetFullPath($Application)),'--application-start-ticks',([string]$restartApplication.StartTime.ToUniversalTime().Ticks),'--saved-entry',$privateEntry,'--evidence',$restartEvidence)
+    $restartDriver=Start-PickleReadingChild $fixtureExe @('drive-saved','--contract',$contractPath,'--application-pid',([string]$restartApplication.Id),'--application-path',([IO.Path]::GetFullPath($Application)),'--application-start-ticks',([string]$restartApplication.StartTime.ToUniversalTime().Ticks),'--saved-entry',$privateEntry,'--evidence',$restartEvidence,'--scenario',$Scenario)
     $stage='drive-restarted-saved-detail'
     if (!$restartDriver.WaitForExit(90000) -or $restartDriver.ExitCode -ne 0) { throw 'The owned saved-answer driver failed or exceeded 90 seconds.' }
     $evidence.restart_driver=Read-PickleReadingJson $restartEvidence
     if ($evidence.restart_driver.schema -ne 1 -or $evidence.restart_driver.test -cne 'windows-server-installed-saved-reading' -or $evidence.restart_driver.pid -ne $restartDriver.Id -or $evidence.restart_driver.passed -ne $true -or $evidence.restart_driver.application_pid -ne $restartApplication.Id -or $evidence.restart_driver.app_exit_code -ne 0 -or $evidence.restart_driver.saved_entry_id_sha256 -cne $evidence.saved_entry_id_sha256.ToLowerInvariant() -or $evidence.restart_driver.source_sha256 -cne (Get-PickleReadingHash ([Text.Encoding]::UTF8.GetBytes($contract.selected))).ToLowerInvariant() -or $evidence.restart_driver.answer_sha256 -cne (Get-PickleReadingHash ([Text.Encoding]::UTF8.GetBytes($contract.answer))).ToLowerInvariant()) { throw 'The saved-answer driver omitted its exact owned-entry or process proof.' }
-    foreach ($attestation in @('application_identity_verified','saved_entry_verified','saved_detail_verified','saved_metadata_absence_verified','ordinary_quit_verified')) {
+    $restartAttestations=@('application_identity_verified','saved_entry_verified','saved_detail_verified','ordinary_quit_verified')
+    if ($Scenario -ceq 'explain-may') { $restartAttestations+=@('saved_card_explain_metadata_verified','saved_detail_raw_term_verified') }
+    else { $restartAttestations+='saved_metadata_absence_verified' }
+    if ($evidence.restart_driver.scenario -cne $Scenario) { throw 'The restarted driver scenario differed.' }
+    foreach ($attestation in $restartAttestations) {
       if ($evidence.restart_driver.$attestation -ne $true) { throw 'The saved-answer driver omitted a required restart attestation.' }
     }
     if (!$restartApplication.WaitForExit(10000) -or $restartApplication.ExitCode -ne 0) { throw 'The restarted installed app did not quit normally.' }
@@ -493,11 +509,12 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     if ((Test-Path -LiteralPath (Join-Path $DataDirectory 'instance.json')) -or (Test-Path -LiteralPath (Join-Path $DataDirectory 'BrowserBridge/connection.json'))) { throw 'The restarted app retained a private control descriptor.' }
     $evidence.restart_control_removed=$true
     $stage='verify-restarted-archive'
-    $reopened=Read-PickleReadingSavedEntry $savedPath $contract $fixtureExe $snapshot.SaveNotBefore
+    $reopened=Read-PickleReadingSavedEntry $savedPath $contract $fixtureExe $snapshot.SaveNotBefore -Scenario $Scenario
     if ($reopened.Hash -cne $saved.Hash) { throw 'The saved archive bytes changed during ordinary restart and reading.' }
     Assert-PickleReadingOwnedArchives $snapshot
     $evidence.saved_archive_unchanged=$true
     $evidence.server=Read-PickleReadingJson $serverState
+    if ($evidence.server.scenario -cne $Scenario) { throw 'The owned provider scenario differed.' }
     if ($evidence.server.total_requests -ne 2 -or $evidence.server.show_count -ne 1 -or $evidence.server.chat_count -ne 1 -or $evidence.server.source_verified -ne $true -or $evidence.server.context_verified -isnot [bool] -or !$evidence.server.context_verified -or $evidence.server.window_capture_required -isnot [bool] -or $evidence.server.window_capture_required -ne [bool]$RequireWindowCapture -or $evidence.server.marker_in_context -isnot [bool] -or $evidence.server.marker_in_context -ne [bool]$RequireWindowCapture -or $evidence.server.rejected -ne $false) { throw 'Owned provider did not attest the exact source, expected OCR boundary and request contract.' }
     $evidence.marker_in_context=[bool]$evidence.server.marker_in_context
   } catch {

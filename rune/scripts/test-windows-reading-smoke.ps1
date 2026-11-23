@@ -25,15 +25,15 @@ try {
   $readingCall=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-PickleReadingCore'},$true))
   $reportCall=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Assert-PicklePackageReadingEvidence'},$true))
   $oldProbe=@($packageAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-PickleWindowCaptureProbe'},$true))
-  if ($predicate.Count -ne 1 -or $readingCall.Count -ne 1 -or $reportCall.Count -ne 1 -or $oldProbe.Count) { throw 'The actual reading gate or explicit-only legacy capture diagnostic wiring differed.' }
+  if ($predicate.Count -ne 1 -or $readingCall.Count -ne 2 -or $reportCall.Count -ne 2 -or $oldProbe.Count) { throw 'The actual reading gates or explicit-only legacy capture diagnostic wiring differed.' }
   . ([scriptblock]::Create($predicate[0].Extent.Text))
   $actualPackageCalls=[scriptblock]::Create($readingCall[0].Extent.Text+"`n"+$reportCall[0].Extent.Text)
   foreach ($required in @($false,$true)) {
-    $validReport=[ordered]@{schema=1;test='windows-installed-reading-workflow';configuration='release';require_window_capture=$required;marker_in_context=$required;
+    $validReport=[ordered]@{schema=1;test='windows-installed-reading-workflow';configuration='release';scenario='simplify';require_window_capture=$required;marker_in_context=$required;
       passed=$true;ordinary_exit=$true;lease_released=$true;control_removed=$true;restart_ordinary_exit=$true;restart_lease_released=$true;restart_control_removed=$true;saved_archive_verified=$true;saved_archive_unchanged=$true;profile_restored=$true;owned_children_stopped=$true;
-      server=@{total_requests=2;show_count=1;chat_count=1;source_verified=$true;context_verified=$true;window_capture_required=$required;marker_in_context=$required;rejected=$false};
-      driver=@{passed=$true;initial_compose_ready=$true;fixture_selection_verified=$true;chooser_source_verified=$true;consent_before_network_verified=$true;provider_source_verified=$true;source_retained_verified=$true;window_marker_painted=$true;window_marker_absent_from_accessibility=$true;completed_answer_verified=$true;saved_answer_verified=$true;ordinary_quit_verified=$true;app_exit_code=0};
-      restart_driver=@{passed=$true;application_identity_verified=$true;saved_entry_verified=$true;saved_detail_verified=$true;saved_metadata_absence_verified=$true;ordinary_quit_verified=$true;app_exit_code=0}}
+      server=@{scenario='simplify';total_requests=2;show_count=1;chat_count=1;source_verified=$true;context_verified=$true;window_capture_required=$required;marker_in_context=$required;rejected=$false};
+      driver=@{scenario='simplify';passed=$true;initial_compose_ready=$true;fixture_selection_verified=$true;chooser_source_verified=$true;consent_before_network_verified=$true;provider_source_verified=$true;source_retained_verified=$true;window_marker_painted=$true;window_marker_absent_from_accessibility=$true;completed_answer_verified=$true;saved_answer_verified=$true;ordinary_quit_verified=$true;app_exit_code=0};
+      restart_driver=@{scenario='simplify';passed=$true;application_identity_verified=$true;saved_entry_verified=$true;saved_detail_verified=$true;saved_metadata_absence_verified=$true;ordinary_quit_verified=$true;app_exit_code=0}}
     $report=($validReport | ConvertTo-Json -Depth 5 | ConvertFrom-Json)
     & {
       param($Calls,$Report,[bool]$Mode)
@@ -51,7 +51,7 @@ try {
       if (!$observed.called -or !$observed.read -or $observed.required -ne $Mode) { throw 'The actual package call skipped its identity capture requirement or report gate.' }
     } $actualPackageCalls $report $required
     foreach ($change in @(
-      @('schema',1.0),@('schema','1'),@('passed',$false),@('require_window_capture',(!$required)),@('marker_in_context',(!$required)),@('profile_restored',$false),@('saved_archive_verified',$false),@('saved_archive_unchanged',$false),@('restart_ordinary_exit',$false),
+      @('schema',1.0),@('schema','1'),@('scenario','explain-may'),@('passed',$false),@('require_window_capture',(!$required)),@('marker_in_context',(!$required)),@('profile_restored',$false),@('saved_archive_verified',$false),@('saved_archive_unchanged',$false),@('restart_ordinary_exit',$false),
       @('server.window_capture_required',(!$required)),@('server.marker_in_context',(!$required)),@('server.context_verified',$false),@('server.total_requests',1),@('server.chat_count',2),@('server.rejected',$true),
       @('driver.passed',$false),@('driver.fixture_selection_verified',$false),@('driver.chooser_source_verified',$false),@('driver.consent_before_network_verified',$false),@('driver.source_retained_verified',$false),@('driver.window_marker_painted',$false),@('driver.window_marker_absent_from_accessibility',$false),@('driver.saved_answer_verified',$false),@('driver.app_exit_code',1),
       @('restart_driver.passed',$false),@('restart_driver.saved_detail_verified',$false),@('restart_driver.saved_metadata_absence_verified',$false),@('restart_driver.app_exit_code',1),@('marker_in_context','true')
@@ -66,6 +66,57 @@ try {
     Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $missing $required 'release' }
     if (!$required) { Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $report $true 'release' } }
   }
+  # The additional scenario must be guarded and executed before any browser
+  # extension gate. Execute the exact package block with synthetic reports;
+  # neither the installer nor app/native UI runs in these portable tests.
+  $explainBlock=$readingCall[1].Parent.Parent.Parent
+  if ($explainBlock -isnot [Management.Automation.Language.IfStatementAst] -or
+      $explainBlock.Extent.EndOffset -ge $packageAst.Extent.Text.IndexOf(". (Join-Path `$PSScriptRoot 'windows-extension-smoke.ps1')")) { throw 'The additional Explain gate must precede extension setup.' }
+  $explainReport=$validReport | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+  $explainReport.configuration='debug';$explainReport.require_window_capture=$false;$explainReport.marker_in_context=$false
+  foreach ($node in @($explainReport,$explainReport.server,$explainReport.driver,$explainReport.restart_driver)) { $node.scenario='explain-may' }
+  $explainReport.server.window_capture_required=$false;$explainReport.server.marker_in_context=$false
+  foreach ($key in @('explain_before_base_verified','explain_term_value_verified','accepted_explain_turn_verified')) { $explainReport.driver | Add-Member $key $true }
+  foreach ($key in @('saved_card_explain_metadata_verified','saved_detail_raw_term_verified')) { $explainReport.restart_driver | Add-Member $key $true }
+  $explainReport.restart_driver.PSObject.Properties.Remove('saved_metadata_absence_verified')
+  Assert-PicklePackageReadingEvidence $explainReport $false 'debug' -Scenario 'explain-may'
+  foreach ($key in @('explain_before_base_verified','explain_term_value_verified','accepted_explain_turn_verified')) {
+    $explainReport.driver.$key=$false
+    Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $explainReport $false 'debug' -Scenario 'explain-may' }
+    $explainReport.driver.$key=$true
+  }
+  foreach ($key in @('saved_card_explain_metadata_verified','saved_detail_raw_term_verified')) {
+    $explainReport.restart_driver.$key=$false
+    Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $explainReport $false 'debug' -Scenario 'explain-may' }
+    $explainReport.restart_driver.$key=$true
+  }
+  Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $explainReport $false 'debug' }
+  Assert-ReadingRefused { Assert-PicklePackageReadingEvidence $explainReport $true 'debug' -Scenario 'explain-may' }
+  foreach ($mode in @(@('debug',$false,'true','github-hosted',$true),@('debug',$true,'true','github-hosted',$false),@('release',$false,'true','github-hosted',$false),
+      @('debug',$false,$null,$null,$false),@('debug',$false,'false','github-hosted',$false),@('debug',$false,'true','self-hosted',$false),
+      @('debug',$false,'true',$null,$false),@('debug',$false,'TRUE','github-hosted',$false))) {
+    & {
+      param($Block,$Report,$Mode)
+      $Configuration=$Mode[0];$hasIdentity=$Mode[1];$application='owned-app';$supportRoot='owned-profile'
+      $observed=[pscustomobject]@{called=$false;read=$false}
+      function Invoke-PickleReadingCore($Application,$DataDirectory,$EvidencePath,$Configuration,[string]$Scenario,[switch]$RequireWindowCapture) {
+        if ($Scenario -cne 'explain-may' -or $RequireWindowCapture -or $Application -cne 'owned-app' -or $DataDirectory -cne 'owned-profile' -or $Configuration -cne 'debug' -or $EvidencePath -notlike '*unpackaged-debug-native-smoke-explain-reading.json') { throw 'The package Explain invocation differed.' }
+        $observed.called=$true
+      }
+      function Read-PickleReadingJson($Path) { if (!$observed.called) { throw 'Explain evidence read before actual workflow.' };$observed.read=$true;return $Report }
+      $priorActions=[Environment]::GetEnvironmentVariable('GITHUB_ACTIONS','Process')
+      $priorRunner=[Environment]::GetEnvironmentVariable('RUNNER_ENVIRONMENT','Process')
+      try {
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS',$Mode[2],'Process')
+        [Environment]::SetEnvironmentVariable('RUNNER_ENVIRONMENT',$Mode[3],'Process')
+        & ([scriptblock]::Create($Block.Extent.Text))
+        if ($observed.called -ne $Mode[4] -or $observed.read -ne $Mode[4]) { throw 'The additional Explain run was skipped or admitted for the wrong package or runner.' }
+      } finally {
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS',$priorActions,'Process')
+        [Environment]::SetEnvironmentVariable('RUNNER_ENVIRONMENT',$priorRunner,'Process')
+      }
+    } $explainBlock $explainReport $mode
+  }
   foreach ($case in @(
     @('', '""'),
     @('plain', '"plain"'),
@@ -76,20 +127,21 @@ try {
     if ((ConvertTo-PickleReadingWindowsArgument $case[0]) -cne $case[1]) { throw 'Desktop-compatible Windows argv quoting changed a structured argument.' }
   }
   $coreStart=New-PickleReadingCoreStart 'C:\Program Files\PowerShell\7\pwsh.exe' 'C:\owned script\reading.ps1' 'C:\owned app\PickleRune.exe' 'C:\owned data\' 'C:\owned evidence\reading.json' 'release'
-  if ($coreStart.UseShellExecute -or $coreStart.FileName -cne 'C:\Program Files\PowerShell\7\pwsh.exe' -or $coreStart.Arguments -notlike '*"-Configuration" "release"' -or $coreStart.Arguments -notlike '*"C:\owned data\\"*') { throw 'The reading delegation must preserve its exact executable and named paths without a shell.' }
+  if ($coreStart.UseShellExecute -or $coreStart.FileName -cne 'C:\Program Files\PowerShell\7\pwsh.exe' -or $coreStart.Arguments -notlike '*"-Configuration" "release" "-Scenario" "simplify"' -or $coreStart.Arguments -notlike '*"C:\owned data\\"*') { throw 'The reading delegation must preserve its exact executable and named paths without a shell.' }
   $captureStart=New-PickleReadingCoreStart 'C:\Program Files\PowerShell\7\pwsh.exe' 'C:\owned script\reading.ps1' 'C:\owned app\PickleRune.exe' 'C:\owned data\' 'C:\owned evidence\reading.json' 'release' -RequireWindowCapture
   if ($coreStart.Arguments -like '*RequireWindowCapture*' -or $captureStart.Arguments -cne ($coreStart.Arguments+' "-RequireWindowCapture"')) { throw 'Only explicitly required window capture may reach the delegated acceptance.' }
   # Exercise the same Arguments transport with only a non-UI, test-owned script.
   $argumentProbe=Join-Path $root 'owned argv probe.ps1';$argumentResult=Join-Path $root 'owned argv result.json'
-  [IO.File]::WriteAllText($argumentProbe,'param([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture); [IO.File]::WriteAllText($EvidencePath,(@($Application,$DataDirectory,$Configuration,[bool]$RequireWindowCapture) | ConvertTo-Json -Compress))')
+  [IO.File]::WriteAllText($argumentProbe,'param([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[string]$Scenario); [IO.File]::WriteAllText($EvidencePath,(@($Application,$DataDirectory,$Configuration,[bool]$RequireWindowCapture,$Scenario) | ConvertTo-Json -Compress))')
   $powerShell=(Get-Process -Id $PID).Path
   $probeApplication='C:\owned Café app\PickleRune.exe';$probeData='C:\owned data\'
-  foreach ($requireCapture in @($false,$true)) {
-    $argumentProcess=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $argumentProbe $probeApplication $probeData $argumentResult 'release' -RequireWindowCapture:$requireCapture))
+  foreach ($transportCase in @(@($false,'simplify'),@($true,'simplify'),@($false,'explain-may'))) {
+    $requireCapture=$transportCase[0];$scenario=$transportCase[1]
+    $argumentProcess=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $argumentProbe $probeApplication $probeData $argumentResult 'release' -RequireWindowCapture:$requireCapture -Scenario $scenario))
     try {
       if (!$argumentProcess.WaitForExit(10000) -or $argumentProcess.ExitCode -ne 0) { throw 'The owned structured-argument transport probe failed.' }
       $transport=Read-PickleReadingJson $argumentResult
-      if ($transport.Count -ne 4 -or $transport[0] -cne $probeApplication -or $transport[1] -cne $probeData -or $transport[2] -cne 'release' -or $transport[3] -isnot [bool] -or $transport[3] -ne $requireCapture) { throw 'The delegate transport changed Unicode, spaces, trailing slashes, configuration or the required capture switch.' }
+      if ($transport.Count -ne 5 -or $transport[0] -cne $probeApplication -or $transport[1] -cne $probeData -or $transport[2] -cne 'release' -or $transport[3] -isnot [bool] -or $transport[3] -ne $requireCapture -or $transport[4] -cne $scenario) { throw 'The delegate transport changed Unicode, spaces, trailing slashes, configuration, capture switch or closed scenario.' }
     } finally { if (!$argumentProcess.HasExited) { $argumentProcess.Kill();$argumentProcess.WaitForExit(10000) | Out-Null };$argumentProcess.Dispose() }
   }
   $primary='Original controlled startup failure.'
@@ -173,6 +225,7 @@ try {
   # Both originally present and originally absent archives must be restored
   # only after their current bytes are proven to be our exact test outputs.
   foreach ($originalArchives in @($false,$true)) {
+    foreach ($savedScenario in @('simplify','explain-may')) {
     $case=Join-Path $root ('saved-'+[guid]::NewGuid().ToString('N'))
     $profile=Join-Path $case 'data';New-Item -ItemType Directory -Path $profile -Force | Out-Null
     $caseSettings=Join-Path $profile 'settings.json'
@@ -186,19 +239,30 @@ try {
     [IO.File]::WriteAllText($fixturePath,'Owned path fixture only; never executed.')
     $contract=[ordered]@{selected='Café controlled selected passage.';answer='The controlled answer retains Café.'}
     $savedSnapshot=Save-PickleReadingProfile $profile (Join-Path $case 'backup')
-    Initialize-PickleReadingArchives $savedSnapshot $contract $fixturePath
+    Initialize-PickleReadingArchives $savedSnapshot $contract $fixturePath -Scenario $savedScenario
     if ($savedSnapshot.OwnedArchives.Count -ne 2 -or [IO.File]::ReadAllText($bookmarks) -cne '{"version":1,"data":[]}' -or [IO.File]::ReadAllText($caseHistory) -cne '{"version":1,"data":[]}') { throw 'Original archives were not isolated before any saved-answer UI.' }
     Assert-PickleReadingOwnedArchives $savedSnapshot
     [IO.File]::WriteAllText($caseSettings,'Temporary fixture preferences.')
     $recorded=if ($originalArchives) { [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffffff',[Globalization.CultureInfo]::InvariantCulture)+'00+00:00' } else { [DateTimeOffset]::UtcNow.ToString('o') }
     $entry=[ordered]@{id=[guid]::NewGuid().ToString('D');recorded_at=$recorded;app_name='ReadingFixture';app_id=('windows:'+$fixturePath.ToLowerInvariant());action='Simplify';question=$null;passage=$contract.selected;answer=$contract.answer;quality=$null;chart=$null;reference=$null}
+    if ($savedScenario -ceq 'explain-may') { $entry.action='Explain';$entry.question='may' }
     $archive=[ordered]@{version=1;data=@($entry)}
     $validSaved=[Text.UTF8Encoding]::new($false).GetBytes(($archive | ConvertTo-Json -Depth 8 -Compress))
     Write-PickleReadingAtomic $bookmarks $validSaved
     Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
     if ([IO.File]::ReadAllText($caseSettings) -cne 'Temporary fixture preferences.') { throw 'Unadmitted Save output caused partial restoration.' }
     $savedSnapshot.SaveAdmitted=$true
-    $actual=Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore
+    $actual=Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore -Scenario $savedScenario
+    if ($savedScenario -ceq 'explain-may') {
+      Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore }
+      foreach ($badQuestion in @($null,'MAY','Explain “may”',"Explain the meaning of ‘may’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings.")) {
+        $badEntry=[ordered]@{};foreach ($key in $entry.Keys) { $badEntry[$key]=$entry[$key] };$badEntry.question=$badQuestion
+        Write-PickleReadingAtomic $bookmarks ([Text.UTF8Encoding]::new($false).GetBytes((@{version=1;data=@($badEntry)} | ConvertTo-Json -Depth 8 -Compress)))
+        Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore -Scenario $savedScenario }
+        Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+      }
+      Write-PickleReadingAtomic $bookmarks $validSaved
+    } else { Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore -Scenario 'explain-may' } }
     if ($actual.Entry.id -cne $entry.id -or $actual.Entry.recorded_at -cne $recorded -or $actual.Entry.passage -cne $contract.selected -or $actual.Entry.answer -cne $contract.answer -or $actual.Hash -cne (Get-PickleReadingHash $validSaved)) { throw 'The actual saved Entry or full seven/nine-digit timestamp was not preserved exactly.' }
     $savedSnapshot.OwnedArchives['bookmarks.json'].SavedHash=$actual.Hash
     Assert-PickleReadingOwnedArchives $savedSnapshot
@@ -219,7 +283,7 @@ try {
       $changed=[ordered]@{};foreach ($key in $entry.Keys) { $changed[$key]=$entry[$key] };$changed[$change.key]=$change.value
       $bad=[Text.UTF8Encoding]::new($false).GetBytes((@{version=1;data=@($changed)} | ConvertTo-Json -Depth 8 -Compress))
       Write-PickleReadingAtomic $bookmarks $bad
-      Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore }
+      Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore -Scenario $savedScenario }
       Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
       if ((Get-PickleReadingHash ([IO.File]::ReadAllBytes($bookmarks))) -cne (Get-PickleReadingHash $bad) -or [IO.File]::ReadAllText($caseSettings) -cne 'Temporary fixture preferences.') { throw 'Archive refusal mutated an existing or newly created profile file.' }
     }
@@ -228,16 +292,17 @@ try {
       Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
     }
     $encoded=[Text.Encoding]::UTF8.GetString($validSaved)
-    foreach ($badJson in @($encoded.Replace('"version":1,','"version":1,"version":1,'),$encoded.Replace('"version":1,','"version":1.0,'),$encoded.Replace('"action":"Simplify"','"action":"Simplify","action":"Simplify"'))) {
+    $encodedAction='"action":"'+$entry.action+'"'
+    foreach ($badJson in @($encoded.Replace('"version":1,','"version":1,"version":1,'),$encoded.Replace('"version":1,','"version":1.0,'),$encoded.Replace($encodedAction,$encodedAction+','+$encodedAction))) {
       Write-PickleReadingAtomic $bookmarks ([Text.Encoding]::UTF8.GetBytes($badJson))
-      Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore }
+      Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore -Scenario $savedScenario }
     }
     Write-PickleReadingAtomic $bookmarks $validSaved
     # A second valid-looking record must not replace the entry already verified
     # after ordinary quit, even though its fixed source/answer are identical.
     $changedId=[ordered]@{};foreach ($key in $entry.Keys) { $changedId[$key]=$entry[$key] };$changedId.id=[guid]::NewGuid().ToString('D')
     Write-PickleReadingAtomic $bookmarks ([Text.UTF8Encoding]::new($false).GetBytes((@{version=1;data=@($changedId)} | ConvertTo-Json -Depth 8 -Compress)))
-    $null=Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore
+    $null=Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore -Scenario $savedScenario
     Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
     Write-PickleReadingAtomic $bookmarks ([Text.Encoding]::UTF8.GetBytes('{"version":1,"data":[]}'))
     Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
@@ -254,6 +319,7 @@ try {
     if ($originalArchives) {
       if ([IO.File]::ReadAllText($bookmarks) -cne 'Original bookmark bytes, never rendered.' -or [IO.File]::ReadAllText($caseHistory) -cne 'Original history bytes, never rendered.') { throw 'Existing original archives were not restored byte exactly.' }
     } elseif ((Test-Path -LiteralPath $bookmarks) -or (Test-Path -LiteralPath $caseHistory)) { throw 'Only verified synthetic new archives should have been removed.' }
+    }
   }
   if ($IsWindows) {
     # Assign only a dedicated subprocess; the native declaration itself is safe
