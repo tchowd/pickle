@@ -22,6 +22,11 @@ use std::{
 // explicitly false on child-frame documents. No window-class/name heuristic.
 // https://chromium.googlesource.com/chromium/src.git/+/refs/heads/main/docs/accessibility/browser/custom_uia_properties.md
 const WEB_ROOT: GUID = GUID::from_u128(0xc5fdc049_4eec_4299_87bb_ca9fc718a681);
+// Match selection's established per-request cap. UIA's connection and
+// transaction settings bound individual provider requests, not this complete
+// operation; every request is still clipped to the remaining total budget.
+// https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation2-put_connectiontimeout
+const UIA_REQUEST_TIMEOUT_MS: u32 = 500;
 struct ComGuard;
 impl Drop for ComGuard {
     fn drop(&mut self) {
@@ -138,8 +143,15 @@ impl DocumentReader {
             unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|_| unavailable())?;
         let settings: IUIAutomation2 = ui.cast().map_err(|_| unavailable())?;
-        unsafe { settings.SetConnectionTimeout(80) }.map_err(|_| unavailable())?;
-        unsafe { settings.SetTransactionTimeout(80) }.map_err(|_| unavailable())?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || cancel.is_cancelled() {
+            return Err(unavailable());
+        }
+        let timeout = remaining
+            .as_millis()
+            .clamp(1, u128::from(UIA_REQUEST_TIMEOUT_MS)) as u32;
+        unsafe { settings.SetConnectionTimeout(timeout) }.map_err(|_| unavailable())?;
+        unsafe { settings.SetTransactionTimeout(timeout) }.map_err(|_| unavailable())?;
         let registrar: IUIAutomationRegistrar =
             unsafe { CoCreateInstance(&CUIAutomationRegistrar, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|_| unavailable())?;
@@ -219,7 +231,9 @@ impl DocumentReader {
             self.stage("budget-or-cancelled");
             return Err(unavailable());
         }
-        let millis = remaining.as_millis().clamp(1, 80) as u32;
+        let millis = remaining
+            .as_millis()
+            .clamp(1, u128::from(UIA_REQUEST_TIMEOUT_MS)) as u32;
         self.rpc(unsafe { self.settings.SetConnectionTimeout(millis) })?;
         self.rpc(unsafe { self.settings.SetTransactionTimeout(millis) })?;
         Ok(())
