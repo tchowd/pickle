@@ -1,6 +1,8 @@
 # Portable profile/HTTP fixtures; Windows additionally compiles/runs the non-UI self-test.
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'windows-reading-smoke.ps1')
+. (Join-Path $PSScriptRoot 'windows-reading-delegate.ps1')
+. (Join-Path $PSScriptRoot 'windows-reading-containment.ps1')
 function Assert-ReadingRefused([scriptblock]$Operation) {
   $refused=$false;try { & $Operation } catch { $refused=$true }
   if (!$refused) { throw 'Expected reading-fixture safety refusal.' }
@@ -13,6 +15,28 @@ $root=Join-Path ([IO.Path]::GetTempPath()) ('pickle-reading-tests-'+[guid]::NewG
 if ($root.StartsWith('/var/') -and (Test-Path -LiteralPath '/private/var')) { $root='/private'+$root }
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
+  foreach ($case in @(
+    @('', '""'),
+    @('plain', '"plain"'),
+    @('C:\owned path\', '"C:\owned path\\"'),
+    @('owned"argument', '"owned\"argument"'),
+    @('owned\"argument', '"owned\\\"argument"')
+  )) {
+    if ((ConvertTo-PickleReadingWindowsArgument $case[0]) -cne $case[1]) { throw 'Desktop-compatible Windows argv quoting changed a structured argument.' }
+  }
+  $coreStart=New-PickleReadingCoreStart 'C:\Program Files\PowerShell\7\pwsh.exe' 'C:\owned script\reading.ps1' 'C:\owned app\PickleRune.exe' 'C:\owned data\' 'C:\owned evidence\reading.json' 'release'
+  if ($coreStart.UseShellExecute -or $coreStart.FileName -cne 'C:\Program Files\PowerShell\7\pwsh.exe' -or $coreStart.Arguments -notlike '*"-Configuration" "release"' -or $coreStart.Arguments -notlike '*"C:\owned data\\"*') { throw 'The reading delegation must preserve its exact executable and named paths without a shell.' }
+  # Exercise the same Arguments transport with only a non-UI, test-owned script.
+  $argumentProbe=Join-Path $root 'owned argv probe.ps1';$argumentResult=Join-Path $root 'owned argv result.json'
+  [IO.File]::WriteAllText($argumentProbe,'param([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration); [IO.File]::WriteAllText($EvidencePath,(@($Application,$DataDirectory,$Configuration) | ConvertTo-Json -Compress))')
+  $powerShell=(Get-Process -Id $PID).Path
+  $probeApplication='C:\owned Café app\PickleRune.exe';$probeData='C:\owned data\'
+  $argumentProcess=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $argumentProbe $probeApplication $probeData $argumentResult 'release'))
+  try {
+    if (!$argumentProcess.WaitForExit(10000) -or $argumentProcess.ExitCode -ne 0) { throw 'The owned structured-argument transport probe failed.' }
+    $transport=Read-PickleReadingJson $argumentResult
+    if ($transport.Count -ne 3 -or $transport[0] -cne $probeApplication -or $transport[1] -cne $probeData -or $transport[2] -cne 'release') { throw 'The delegate transport changed Unicode, spaces, trailing slashes or configuration.' }
+  } finally { if (!$argumentProcess.HasExited) { $argumentProcess.Kill();$argumentProcess.WaitForExit(10000) | Out-Null };$argumentProcess.Dispose() }
   $primary='Original controlled startup failure.'
   $cleanup=[ordered]@{cleanup_categories=@()}
   Add-PickleReadingCleanupFailure $cleanup ([ref]$primary) 'fixture-forced-stop'
@@ -92,6 +116,38 @@ try {
   try { foreach ($n in 1..513) { [IO.File]::WriteAllText((Join-Path $many "$n.txt"),'') };Assert-ReadingRefused { Get-PickleReadingFiles $data } }
   finally { Remove-Item -LiteralPath $many -Recurse }
   if ($IsWindows) {
+    # Assign only a dedicated subprocess; the native declaration itself is safe
+    # to compile in this parent without invoking any kernel entry point.
+    Initialize-PickleReadingDelegateJobType
+    $containmentProbe=Join-Path $root 'owned containment probe.ps1';$containmentReady=Join-Path $root 'owned containment ready.json'
+    [IO.File]::WriteAllText($containmentProbe,@'
+param([string]$Helpers,[string]$Ready,[string]$PowerShell)
+$ErrorActionPreference='Stop'
+. (Join-Path $Helpers 'windows-reading-smoke.ps1')
+. (Join-Path $Helpers 'windows-reading-containment.ps1')
+Initialize-PickleReadingDelegateContainment
+$child=Start-PickleReadingChild $PowerShell @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 120')
+[IO.File]::WriteAllText($Ready,(@{pid=$PID;child_pid=$child.Id;child_start_time_utc_ticks=$child.StartTime.ToUniversalTime().Ticks} | ConvertTo-Json -Compress))
+Start-Sleep -Seconds 120
+'@)
+    $containedOwner=Start-PickleReadingChild $powerShell @('-NoProfile','-NonInteractive','-File',$containmentProbe,'-Helpers',$PSScriptRoot,'-Ready',$containmentReady,'-PowerShell',$powerShell)
+    $containedChild=$null
+    try {
+      $containedInfo=Wait-PickleReadingReady $containedOwner $powerShell $containmentReady
+      $candidate=[Diagnostics.Process]::GetProcessById([int]$containedInfo.child_pid)
+      try {
+        # Retain its OS handle before checking creation time and executable.
+        # An unrelated process that reused this PID is never cleanup-owned.
+        $null=$candidate.Handle
+        if ($candidate.StartTime.ToUniversalTime().Ticks -ne [long]$containedInfo.child_start_time_utc_ticks) { throw 'The contained child PID no longer identifies the original owned process.' }
+        Invoke-PickleReadingIdentityBarrier { Assert-PickleReadingChild $candidate $powerShell } ([DateTime]::UtcNow.AddSeconds(10))
+        $containedChild=$candidate;$candidate=$null
+      } finally { if ($null -ne $candidate) { $candidate.Dispose() } }
+      $containedOwner.Kill()
+      if (!$containedOwner.WaitForExit(10000) -or !$containedChild.WaitForExit(10000)) { throw 'Closing the dedicated reading owner did not terminate its contained child.' }
+    } finally {
+      foreach ($child in @($containedChild,$containedOwner)) { if ($null -ne $child) { if (!$child.HasExited) { $child.Kill();$child.WaitForExit(10000) | Out-Null };$child.Dispose() } }
+    }
     $executable=Build-PickleReadingFixture $root
     $canonical=Get-PickleReadingCanonicalExecutable $executable
     $alias=Join-Path (Join-Path $root 'unused-parent') '../ReadingFixture.exe'

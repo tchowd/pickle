@@ -116,7 +116,9 @@ function Restore-PickleReadingProfile($Snapshot,[scriptblock]$IsIdle) {
 }
 
 function Initialize-PickleReadingWindowsPaths {
-  if (!$IsWindows) { throw 'Native reading acceptance runs only on Windows.' }
+  # Package/identity orchestration also calls this locator from inbox Desktop
+  # PowerShell. The Core-only workflow is delegated separately.
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Native reading acceptance runs only on Windows.' }
   if (!('PickleReadingKnownFolder' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -315,6 +317,10 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
   $evidence=[ordered]@{schema=1;test='windows-installed-reading-workflow';passed=$false;configuration=$Configuration;driver=$null;server=$null;fixture=$null;application_pid=$null;ordinary_exit=$false;lease_released=$false;control_removed=$false;profile_restored=$false;owned_children_stopped=$false;owned_processes=[ordered]@{};cleanup_categories=@()}
   $applicationProcess=$null;$fixture=$null;$server=$null;$driver=$null;$snapshot=$null;$failure=$null;$stage='prepare'
   try {
+    # If the supervising Core owner must be terminated, leave only the private
+    # recovery location in artifacts, never the saved profile contents.
+    $evidence.recovery_directory=$work
+    $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
     $snapshot=Save-PickleReadingProfile $DataDirectory (Join-Path $work 'profile-backup')
     $evidence.original_profile_files=$snapshot.Hashes.Count
     $contractPath=Join-Path $work 'contract.json';$serverState=Join-Path $work 'server-state.json';$serverReady=Join-Path $work 'server-ready.json';$fixtureReady=Join-Path $work 'fixture-ready.json';$serverStop=Join-Path $work 'server-stop';$driverEvidence=Join-Path $work 'driver-evidence.json'
@@ -409,6 +415,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
         if (!$evidence.failure) { $evidence.failure='The owned source fixture reported a controlled failure.' }
       }
       if (!$evidence.profile_restored) { $evidence.recovery_directory=$work }
+      else { $evidence.Remove('recovery_directory') }
       if ($failure -and !$evidence.failure) { $evidence.failure=$failure }
       $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
       foreach ($child in @($driver,$applicationProcess,$fixture,$server)) { if ($null -ne $child) { $child.Dispose() } }

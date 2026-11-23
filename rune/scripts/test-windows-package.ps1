@@ -87,8 +87,8 @@ $uninstaller = Join-Path $testDirectory 'Uninstall.exe'
 . (Join-Path $PSScriptRoot 'windows-reading-smoke.ps1')
 $supportRoot = Get-PickleReadingDataDirectory
 Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-startup-failure.json") $Configuration
-& (Join-Path $PSScriptRoot 'test-windows-reading-smoke.ps1')
-Assert-PickleInstalledReadingWorkflow $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json") $Configuration
+. (Join-Path $PSScriptRoot 'windows-reading-delegate.ps1')
+Invoke-PickleReadingCore $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json") $Configuration
 $background = $null
 try {
   $stdout = Join-Path $PWD "artifacts/$variant-$Configuration-native-stdout.log"
