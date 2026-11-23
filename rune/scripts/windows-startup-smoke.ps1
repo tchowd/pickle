@@ -63,6 +63,15 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+public sealed class PickleStartupChildEvidence {
+  public IntPtr Handle;
+  public uint ProcessId;
+  public IntPtr Parent;
+  public int Id;
+  public string ClassName;
+  public bool Visible;
+  public bool Enabled;
+}
 public sealed class PickleStartupDialogEvidence {
   public IntPtr Handle;
   public uint ProcessId;
@@ -75,15 +84,19 @@ public sealed class PickleStartupDialogEvidence {
   public bool ButtonVisible;
   public bool ButtonEnabled;
   public bool ButtonHasExpectedParent;
+  public PickleStartupChildEvidence[] Children = new PickleStartupChildEvidence[0];
+  public int RejectedProcessChildren;
+  public bool InventoryTruncated;
+  public int ButtonCandidates;
 }
 public static class PickleStartupDialogProbe {
   delegate bool WindowCallback(IntPtr window, IntPtr data);
   [DllImport("user32.dll")] static extern bool EnumWindows(WindowCallback callback, IntPtr data);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, WindowCallback callback, IntPtr data);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
   [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
-  [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr window, int id);
   [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr window);
   [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr window);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr window, StringBuilder title, int capacity);
@@ -94,7 +107,20 @@ public static class PickleStartupDialogProbe {
     return actual==expected && visible && String.Equals(title,ExpectedTitle,StringComparison.Ordinal) && String.Equals(className,"#32770",StringComparison.Ordinal);
   }
   public static bool EligibleButton(uint actual, uint expected, bool visible, bool enabled, int id, string className, bool correctParent) {
-    return actual==expected && visible && enabled && id==1 && correctParent && String.Equals(className,"Button",StringComparison.OrdinalIgnoreCase);
+    return actual==expected && visible && enabled && id>0 && id<=0xffff && correctParent && String.Equals(className,"Button",StringComparison.OrdinalIgnoreCase);
+  }
+  public static PickleStartupChildEvidence SoleButton(PickleStartupChildEvidence[] children, IntPtr parent, uint expected, bool truncated) {
+    PickleStartupChildEvidence selected=null;
+    if (truncated) return null;
+    foreach (var child in children) {
+      if (!EligibleButton(child.ProcessId,expected,child.Visible,child.Enabled,child.Id,child.ClassName,child.Parent==parent)) continue;
+      if (selected!=null) return null;
+      selected=child;
+    }
+    return selected;
+  }
+  public static bool Ready(PickleStartupDialogEvidence dialog, uint expected) {
+    return dialog!=null && !dialog.InventoryTruncated && dialog.ButtonCandidates==1 && dialog.ButtonHandle!=IntPtr.Zero && EligibleButton(dialog.ButtonProcessId,expected,dialog.ButtonVisible,dialog.ButtonEnabled,dialog.ButtonId,dialog.ButtonClass,dialog.ButtonHasExpectedParent);
   }
   static PickleStartupDialogEvidence Read(IntPtr window, uint expected) {
     uint owner; GetWindowThreadProcessId(window,out owner);
@@ -102,10 +128,28 @@ public static class PickleStartupDialogProbe {
     var title=new StringBuilder(256); GetWindowTextW(window,title,title.Capacity);
     var name=new StringBuilder(256); GetClassNameW(window,name,name.Capacity);
     if (!Eligible(owner,expected,true,title.ToString(),name.ToString())) return null;
-    IntPtr button=GetDlgItem(window,1);
-    uint buttonOwner; GetWindowThreadProcessId(button,out buttonOwner);
-    var buttonClass=new StringBuilder(256); GetClassNameW(button,buttonClass,buttonClass.Capacity);
-    return new PickleStartupDialogEvidence { Handle=window,ProcessId=owner,Title=title.ToString(),ClassName=name.ToString(),ButtonHandle=button,ButtonProcessId=buttonOwner,ButtonId=GetDlgCtrlID(button),ButtonClass=buttonClass.ToString(),ButtonVisible=IsWindowVisible(button),ButtonEnabled=IsWindowEnabled(button),ButtonHasExpectedParent=GetParent(button)==window };
+    var dialog=new PickleStartupDialogEvidence { Handle=window,ProcessId=owner,Title=title.ToString(),ClassName=name.ToString() };
+    var children=new List<PickleStartupChildEvidence>();
+    int visited=0;
+    // EnumChildWindows includes nested descendants. Record only this PID's
+    // controls, and require a direct parent match before selecting any action.
+    EnumChildWindows(window,delegate(IntPtr child, IntPtr data) {
+      if (++visited>32) { dialog.InventoryTruncated=true; return false; }
+      uint childOwner; GetWindowThreadProcessId(child,out childOwner);
+      if (childOwner!=expected) { dialog.RejectedProcessChildren++; return true; }
+      var childClass=new StringBuilder(128); GetClassNameW(child,childClass,childClass.Capacity);
+      children.Add(new PickleStartupChildEvidence { Handle=child,ProcessId=childOwner,Parent=GetParent(child),Id=GetDlgCtrlID(child),ClassName=childClass.ToString(),Visible=IsWindowVisible(child),Enabled=IsWindowEnabled(child) });
+      return true;
+    },IntPtr.Zero);
+    dialog.Children=children.ToArray();
+    foreach (var child in dialog.Children) {
+      if (EligibleButton(child.ProcessId,expected,child.Visible,child.Enabled,child.Id,child.ClassName,child.Parent==window)) dialog.ButtonCandidates++;
+    }
+    var button=SoleButton(dialog.Children,window,expected,dialog.InventoryTruncated);
+    if (button!=null) {
+      dialog.ButtonHandle=button.Handle;dialog.ButtonProcessId=button.ProcessId;dialog.ButtonId=button.Id;dialog.ButtonClass=button.ClassName;dialog.ButtonVisible=button.Visible;dialog.ButtonEnabled=button.Enabled;dialog.ButtonHasExpectedParent=true;
+    }
+    return dialog;
   }
   public static PickleStartupDialogEvidence[] Inspect(uint expected) {
     var found=new List<PickleStartupDialogEvidence>();
@@ -118,11 +162,11 @@ public static class PickleStartupDialogProbe {
     return found.ToArray();
   }
   public static bool Dismiss(IntPtr window, uint expected) {
-    // Recheck both the exact dialog and its real IDOK button. WM_COMMAND's
+    // Recheck both the exact dialog and its sole real action button. WM_COMMAND's
     // control notification requires the source control HWND in lParam; zero
     // describes a menu command, not BN_CLICKED from this button.
     var dialog=Read(window,expected);
-    return dialog!=null && dialog.ButtonHandle!=IntPtr.Zero && EligibleButton(dialog.ButtonProcessId,expected,dialog.ButtonVisible,dialog.ButtonEnabled,dialog.ButtonId,dialog.ButtonClass,dialog.ButtonHasExpectedParent) && PostMessageW(window,0x111,new UIntPtr(1),dialog.ButtonHandle);
+    return Ready(dialog,expected) && PostMessageW(window,0x111,new UIntPtr((uint)dialog.ButtonId),dialog.ButtonHandle);
   }
   public static bool StillExists(IntPtr window, uint expected) {
     uint owner; GetWindowThreadProcessId(window,out owner);
@@ -130,6 +174,13 @@ public static class PickleStartupDialogProbe {
   }
 }
 '@
+}
+
+function ConvertTo-PickleDialogEvidence($Dialog) {
+  $children = @($Dialog.Children | ForEach-Object {
+    [ordered]@{handle=('0x'+$_.Handle.ToInt64().ToString('x'));process_id=$_.ProcessId;parent=('0x'+$_.Parent.ToInt64().ToString('x'));id=$_.Id;class=$_.ClassName;visible=$_.Visible;enabled=$_.Enabled;direct_parent=($_.Parent -eq $Dialog.Handle)}
+  })
+  return [ordered]@{process_id=$Dialog.ProcessId;handle=('0x'+$Dialog.Handle.ToInt64().ToString('x'));title=$Dialog.Title;class=$Dialog.ClassName;button=[ordered]@{handle=('0x'+$Dialog.ButtonHandle.ToInt64().ToString('x'));process_id=$Dialog.ButtonProcessId;id=$Dialog.ButtonId;class=$Dialog.ButtonClass;visible=$Dialog.ButtonVisible;enabled=$Dialog.ButtonEnabled;correct_parent=$Dialog.ButtonHasExpectedParent};children=$children;rejected_process_children=$Dialog.RejectedProcessChildren;inventory_truncated=$Dialog.InventoryTruncated;button_candidates=$Dialog.ButtonCandidates}
 }
 
 function Assert-PickleInstalledStartupFailure([string]$Application, [string]$DataDirectory, [string]$EvidencePath, [string]$Configuration) {
@@ -149,17 +200,25 @@ function Assert-PickleInstalledStartupFailure([string]$Application, [string]$Dat
     $evidence.process_id = $process.Id
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     $dialog = $null
+    $ready = $false
     while ([DateTime]::UtcNow -lt $deadline) {
       $process.Refresh()
       if ($process.HasExited) { throw "The installed process exited before its native error dialog (status $($process.ExitCode))." }
       if (![string]::Equals([IO.Path]::GetFullPath($process.MainModule.FileName),[IO.Path]::GetFullPath($Application),[StringComparison]::OrdinalIgnoreCase)) { throw 'The startup-failure process does not own the expected installed executable.' }
       $dialogs = @([PickleStartupDialogProbe]::Inspect([uint32]$process.Id))
       if ($dialogs.Count -gt 1) { throw 'The owned startup failure displayed more than one matching error dialog.' }
-      if ($dialogs.Count -eq 1) { $dialog=$dialogs[0]; break }
+      if ($dialogs.Count -eq 1) {
+        $dialog=$dialogs[0]
+        $evidence.dialog = ConvertTo-PickleDialogEvidence $dialog
+        if ([PickleStartupDialogProbe]::Ready($dialog,[uint32]$process.Id)) { $ready=$true; break }
+      }
       Start-Sleep -Milliseconds 100
     }
     if (!$dialog) { throw 'The installed app did not show its exact native startup-failure dialog within 30 seconds.' }
-    $evidence.dialog = [ordered]@{process_id=$dialog.ProcessId;handle=('0x'+$dialog.Handle.ToInt64().ToString('x'));title=$dialog.Title;class=$dialog.ClassName;button=[ordered]@{handle=('0x'+$dialog.ButtonHandle.ToInt64().ToString('x'));process_id=$dialog.ButtonProcessId;id=$dialog.ButtonId;class=$dialog.ButtonClass;visible=$dialog.ButtonVisible;enabled=$dialog.ButtonEnabled;correct_parent=$dialog.ButtonHasExpectedParent}}
+    if (!$ready) {
+      $evidence.failure_stage = 'dialog-control-readiness'
+      throw 'The exact owned fatal dialog had no unique safe action button within the original 30-second startup deadline. See its bounded child-control inventory.'
+    }
     # This maintenance command only inspects the lock; it must not send Reopen.
     # The executable remains loaded until acknowledgement, so NSIS must still
     # observe its running guard even though all background writers have stopped.
@@ -168,6 +227,7 @@ function Assert-PickleInstalledStartupFailure([string]$Application, [string]$Dat
     if ($process.HasExited) { throw 'The startup-failure process exited before its dialog was acknowledged.' }
     $stillVisible = @([PickleStartupDialogProbe]::Inspect([uint32]$process.Id) | Where-Object { $_.Handle -eq $dialog.Handle })
     if ($stillVisible.Count -ne 1) { throw 'The exact owned fatal dialog did not remain visible during its running-lease probe.' }
+    $evidence.dialog = ConvertTo-PickleDialogEvidence $stillVisible[0]
     if ($dialogLease -ne 10) { throw 'The visible native fatal dialog released its instance lease before acknowledgement.' }
     $evidence.lease_held_during_dialog = $true
     $exitTimer = [Diagnostics.Stopwatch]::StartNew()
@@ -188,7 +248,7 @@ function Assert-PickleInstalledStartupFailure([string]$Application, [string]$Dat
     if (!$process.HasExited) {
       if (!$evidence.dialog_closed) {
         $evidence.failure_stage = 'dialog-acknowledgement'
-        throw 'The exact owned fatal dialog still existed after its IDOK notification; the process did not exit within 15 seconds.'
+        throw 'The exact owned fatal dialog still existed after its owned-button notification; the process did not exit within 15 seconds.'
       }
       $evidence.failure_stage = 'post-dialog-exit'
       throw 'The exact owned fatal dialog closed, but the installed application did not exit within 15 seconds.'
@@ -208,12 +268,20 @@ function Assert-PickleInstalledStartupFailure([string]$Application, [string]$Dat
     $evidence.failure = $_.Exception.Message
     throw
   } finally {
-    if ($null -ne $process) {
-      $process.Refresh()
-      if (!$process.HasExited) { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
-      $process.Dispose()
+    try {
+      if ($null -ne $process) {
+        $process.Refresh()
+        if (!$process.HasExited) { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
+        $process.Dispose()
+      }
+      if ((Test-Path -LiteralPath $marker -PathType Leaf) -and [IO.File]::ReadAllText($marker) -ceq $markerText) { Remove-Item -LiteralPath $marker }
+    } catch {
+      $evidence.passed=$false
+      $evidence.cleanup_failure='The owned startup-smoke process or marker could not be cleaned up.'
+      throw
+    } finally {
+      # Keep the bounded owned-control inventory even if failure cleanup fails.
+      $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
     }
-    if ((Test-Path -LiteralPath $marker -PathType Leaf) -and [IO.File]::ReadAllText($marker) -ceq $markerText) { Remove-Item -LiteralPath $marker }
-    $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
   }
 }

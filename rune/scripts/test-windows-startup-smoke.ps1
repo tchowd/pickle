@@ -42,6 +42,11 @@ try {
   $second = New-PickleFailureProcessStart $file
   if ($start.FileName -cne $file -or $start.Arguments -cne '--sample' -or $start.UseShellExecute -or $start.EnvironmentVariables['RUNE_GPU_BACKEND'] -cne 'wgpu' -or $start.EnvironmentVariables['WGPU_ADAPTER_NAME'] -notmatch '^Pickle-CI-intentionally-missing-adapter-[0-9a-f]{32}$' -or $start.EnvironmentVariables['WGPU_ADAPTER_NAME'] -ceq $second.EnvironmentVariables['WGPU_ADAPTER_NAME']) { throw 'The failure child must have its own exact executable/arguments and unique impossible adapter.' }
   if ($backend -cne [Environment]::GetEnvironmentVariable('RUNE_GPU_BACKEND','Process') -or $adapter -cne [Environment]::GetEnvironmentVariable('WGPU_ADAPTER_NAME','Process')) { throw 'Failure setup changed the parent environment.' }
+  $ownedChild=[pscustomobject]@{Handle=[IntPtr]101;ProcessId=12;Parent=[IntPtr]100;Id=2;ClassName='Button';Visible=$true;Enabled=$true;Caption='caption-must-never-be-exported'}
+  $ownedDialog=[pscustomobject]@{Handle=[IntPtr]100;ProcessId=12;Title='Pickle could not open the reader';ClassName='#32770';ButtonHandle=[IntPtr]101;ButtonProcessId=12;ButtonId=2;ButtonClass='Button';ButtonVisible=$true;ButtonEnabled=$true;ButtonHasExpectedParent=$true;Children=@($ownedChild);RejectedProcessChildren=0;InventoryTruncated=$false;ButtonCandidates=1}
+  $inventory=ConvertTo-PickleDialogEvidence $ownedDialog
+  $inventoryJson=$inventory | ConvertTo-Json -Depth 6
+  if ($inventory.children.Count -ne 1 -or $inventory.children[0].id -ne 2 -or $inventory.children[0].parent -cne '0x64' -or !$inventory.children[0].direct_parent -or $inventoryJson.Contains('caption-must-never-be-exported')) { throw 'The owned control evidence must retain structural metadata without exporting captions.' }
   if ($IsWindows) {
     Initialize-PickleStartupDialogProbe
     if (![PickleStartupDialogProbe]::Eligible(12,12,$true,'Pickle could not open the reader','#32770')) { throw 'Expected the exact owned native dialog predicate to match.' }
@@ -53,14 +58,28 @@ try {
       @(12,12,$true,'Pickle could not open the reader','Window')
     )) { if ([PickleStartupDialogProbe]::Eligible($case[0],$case[1],$case[2],$case[3],$case[4])) { throw 'A non-owned, hidden or incorrect native window passed the startup dialog predicate.' } }
     if (![PickleStartupDialogProbe]::EligibleButton(12,12,$true,$true,1,'Button',$true)) { throw 'The exact owned enabled IDOK button must be accepted.' }
+    if (![PickleStartupDialogProbe]::EligibleButton(12,12,$true,$true,2,'Button',$true)) { throw 'The sole owned MessageBox action uses its actual positive control ID.' }
     foreach ($case in @(
       @(13,12,$true,$true,1,'Button',$true),
       @(12,12,$false,$true,1,'Button',$true),
       @(12,12,$true,$false,1,'Button',$true),
-      @(12,12,$true,$true,2,'Button',$true),
+      @(12,12,$true,$true,0,'Button',$true),
+      @(12,12,$true,$true,65536,'Button',$true),
       @(12,12,$true,$true,1,'Static',$true),
       @(12,12,$true,$true,1,'Button',$false)
-    )) { if ([PickleStartupDialogProbe]::EligibleButton($case[0],$case[1],$case[2],$case[3],$case[4],$case[5],$case[6])) { throw 'A wrong-process, hidden, disabled or incorrect native control passed the IDOK predicate.' } }
+    )) { if ([PickleStartupDialogProbe]::EligibleButton($case[0],$case[1],$case[2],$case[3],$case[4],$case[5],$case[6])) { throw 'A wrong-process, hidden, disabled or incorrect native control passed the action-button predicate.' } }
+    $parent=[IntPtr]100
+    $first=[PickleStartupChildEvidence]::new()
+    $first.Handle=[IntPtr]101;$first.ProcessId=12;$first.Parent=$parent;$first.Id=2;$first.ClassName='Button';$first.Visible=$true;$first.Enabled=$true
+    $second=[PickleStartupChildEvidence]::new()
+    $second.Handle=[IntPtr]102;$second.ProcessId=12;$second.Parent=$parent;$second.Id=3;$second.ClassName='Button';$second.Visible=$true;$second.Enabled=$true
+    if ([PickleStartupDialogProbe]::SoleButton([PickleStartupChildEvidence[]]@(),$parent,12,$false)) { throw 'An empty child inventory cannot select a button.' }
+    if ([PickleStartupDialogProbe]::SoleButton([PickleStartupChildEvidence[]]@($first),$parent,12,$true)) { throw 'A truncated inventory cannot select a button.' }
+    if ([PickleStartupDialogProbe]::SoleButton([PickleStartupChildEvidence[]]@($first,$second),$parent,12,$false)) { throw 'Multiple eligible buttons cannot select an action.' }
+    $selected=[PickleStartupDialogProbe]::SoleButton([PickleStartupChildEvidence[]]@($first),$parent,12,$false)
+    if (!$selected -or $selected.Handle -ne $first.Handle -or $selected.Id -ne 2) { throw 'The sole verified owned control must retain its actual HWND and control ID.' }
+    $first.Parent=[IntPtr]99
+    if ([PickleStartupDialogProbe]::SoleButton([PickleStartupChildEvidence[]]@($first),$parent,12,$false)) { throw 'A nested or unrelated child cannot replace the direct-parent action.' }
   }
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }
 Write-Host 'Startup smoke fixtures passed: retained-data changes/links/size/count refused, transient descriptors excluded, child environment isolated; no app launched.'
