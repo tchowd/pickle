@@ -110,6 +110,7 @@ pub fn without_preamble(text: &str) -> String {
         Regex::new(r"(?i)^(?:(?:sure|certainly|of course|okay|ok|absolutely)[,.!]?\s+)?(?:here(?:'s|’s|\s+is|\s+are)|below\s+is|the\s+following\s+is)\b.*\b(?:explanation|version|summary|simplification|breakdown|rewrite|overview|answer|response|example)s?\b").unwrap()
     });
     if let Some((first, rest)) = text.trim_start().split_once('\n') {
+        let first = first.strip_suffix('\r').unwrap_or(first);
         let line = first.trim_matches(|c| "*_#> \t".contains(c));
         if !rest.trim().is_empty()
             && line.chars().count() <= 200

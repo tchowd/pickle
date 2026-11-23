@@ -7,12 +7,12 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 /// Escaping every text event prevents a stripped link's label from becoming fresh markup.
 pub fn safe_answer_markup(source: &str) -> String {
     let mut output = String::new();
-    let mut lists: Vec<Option<u64>> = Vec::new();
+    let mut lists: Vec<Option<(u64, char)>> = Vec::new();
     let mut quote_depth = 0usize;
     let mut code: Option<String> = None;
     // No optional extensions: tables, math, task controls, footnotes and strike-through
     // are not an implicit expansion of Pickle's presentation contract.
-    for event in Parser::new_ext(source, Options::empty()) {
+    for (event, range) in Parser::new_ext(source, Options::empty()).into_offset_iter() {
         if let Some(body) = code.as_mut() {
             match event {
                 Event::End(TagEnd::CodeBlock) => {
@@ -51,14 +51,17 @@ pub fn safe_answer_markup(source: &str) -> String {
                     if lists.is_empty() {
                         blank_line(&mut output);
                     }
-                    lists.push(start);
+                    // CommonMark distinguishes `1.` and `1)` lists. Emitting
+                    // both as `.` merges adjacent lists on the next parse and
+                    // can silently renumber an explicit later start (e.g. 10).
+                    lists.push(start.map(|number| (number, ordered_delimiter(&source[range]))));
                 }
                 Tag::Item => {
                     line_break(&mut output);
                     output.push_str(&"  ".repeat(lists.len().saturating_sub(1)));
                     match lists.last_mut() {
-                        Some(Some(number)) => {
-                            output.push_str(&format!("{number}. "));
+                        Some(Some((number, delimiter))) => {
+                            output.push_str(&format!("{number}{delimiter} "));
                             *number = number.saturating_add(1);
                         }
                         _ => output.push_str("- "),
@@ -132,6 +135,17 @@ pub fn safe_answer_markup(source: &str) -> String {
 fn longest_backtick_run(text: &str) -> usize {
     text.split(|c| c != '`').map(str::len).max().unwrap_or(0)
 }
+fn ordered_delimiter(list_source: &str) -> char {
+    // The parser has already classified this exact source range as an ordered
+    // list. Inspect only its ASCII marker; no content becomes new markup.
+    list_source
+        .trim_start_matches([' ', '\t'])
+        .trim_start_matches(|ch: char| ch.is_ascii_digit())
+        .chars()
+        .next()
+        .filter(|delimiter| *delimiter == '.' || *delimiter == ')')
+        .unwrap_or('.')
+}
 fn blank_line(output: &mut String) {
     if !output.is_empty() {
         line_break(output);
@@ -166,9 +180,20 @@ pub fn answer_plain_text(source: &str) -> String {
     let safe = safe_answer_markup(source);
     let mut output = String::new();
     let mut lists: Vec<Option<u64>> = vec![];
+    let mut after_top_level_list = false;
     for event in Parser::new_ext(&safe, Options::empty()) {
+        let adjacent_list = after_top_level_list;
+        after_top_level_list = false;
         match event {
-            Event::Start(Tag::List(start)) => lists.push(start),
+            Event::Start(Tag::List(start)) => {
+                // Separate CommonMark lists retain independent numbering in
+                // the renderer, while readable copy joins adjacent list items
+                // with one newline, as for items within the same list.
+                if lists.is_empty() && adjacent_list && output.ends_with("\n\n") {
+                    output.pop();
+                }
+                lists.push(start);
+            }
             Event::Start(Tag::Item) => {
                 line_break(&mut output);
                 output.push_str(&"  ".repeat(lists.len().saturating_sub(1)));
@@ -198,6 +223,7 @@ pub fn answer_plain_text(source: &str) -> String {
                 lists.pop();
                 if lists.is_empty() {
                     blank_line(&mut output);
+                    after_top_level_list = true;
                 }
             }
             Event::End(TagEnd::Item) => line_break(&mut output),
