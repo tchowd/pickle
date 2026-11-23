@@ -113,6 +113,7 @@ jobs:
             rune/artifacts/notices-*/
             rune/artifacts/*capabilities.json
             rune/artifacts/*version.txt
+            rune/artifacts/*native-smoke*
             rune/artifacts/*native-*.log
             rune/artifacts/identity-ocr-result.json
             rune/artifacts/identity-ci-test-release-report.json
