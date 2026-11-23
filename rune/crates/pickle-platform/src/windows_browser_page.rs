@@ -3,18 +3,25 @@
 use super::*;
 use ::windows::{
     Win32::{
-        Foundation::{HWND, VARIANT_TRUE},
+        Foundation::{HANDLE, HWND, VARIANT_TRUE, WAIT_TIMEOUT},
         System::{
             Com::*,
+            Threading::{
+                OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
+            },
             Variant::{VT_BOOL, VariantClear},
         },
         UI::{Accessibility::*, WindowsAndMessaging::*},
     },
-    core::{GUID, HRESULT, Interface, w},
+    core::{GUID, HRESULT, Interface, PWSTR, w},
 };
 use std::{
     cell::RefCell,
     collections::VecDeque,
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    path::PathBuf,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -43,6 +50,42 @@ fn foreign_branch_is_outside(source_window: u64, node_pid: i32, branch: NativeBr
         && branch.owner == node_pid as u32
         && branch.root != 0
         && branch.root != source_window
+}
+fn foreign_anchor_is_bound(
+    source_window: u64,
+    node_pid: i32,
+    branch: NativeBranch,
+    executable_matches: bool,
+) -> bool {
+    source_window != 0
+        && node_pid > 0
+        && branch.window != 0
+        && branch.valid
+        && branch.owner == node_pid as u32
+        && branch.root == source_window
+        && executable_matches
+}
+fn pid_is_path_bound(
+    source_pid: u32,
+    node_pid: i32,
+    anchors: impl IntoIterator<Item = u32>,
+) -> bool {
+    node_pid > 0
+        && (source_pid == node_pid as u32 || anchors.into_iter().any(|pid| pid == node_pid as u32))
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct AnchorKey {
+    window: u64,
+    pid: u32,
+}
+struct NativeAnchor {
+    key: AnchorKey,
+    process: OwnedHandle,
+}
+type AnchorPath = Vec<Rc<NativeAnchor>>;
+struct DocumentBinding {
+    element: IUIAutomationElement,
+    anchors: AnchorPath,
 }
 
 // Both hosted fixture types own foreground windows. Serialize their native UI
@@ -168,7 +211,8 @@ struct DocumentReader {
     root: IUIAutomationElement,
     walker: IUIAutomationTreeWalker,
     property: UIA_PROPERTY_ID,
-    first_document: RefCell<Option<IUIAutomationElement>>,
+    first_document: RefCell<Option<DocumentBinding>>,
+    source_executable: PathBuf,
     deadline: Instant,
     cancel: CancellationToken,
     #[cfg(test)]
@@ -195,11 +239,23 @@ struct ReaderDiagnostic {
     post_rejection_metadata: bool,
     node_hwnd_owner_pid: u32,
     pruned_foreign_native_branches: usize,
+    anchored_foreign_native_branches: usize,
+    virtual_nodes_using_path_anchor: usize,
+    candidate_native_anchors: usize,
+    anchor_revalidations: usize,
+    document_pid: u32,
 }
 impl DocumentReader {
     fn new(source: &CapturedSelection, cancel: CancellationToken) -> Result<Self, PlatformError> {
         let deadline = Instant::now() + Duration::from_millis(1800);
         crate::windows_impl::validate_source_window(source)?;
+        let source_executable = std::fs::canonicalize(
+            source
+                .app_id
+                .strip_prefix("windows:")
+                .ok_or_else(unavailable)?,
+        )
+        .map_err(|_| unavailable())?;
         let ui: IUIAutomation =
             unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|_| unavailable())?;
@@ -240,6 +296,7 @@ impl DocumentReader {
             walker,
             property: UIA_PROPERTY_ID(property),
             first_document: RefCell::new(None),
+            source_executable,
             deadline,
             cancel,
             #[cfg(test)]
@@ -262,6 +319,11 @@ impl DocumentReader {
                 post_rejection_metadata: false,
                 node_hwnd_owner_pid: 0,
                 pruned_foreign_native_branches: 0,
+                anchored_foreign_native_branches: 0,
+                virtual_nodes_using_path_anchor: 0,
+                candidate_native_anchors: 0,
+                anchor_revalidations: 0,
+                document_pid: 0,
             }),
         })
     }
@@ -297,7 +359,8 @@ impl DocumentReader {
         let elapsed = (self.deadline - Duration::from_millis(1800)).elapsed();
         serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool,"nullable_navigation_ends":value.nullable_navigation_ends,
             "source_pid":self.source.source_pid,"root_pid":value.root_pid,"node_pid":value.node_pid,"queue_len":value.queue_len,"node_depth":value.node_depth,
-            "node_native_hwnd_present":value.node_native_hwnd_present,"node_hwnd_root_matches_source":value.node_hwnd_root_matches_source,"node_hwnd_owner_pid":value.node_hwnd_owner_pid,"node_executable_matches_source":value.node_executable_matches_source,"post_rejection_metadata":value.post_rejection_metadata,"pruned_foreign_native_branches":value.pruned_foreign_native_branches})
+            "node_native_hwnd_present":value.node_native_hwnd_present,"node_hwnd_root_matches_source":value.node_hwnd_root_matches_source,"node_hwnd_owner_pid":value.node_hwnd_owner_pid,"node_executable_matches_source":value.node_executable_matches_source,"post_rejection_metadata":value.post_rejection_metadata,"pruned_foreign_native_branches":value.pruned_foreign_native_branches,
+            "anchored_foreign_native_branches":value.anchored_foreign_native_branches,"virtual_nodes_using_path_anchor":value.virtual_nodes_using_path_anchor,"candidate_native_anchors":value.candidate_native_anchors,"anchor_revalidations":value.anchor_revalidations,"document_pid":value.document_pid})
     }
     #[cfg(test)]
     fn record_rejected_node(&self, node: &IUIAutomationElement, pid: i32, branch: NativeBranch) {
@@ -362,6 +425,9 @@ impl DocumentReader {
         self.stage("foreign-native-hwnd");
         self.check()?;
         let window = self.rpc(unsafe { node.CurrentNativeWindowHandle() })?;
+        self.branch_for_window(window)
+    }
+    fn branch_for_window(&self, window: HWND) -> Result<NativeBranch, PlatformError> {
         self.check()?;
         let valid = unsafe { IsWindow(Some(window)) }.as_bool();
         self.check()?;
@@ -377,6 +443,124 @@ impl DocumentReader {
             owner,
             root: root.0 as u64,
         })
+    }
+    fn anchor_executable_matches(&self, process: &OwnedHandle) -> Result<bool, PlatformError> {
+        self.stage("native-anchor-executable");
+        self.check()?;
+        let mut path = vec![0u16; 32768];
+        let mut size = path.len() as u32;
+        self.rpc(unsafe {
+            QueryFullProcessImageNameW(
+                HANDLE(process.as_raw_handle()),
+                PROCESS_NAME_WIN32,
+                PWSTR(path.as_mut_ptr()),
+                &mut size,
+            )
+        })?;
+        self.check()?;
+        let path = String::from_utf16(&path[..size as usize]).map_err(|_| unavailable())?;
+        let path = std::fs::canonicalize(path).map_err(|_| unavailable())?;
+        self.check()?;
+        Ok(path
+            .to_str()
+            .zip(self.source_executable.to_str())
+            .is_some_and(|(actual, expected)| actual.eq_ignore_ascii_case(expected)))
+    }
+    fn validate_anchor(&self, anchor: &NativeAnchor) -> Result<(), PlatformError> {
+        self.stage("native-anchor-alive");
+        self.check()?;
+        if unsafe { WaitForSingleObject(HANDLE(anchor.process.as_raw_handle()), 0) } != WAIT_TIMEOUT
+        {
+            return Err(unavailable());
+        }
+        self.stage("native-anchor-window");
+        let branch = self.branch_for_window(HWND(anchor.key.window as *mut _))?;
+        let matches = self.anchor_executable_matches(&anchor.process)?;
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.node_native_hwnd_present = Some(branch.window != 0);
+            value.node_hwnd_owner_pid = branch.owner;
+            value.node_hwnd_root_matches_source =
+                (branch.root != 0).then_some(Some(branch.root) == self.source.source_window);
+            value.node_executable_matches_source = Some(matches);
+            value
+        });
+        if !foreign_anchor_is_bound(
+            self.source.source_window.unwrap_or(0),
+            anchor.key.pid as i32,
+            branch,
+            matches,
+        ) {
+            self.stage("native-anchor-binding");
+            return Err(unavailable());
+        }
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.anchor_revalidations += 1;
+            value
+        });
+        Ok(())
+    }
+    fn bind_anchor(
+        &self,
+        node_pid: i32,
+        branch: NativeBranch,
+        path: &mut AnchorPath,
+    ) -> Result<(), PlatformError> {
+        self.stage("native-anchor-binding");
+        if !foreign_anchor_is_bound(
+            self.source.source_window.unwrap_or(0),
+            node_pid,
+            branch,
+            true,
+        ) {
+            return Err(unavailable());
+        }
+        let key = AnchorKey {
+            window: branch.window,
+            pid: node_pid as u32,
+        };
+        if let Some(anchor) = path.iter().find(|anchor| anchor.key == key) {
+            return self.validate_anchor(anchor);
+        }
+        self.stage("native-anchor-process");
+        self.check()?;
+        let process = self.rpc(unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                false,
+                key.pid,
+            )
+        })?;
+        let process = unsafe { OwnedHandle::from_raw_handle(process.0) };
+        let anchor = Rc::new(NativeAnchor { key, process });
+        self.validate_anchor(&anchor)?;
+        if path.len() >= 12 {
+            return Err(unavailable());
+        }
+        path.push(anchor);
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.anchored_foreign_native_branches += 1;
+            value
+        });
+        Ok(())
+    }
+    fn validate_path(&self, path: &AnchorPath) -> Result<(), PlatformError> {
+        self.stage("document-source-binding");
+        self.check()?;
+        crate::windows_impl::validate_source_window(&self.source)?;
+        self.check()?;
+        let window = HWND(self.source.source_window.unwrap_or(0) as *mut _);
+        if unsafe { GetForegroundWindow() } != window
+            || !unsafe { IsWindowVisible(window) }.as_bool()
+        {
+            return Err(unavailable());
+        }
+        for anchor in path {
+            self.validate_anchor(anchor)?;
+        }
+        self.check()
     }
     fn check(&self) -> Result<(), PlatformError> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -452,6 +636,13 @@ impl DocumentReader {
         Ok(supported)
     }
     fn observe(&self) -> Result<DocumentObservation, PlatformError> {
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.document_pid = 0;
+            value.candidate_native_anchors = 0;
+            value.root_pid = 0;
+            value
+        });
         self.stage("source-owner");
         self.check()?;
         crate::windows_impl::validate_source_window(&self.source)?;
@@ -501,10 +692,10 @@ impl DocumentReader {
             self.stage("focus-ancestry-limit");
             return Err(unavailable());
         }
-        let mut queue = VecDeque::from([(fresh, 0usize)]);
+        let mut queue = VecDeque::from([(fresh, 0usize, AnchorPath::new())]);
         let mut count = 1usize;
         let mut documents = Vec::new();
-        while let Some((node, depth)) = queue.pop_front() {
+        while let Some((node, depth, mut anchors)) = queue.pop_front() {
             self.stage("traversal-limit");
             #[cfg(test)]
             self.diagnostic.update(|mut value| {
@@ -534,6 +725,14 @@ impl DocumentReader {
             });
             if node_pid as u32 != self.source.source_pid {
                 let branch = self.native_branch(&node)?;
+                #[cfg(test)]
+                self.diagnostic.update(|mut value| {
+                    value.node_native_hwnd_present = Some(branch.window != 0);
+                    value.node_hwnd_owner_pid = branch.owner;
+                    value.node_hwnd_root_matches_source = (branch.root != 0)
+                        .then_some(Some(branch.root) == self.source.source_window);
+                    value
+                });
                 if foreign_branch_is_outside(
                     self.source.source_window.unwrap_or(0),
                     node_pid,
@@ -551,10 +750,24 @@ impl DocumentReader {
                     // https://learn.microsoft.com/uwp/api/windows.graphics.capture.graphicscapturesession.includesecondarywindows
                     continue;
                 }
-                self.stage("traversal-pid");
-                #[cfg(test)]
-                self.record_rejected_node(&node, node_pid, branch);
-                return Err(unavailable());
+                if branch.window != 0 {
+                    self.bind_anchor(node_pid, branch, &mut anchors)?;
+                } else if pid_is_path_bound(
+                    self.source.source_pid,
+                    node_pid,
+                    anchors.iter().map(|anchor| anchor.key.pid),
+                ) {
+                    #[cfg(test)]
+                    self.diagnostic.update(|mut value| {
+                        value.virtual_nodes_using_path_anchor += 1;
+                        value
+                    });
+                } else {
+                    self.stage("traversal-pid");
+                    #[cfg(test)]
+                    self.record_rejected_node(&node, node_pid, branch);
+                    return Err(unavailable());
+                }
             }
             self.check()?;
             self.stage("traversal-control-type");
@@ -570,7 +783,7 @@ impl DocumentReader {
                     self.check()?;
                     self.stage("document-visible");
                     if !self.rpc(unsafe { node.CurrentIsOffscreen() })?.as_bool() {
-                        documents.push(node);
+                        documents.push((node, anchors.clone(), node_pid as u32));
                     }
                 }
                 continue; // Never traverse any document's page/iframe/link content.
@@ -596,7 +809,7 @@ impl DocumentReader {
                 self.check()?;
                 self.stage("traversal-next-sibling");
                 child = self.navigate(&element, false)?;
-                queue.push_back((element, depth + 1));
+                queue.push_back((element, depth + 1, anchors.clone()));
             }
         }
         self.stage("document-count");
@@ -608,14 +821,33 @@ impl DocumentReader {
         if documents.len() != 1 {
             return Err(unavailable());
         }
-        let document = documents.pop().ok_or_else(unavailable)?;
+        let (document, anchors, document_pid) = documents.pop().ok_or_else(unavailable)?;
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.candidate_native_anchors = anchors.len();
+            value.document_pid = document_pid;
+            value
+        });
+        #[cfg(not(test))]
+        let _ = document_pid;
         {
             self.stage("document-identity");
             let baseline = self.first_document.borrow();
             if let Some(first) = baseline.as_ref()
-                && !self.same(first, &document)?
+                && (!self.same(&first.element, &document)?
+                    || first.anchors.len() != anchors.len()
+                    || !first
+                        .anchors
+                        .iter()
+                        .zip(&anchors)
+                        .all(|(before, now)| before.key == now.key))
             {
                 return Err(unavailable());
+            }
+            if let Some(first) = baseline.as_ref() {
+                // Keep validating the original retained process handles too:
+                // matching numeric HWND/PID keys cannot authorize PID reuse.
+                self.validate_path(&first.anchors)?;
             }
         }
         self.check()?;
@@ -625,9 +857,11 @@ impl DocumentReader {
         // ui/accessibility/platform/ax_platform_node_delegate_utils_win.cc
         let pattern: IUIAutomationValuePattern =
             self.rpc(unsafe { document.GetCurrentPatternAs(UIA_ValuePatternId) })?;
+        self.validate_path(&anchors)?;
         self.check()?;
         self.stage("document-value-read");
         let value = self.rpc(unsafe { pattern.CurrentValue() })?;
+        self.validate_path(&anchors)?;
         self.stage("document-url-bound");
         if value.len() > 4096 {
             return Err(unavailable());
@@ -639,7 +873,10 @@ impl DocumentReader {
         self.check()?;
         let first_observation = self.first_document.borrow().is_none();
         if first_observation {
-            *self.first_document.borrow_mut() = Some(document);
+            *self.first_document.borrow_mut() = Some(DocumentBinding {
+                element: document,
+                anchors,
+            });
         }
         self.stage("observation-complete");
         // CompareElements above owns the real opaque identity comparison. This
@@ -664,6 +901,64 @@ mod real_tests;
 #[cfg(test)]
 mod nullable_navigation_tests {
     use super::*;
+
+    #[test]
+    fn cross_process_anchor_requires_exact_root_owner_and_executable() {
+        let inside = NativeBranch {
+            window: 20,
+            valid: true,
+            owner: 42,
+            root: 10,
+        };
+        assert!(foreign_anchor_is_bound(10, 42, inside, true));
+        assert!(!foreign_anchor_is_bound(10, 42, inside, false));
+        for (source, pid, branch) in [
+            (0, 42, inside),
+            (10, 0, inside),
+            (10, -1, inside),
+            (
+                10,
+                42,
+                NativeBranch {
+                    window: 0,
+                    ..inside
+                },
+            ),
+            (
+                10,
+                42,
+                NativeBranch {
+                    valid: false,
+                    ..inside
+                },
+            ),
+            (
+                10,
+                42,
+                NativeBranch {
+                    owner: 43,
+                    ..inside
+                },
+            ),
+            (10, 42, NativeBranch { root: 0, ..inside }),
+            (10, 42, NativeBranch { root: 11, ..inside }),
+        ] {
+            assert!(!foreign_anchor_is_bound(source, pid, branch, true));
+        }
+    }
+
+    #[test]
+    fn virtual_process_reuse_is_path_scoped_and_does_not_leak_to_siblings() {
+        let parent: Vec<u32> = vec![];
+        let mut anchored = parent.clone();
+        anchored.push(42);
+        let sibling = parent.clone();
+        assert!(pid_is_path_bound(10, 10, parent.iter().copied()));
+        assert!(pid_is_path_bound(10, 42, anchored.iter().copied()));
+        assert!(!pid_is_path_bound(10, 42, sibling.iter().copied()));
+        assert!(!pid_is_path_bound(10, 43, anchored.iter().copied()));
+        assert!(!pid_is_path_bound(10, 0, anchored.iter().copied()));
+    }
 
     #[test]
     fn foreign_native_branch_pruning_requires_matching_owner_and_a_different_os_root() {

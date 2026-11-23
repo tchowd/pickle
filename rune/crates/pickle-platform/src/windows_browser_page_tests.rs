@@ -29,8 +29,11 @@ struct Trace {
 }
 impl Trace {
     fn new(artifacts: &Path) -> Self {
+        Self::named(artifacts, "windows-browser-page-native-smoke.log")
+    }
+    fn named(artifacts: &Path, name: &'static str) -> Self {
         std::fs::create_dir_all(artifacts).unwrap();
-        let path = artifacts.join("windows-browser-page-native-smoke.log");
+        let path = artifacts.join(name);
         std::fs::write(&path, []).unwrap();
         let mut trace = Self {
             path,
@@ -92,6 +95,15 @@ impl Trace {
             "foreign_child_navigations",
             "root_pid",
             "node_pid",
+            "unanchored_foreign_child_navigations",
+            "pruned_foreign_native_branches",
+            "anchored_foreign_native_branches",
+            "virtual_nodes_using_path_anchor",
+            "candidate_native_anchors",
+            "anchor_revalidations",
+            "document_pid",
+            "node_hwnd_owner_pid",
+            "node_executable_matches_source",
         ] {
             if let Some(value) = values
                 .get(key)
@@ -582,6 +594,210 @@ fn owned_native_document_provider() {
         trace.step(trace_mode, "closed");
     }
 
+    // Synthetic provider graph, backed by a genuinely separate owned process/
+    // window. All but the explicit wrong-executable case use the same canonical
+    // EXE. This proves anchor checks, not a real browser or native cross-process
+    // UIA provider implementation.
+    let mut native_anchor_cases = vec![];
+    {
+        // Keep each trace bounded without starving later anchor failures of
+        // diagnostics after the existing refusal/timeout corpus fills its log.
+        let mut trace = Trace::named(&artifacts, "windows-browser-page-anchors-native-smoke.log");
+        for mode in [
+            "native-embedded-anchor",
+            "native-outside-anchor",
+            "native-sibling-escape",
+            "native-owner-mismatch",
+            "native-wrong-executable",
+        ] {
+            trace.step(mode, "launching");
+            let source_case = case;
+            let fixture = Fixture::launch(&executable, directory.path(), mode, case);
+            case += 1;
+            let helper_executable = if mode == "native-wrong-executable" {
+                let copy = directory.path().join("OwnedDifferentPathFixture.exe");
+                std::fs::copy(&executable, &copy).unwrap();
+                assert_ne!(
+                    std::fs::canonicalize(&executable).unwrap(),
+                    std::fs::canonicalize(&copy).unwrap()
+                );
+                assert_eq!(
+                    std::fs::read(&executable).unwrap(),
+                    std::fs::read(&copy).unwrap()
+                );
+                copy
+            } else {
+                executable.clone()
+            };
+            let helper =
+                Fixture::launch(&helper_executable, directory.path(), "native-helper", case);
+            case += 1;
+            assert_ne!(fixture.source.source_pid, helper.source.source_pid);
+            let same_executable = fixture.source.app_id == helper.source.app_id;
+            assert_eq!(same_executable, mode != "native-wrong-executable");
+            let source_hwnd = HWND(fixture.source.source_window.unwrap() as *mut _);
+            let helper_hwnd = HWND(helper.source.source_window.unwrap() as *mut _);
+            let embedded = mode != "native-outside-anchor";
+            if embedded {
+                let style = unsafe { GetWindowLongPtrW(helper_hwnd, GWL_STYLE) } as u32;
+                unsafe {
+                    SetWindowLongPtrW(
+                        helper_hwnd,
+                        GWL_STYLE,
+                        ((style | WS_CHILD.0) & !WS_POPUP.0) as isize,
+                    );
+                    // SetParent may return successful NULL for a formerly
+                    // top-level window. Observe its new parent/root explicitly.
+                    let _ = SetParent(helper_hwnd, Some(source_hwnd));
+                }
+                assert_eq!(unsafe { GetParent(helper_hwnd) }.unwrap(), source_hwnd);
+                assert_ne!(
+                    unsafe { GetWindowLongPtrW(helper_hwnd, GWL_STYLE) } as u32 & WS_CHILD.0,
+                    0
+                );
+            }
+            let mut native_owner = 0;
+            unsafe { GetWindowThreadProcessId(helper_hwnd, Some(&mut native_owner)) };
+            assert_eq!(native_owner, helper.source.source_pid);
+            assert_eq!(
+                unsafe { GetAncestor(helper_hwnd, GA_ROOT) },
+                if embedded { source_hwnd } else { helper_hwnd }
+            );
+            std::fs::write(
+                directory
+                    .path()
+                    .join(format!("entered-{source_case}.native-anchor")),
+                format!(
+                    "{}\n{}",
+                    helper.source.source_pid,
+                    helper.source.source_window.unwrap()
+                ),
+            )
+            .unwrap();
+            fixture.command(6).unwrap();
+            let focused = Instant::now();
+            loop {
+                fixture.command(4).unwrap();
+                if unsafe { GetForegroundWindow() } == source_hwnd {
+                    break;
+                }
+                assert!(focused.elapsed() < Duration::from_secs(2));
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            trace.step(mode, "observing");
+            let outcome = verify(fixture.source.clone(), "stable").unwrap();
+            for observation in &outcome.diagnostics {
+                trace.metadata(observation.stage, observation.values.clone());
+            }
+            let counts = fixture.command(3).unwrap();
+            let child_navigations = fixture.command(5).unwrap();
+            let unanchored_navigations = fixture.command(7).unwrap();
+            trace.metadata("native-anchor-counters",serde_json::json!({"accepted":outcome.accepted,"capture_count":outcome.captures,"document_reads":counts&0xff,"nested_reads":(counts>>8)&0xff,"foreign_child_navigations":child_navigations,"unanchored_foreign_child_navigations":unanchored_navigations}));
+            let success = matches!(mode, "native-embedded-anchor" | "native-outside-anchor");
+            assert_eq!(outcome.accepted, success, "{mode}");
+            assert_eq!(outcome.captures, usize::from(success), "{mode}");
+            assert_eq!((counts >> 8) & 0xff, 0, "{mode}: no decoy Document Value");
+            assert_eq!((counts >> 16) & 0xff, 0);
+            assert_eq!((counts >> 24) & 0xff, 0);
+            if success {
+                assert_eq!(outcome.reads, 3);
+                assert!(counts & 0xff >= 3, "{mode}: first/pre/post Value reads");
+            } else {
+                assert_eq!(counts & 0xff, 0, "{mode}: refusal before main Value");
+            }
+            match mode {
+                "native-embedded-anchor" => {
+                    assert!(
+                        child_navigations >= 3,
+                        "Native anchor descendants traversed"
+                    );
+                    assert!(outcome.diagnostics.iter().all(|observation| {
+                        observation.values["anchored_foreign_native_branches"]
+                            .as_u64()
+                            .is_some_and(|count| count > 0)
+                            && observation.values["virtual_nodes_using_path_anchor"]
+                                .as_u64()
+                                .is_some_and(|count| count > 0)
+                            && observation.values["candidate_native_anchors"].as_u64() == Some(1)
+                            && observation.values["anchor_revalidations"]
+                                .as_u64()
+                                .is_some_and(|count| count >= 2)
+                            && observation.values["document_pid"].as_u64()
+                                == Some(u64::from(helper.source.source_pid))
+                    }));
+                }
+                "native-outside-anchor" => {
+                    assert_eq!(child_navigations, 0, "Outside-root branch not traversed");
+                    assert!(outcome.diagnostics.iter().all(|observation| {
+                        observation.values["pruned_foreign_native_branches"]
+                            .as_u64()
+                            .is_some_and(|count| count > 0)
+                    }));
+                }
+                "native-sibling-escape" => {
+                    assert!(
+                        child_navigations > 0,
+                        "Earlier valid native anchor was reached"
+                    );
+                    assert_eq!(
+                        unanchored_navigations, 0,
+                        "Sibling cannot borrow anchor PID"
+                    );
+                    assert!(outcome.diagnostics.iter().any(|observation| {
+                        observation.values["node_pid"].as_u64()
+                            == Some(u64::from(helper.source.source_pid))
+                            && observation.values["anchored_foreign_native_branches"]
+                                .as_u64()
+                                .is_some_and(|count| count > 0)
+                    }));
+                }
+                "native-owner-mismatch" => {
+                    assert_eq!(
+                        child_navigations, 0,
+                        "Mismatched-owner branch not traversed"
+                    );
+                    assert_eq!(unanchored_navigations, 0);
+                    assert!(outcome.diagnostics.iter().any(|observation| {
+                        observation.values["node_hwnd_owner_pid"].as_u64()
+                            == Some(u64::from(helper.source.source_pid))
+                            && observation.values["node_pid"].as_u64()
+                                != Some(u64::from(helper.source.source_pid))
+                    }));
+                }
+                "native-wrong-executable" => {
+                    assert_eq!(
+                        child_navigations, 0,
+                        "Different-executable branch not traversed"
+                    );
+                    assert_eq!(unanchored_navigations, 0);
+                    assert!(outcome.diagnostics.iter().any(|observation| {
+                        observation.stage == "native-anchor-binding"
+                            && observation.values["node_executable_matches_source"] == false
+                            && observation.values["node_hwnd_owner_pid"].as_u64()
+                                == Some(u64::from(helper.source.source_pid))
+                            && observation.values["node_pid"].as_u64()
+                                == Some(u64::from(helper.source.source_pid))
+                    }));
+                }
+                _ => unreachable!(),
+            }
+            // Recheck real native ownership before teardown rather than recording
+            // command-line intent as proof of embedding or source containment.
+            let mut after_owner = 0;
+            unsafe { GetWindowThreadProcessId(helper_hwnd, Some(&mut after_owner)) };
+            assert_eq!(after_owner, helper.source.source_pid);
+            assert_eq!(
+                unsafe { GetAncestor(helper_hwnd, GA_ROOT) },
+                if embedded { source_hwnd } else { helper_hwnd }
+            );
+            trace.step(mode, "closing-helper");
+            helper.close();
+            fixture.close();
+            trace.step(mode, "closed");
+            native_anchor_cases.push(serde_json::json!({"mode":mode,"accepted":outcome.accepted,"capture_count":outcome.captures,"document_reads":counts&0xff,"nested_reads":(counts>>8)&0xff,"foreign_child_navigations":child_navigations,"unanchored_foreign_child_navigations":unanchored_navigations,"distinct_owned_pid_observed":true,"canonical_same_executable_observed":same_executable,"canonical_different_executable_path_observed":!same_executable,"native_hwnd_owner_observed":true,"native_root_matches_source":embedded,"helper_and_source_closed":true}));
+        }
+    }
+
     // A genuine delayed external provider must fail within the outer bound;
     // stopping that exact owned process releases any outstanding COM request.
     trace.step("slow", "launching");
@@ -674,6 +890,7 @@ fn owned_native_document_provider() {
         "virtual_foreign_pid_cases":ownership_cases,"virtual_foreign_pid_is_not_real_external_process":true,
         "foreign_unknown_owner_branches_refused_without_value_or_descendant_reads":true,
         "wide_tree_limit_refused_before_document_value":true,
+        "synthetic_provider_real_owned_native_anchor_cases":native_anchor_cases,
         "provider_timeout_ms":provider_timeout_ms,"outer_timeout_ms":outer_timeout_ms,
         "isolated_worker_timeout_and_cancellation":true,"singleflight_held_until_actual_worker_return":true,
         "owned_children_stopped":true,"temporary_fixture_removed":true,
