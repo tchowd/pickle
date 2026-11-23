@@ -51,11 +51,17 @@ if (!$python) { $python=Get-Command python3 -CommandType Application -ErrorActio
 if ($LASTEXITCODE -ne 0) { throw 'The non-forwarding owned proxy contract failed.' }
 $valid=[ordered]@{schema=1;test='windows-stable-bundled-extension-load';scope='bundled-extension-load-only';browser='chrome';extension_id='abcdefghijklmnopabcdefghijklmnop';extension_version='0.1.0';browser_version='157.0.1.2';passed=$true;atomic_job_membership_verified=$true;owned_window_verified=$true;developer_mode_enabled=$true;load_unpacked_invoked=$true;folder_picker_owned=$true;folder_path_value_verified=$true;folder_picker_closed=$true;extension_loaded=$true;browser_job_drained=$true;full_delivery_verified=$false;native_host_registered=$false;native_host_executed=$false;authenticated_bridge_verified=$false;app_launched=$false;devtools_or_cdp_used=$false;extension_code_modified=$false}
 $valid.extension_card_identity_verified=$true
+foreach ($key in @('owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified')) { $valid[$key]=$true }
+$valid.navigation_shortcut_events=4;$valid.navigation_enter_events=2;$valid.navigation_confirm_shortcut_events=4;$valid.navigation_escape_events=2
 $report=ConvertTo-PickleExtensionStageReport ([pscustomobject]$valid)
 Assert-PickleExtensionStageReport $report 'chrome'
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $report 'edge' }
 $wrongCard=$valid | ConvertTo-Json | ConvertFrom-Json;$wrongCard.extension_card_identity_verified=$false
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $wrongCard 'chrome' }
+foreach ($change in @(@('address_focus_ancestry_verified',$false),@('owned_browser_foreground_verified',$false),@('navigation_value_verified',$false),@('extensions_document_verified',$false),@('committed_internal_uri_verified',$false),@('navigation_enter_events',1),@('navigation_confirm_shortcut_events',3),@('navigation_escape_events',2.0))) {
+  $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { Assert-PickleExtensionStageReport $bad 'chrome' }
+}
 foreach ($change in @(@('schema',1.0),@('schema','1'),@('passed',$false),@('atomic_job_membership_verified',$false),@('owned_window_verified',$false),@('developer_mode_enabled',$false),@('load_unpacked_invoked',$false),@('folder_picker_owned',$false),@('folder_path_value_verified',$false),@('folder_picker_closed',$false),@('extension_loaded',$false),@('browser_job_drained',$false),@('full_delivery_verified',$true),@('native_host_registered',$true),@('authenticated_bridge_verified',$true),@('devtools_or_cdp_used',$true),@('extension_code_modified',$true),@('extension_id','qbcdefghijklmnopabcdefghijklmnop'),@('extension_version','0.1.1'),@('passed','true'))) {
   $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
   Assert-ExtensionRefused { Assert-PickleExtensionStageReport $bad 'chrome' }
@@ -67,7 +73,7 @@ $failure=[pscustomobject]@{schema=1;test='windows-stable-bundled-extension-load'
 $null=ConvertTo-PickleExtensionStageReport $failure
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $failure 'edge' }
 $candidate=[ordered]@{label_exact=$true;label_casefold=$true;label_trim_casefold=$true;label_known_substring=$true;control_type_id=50000;enabled=$true;offscreen=$false;toggle_supported=$false;toggle_state=-1;invoke_supported=$true}
-$observation=[ordered]@{nodes=294;property_errors=0;document_count=1;extensions_label_exact_count=1;value_pattern_count=1;internal_uri_exact_count=1;internal_uri_without_slash_count=1;candidate_count=1;candidates_truncated=$false;legacy_observed=$false;candidates=@($candidate)}
+$observation=[ordered]@{nodes=294;property_errors=0;document_count=1;extensions_label_exact_count=1;extensions_document_exact_count=1;welcome_document_known_count=0;new_tab_document_known_count=0;address_edit_known_name_count=1;value_pattern_count=1;internal_uri_exact_count=1;internal_uri_without_slash_count=1;candidate_count=1;candidates_truncated=$false;legacy_observed=$false;candidates=@($candidate)}
 $observed=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json
 $clean=ConvertTo-PickleExtensionDeveloperObservation $observed
 if ($clean.candidates.Count -ne 1 -or !$clean.candidates[0].invoke_supported -or $clean.candidates[0].toggle_supported -or $clean.legacy_observed) { throw 'Observed metadata was changed by sanitization.' }
@@ -75,6 +81,12 @@ $withObservation=$failure | ConvertTo-Json | ConvertFrom-Json
 $withObservation | Add-Member -NotePropertyName developer_observation -NotePropertyValue $observed
 $null=ConvertTo-PickleExtensionStageReport $withObservation
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $withObservation 'edge' }
+$navigationFailure=$withObservation | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+$navigationFailure.stage='ordinary-navigation';$navigationFailure.failure='owned-address-bar-unavailable'
+$navigationFailure | Add-Member -NotePropertyName page_observation_before_navigation -NotePropertyValue $observed
+$navigationFailure | Add-Member -NotePropertyName navigation_failure_observation -NotePropertyValue $observed
+$null=ConvertTo-PickleExtensionStageReport $navigationFailure
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $navigationFailure 'edge' }
 foreach ($change in @(@('nodes',1025),@('candidate_count',17),@('legacy_observed','true'),@('legacy_observed',$true))) {
   $bad=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionDeveloperObservation $bad }

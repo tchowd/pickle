@@ -39,6 +39,10 @@ public static class BrowserExtensionPredicates {
         string expected=browser+"://extensions/";
         return value==expected ? 1 : value==expected.Substring(0,expected.Length-1) ? 2 : 0;
     }
+    public static bool AddressCandidate(string name,bool bound,bool foreground,bool edit,bool enabled,bool visible,bool password,bool value,bool readOnly) {
+        return name=="Address and search bar" && bound && foreground && edit && enabled && visible && !password && value && !readOnly;
+    }
+    public static bool CommittedPage(bool entered,bool document,bool bound,int uriForm) { return entered && document && bound && (uriForm==1 || uriForm==2); }
     public static string CardId(string containerName,string expectedName,string expectedVersion,IEnumerable<string> labels) {
         if(containerName!=expectedName || labels==null) return null;
         var values=labels.ToArray();if(!values.Contains(expectedVersion)) return null;
@@ -64,6 +68,15 @@ public static class BrowserExtensionPredicates {
         if(InternalUriForm("chrome://extensions/","chrome")!=1 || InternalUriForm("edge://extensions","edge")!=2 ||
             InternalUriForm("edge://extensions/","chrome")!=0 || InternalUriForm("https://private.invalid/chrome://extensions/","chrome")!=0 ||
             InternalUriForm("chrome://extensions/?private","chrome")!=0 || InternalUriForm(" chrome://extensions/","chrome")!=0) throw new Exception("diagnostic-exact-uri");
+        if(!AddressCandidate("Address and search bar",true,true,true,true,true,false,true,false) ||
+            AddressCandidate("Search extensions",true,true,true,true,true,false,true,false) ||
+            AddressCandidate("Address and search bar",false,true,true,true,true,false,true,false) ||
+            AddressCandidate("Address and search bar",true,false,true,true,true,false,true,false) ||
+            AddressCandidate("Address and search bar",true,true,true,true,true,true,true,false) ||
+            AddressCandidate("Address and search bar",true,true,true,true,true,false,false,false) ||
+            AddressCandidate("Address and search bar",true,true,true,true,true,false,true,true)) throw new Exception("owned-address-contract");
+        if(!CommittedPage(true,true,true,1) || !CommittedPage(true,true,true,2) || CommittedPage(false,true,true,1) ||
+            CommittedPage(true,false,true,1) || CommittedPage(true,true,false,1) || CommittedPage(true,true,true,0)) throw new Exception("committed-page-proof");
         if(CardId("Pickle","Pickle","0.1.0",new[]{"0.1.0","ID: "+id})!=id) throw new Exception("card-positive");
         // A second card's valid ID must never fill a missing target ID.
         if(CardId("Pickle","Pickle","0.1.0",new[]{"0.1.0"})!=null ||
@@ -128,13 +141,23 @@ public static class BrowserExtensionFixtureProgram {
             stage="owned-browser-window";
             Wait(()=> { window=browser.Window(false,IntPtr.Zero); return window!=IntPtr.Zero; },25,"owned-browser-window-unavailable");
             Report["owned_window_verified"]=true;
+            stage="ordinary-navigation";
+            try { ObserveDeveloper(window,kind,"page_observation_before_navigation"); }
+            catch { Report["developer_observation_unavailable"]=true; }
+            try {
+                NavigateExtensions(window,kind);
+            } catch(ExtensionStageFailure) {
+                try { ObserveDeveloper(window,kind,"navigation_failure_observation"); }
+                catch { Report["developer_observation_unavailable"]=true; }
+                throw;
+            }
             stage="developer-mode";
             AutomationElement developer=null;
             try { Wait(()=> { developer=NamedToggle(window,"Developer mode"); return developer!=null; },20,"developer-toggle-unavailable"); }
             catch(ExtensionStageFailure) {
                 // Failure-only observation. Never change the original action,
                 // failure code or deadline; do not emit arbitrary UI strings.
-                try { ObserveDeveloper(window,kind); }
+                try { ObserveDeveloper(window,kind,"developer_observation"); }
                 catch { Report["developer_observation_unavailable"]=true; }
                 throw;
             }
@@ -264,18 +287,83 @@ public static class BrowserExtensionFixtureProgram {
         }).ToArray();
         if(matches.Length>1) Fail("ambiguous-owned-control");return matches.SingleOrDefault();
     }
-    static void ObserveDeveloper(IntPtr window,string kind) {
+    static bool FocusBoundToWindow(AutomationElement focus,IntPtr window) {
+        if(focus==null || !browser.OwnsWindow(window) || Native.GetForegroundWindow()!=window || !browser.Owns(focus.Current.ProcessId)) return false;
+        var root=AutomationElement.FromHandle(window);Owned(root);
+        var node=focus;var walker=TreeWalker.RawViewWalker;
+        for(int depth=0;node!=null && depth<NodeLimit;depth++) {
+            Check();if(!browser.Owns(node.Current.ProcessId)) return false;
+            if(Automation.Compare(node,root)) return true;
+            node=walker.GetParent(node);
+        }
+        return false;
+    }
+    static AutomationElement FocusedAddress(IntPtr window) {
+        Check();var focus=AutomationElement.FocusedElement;
+        bool bound=FocusBoundToWindow(focus,window);Report["address_focus_ancestry_verified"]=bound;
+        if(!bound) return null;
+        var current=focus.Current;object pattern;
+        bool value=focus.TryGetCurrentPattern(ValuePattern.Pattern,out pattern);
+        bool readOnly=value && ((ValuePattern)pattern).Current.IsReadOnly;
+        Report["address_focus_known_name"]=current.Name=="Address and search bar";
+        Report["address_focus_is_edit"]=current.ControlType==ControlType.Edit;
+        Report["address_focus_value_supported"]=value;
+        return BrowserExtensionPredicates.AddressCandidate(current.Name,bound,Native.GetForegroundWindow()==window,current.ControlType==ControlType.Edit,current.IsEnabled,!current.IsOffscreen,current.IsPassword,value,readOnly) ? focus : null;
+    }
+    static bool ExtensionsDocument(IntPtr window) {
+        return Tree(window).Any(node=>node.Current.ControlType==ControlType.Document && node.Current.Name=="Extensions" && !node.Current.IsOffscreen);
+    }
+    static void NavigateExtensions(IntPtr window,string kind) {
+        if(!browser.OwnsWindow(window) || !Native.IsWindowVisible(window)) Fail("navigation-window-not-owned");
+        Native.SetForegroundWindow(window);
+        Wait(()=>browser.OwnsWindow(window) && Native.GetForegroundWindow()==window,5,"navigation-foreground-unavailable");
+        Report["owned_browser_foreground_verified"]=true;
+        Native.AddressShortcut(window);Report["navigation_shortcut_events"]=4;
+        AutomationElement address=null;
+        Wait(()=> { address=FocusedAddress(window);return address!=null; },5,"owned-address-bar-unavailable");
+        object pattern=null;
+        address=FocusedAddress(window);
+        if(address==null || !address.TryGetCurrentPattern(ValuePattern.Pattern,out pattern)) Fail("address-value-pattern-unavailable");
+        // The only editable value supplied by this fixture is this fixed URI.
+        // No clipboard, first-run dialog action, developer API or DOM access.
+        ((ValuePattern)pattern).SetValue(kind+"://extensions/");
+        if(BrowserExtensionPredicates.InternalUriForm(((ValuePattern)pattern).Current.Value,kind)!=1) Fail("navigation-value-not-applied");
+        Report["navigation_value_verified"]=true;
+        address=FocusedAddress(window);
+        if(address==null || !address.TryGetCurrentPattern(ValuePattern.Pattern,out pattern) || BrowserExtensionPredicates.InternalUriForm(((ValuePattern)pattern).Current.Value,kind)!=1) Fail("navigation-focus-or-value-changed");
+        Native.Enter(window);Report["navigation_enter_events"]=2;
+        Wait(()=>ExtensionsDocument(window),20,"extensions-document-unavailable");
+        Report["extensions_document_verified"]=true;
+        Native.AddressShortcut(window);Report["navigation_confirm_shortcut_events"]=4;
+        int form=0;
+        Wait(()=> {
+            address=FocusedAddress(window);object value;
+            if(address==null || !address.TryGetCurrentPattern(ValuePattern.Pattern,out value)) return false;
+            form=BrowserExtensionPredicates.InternalUriForm(((ValuePattern)value).Current.Value,kind);
+            return BrowserExtensionPredicates.CommittedPage(true,ExtensionsDocument(window),true,form);
+        },5,"committed-internal-uri-unavailable");
+        Report["committed_internal_uri_verified"]=true;
+        Native.Escape(window);Report["navigation_escape_events"]=2;
+        if(!ExtensionsDocument(window)) Fail("extensions-document-changed");
+    }
+    static void ObserveDeveloper(IntPtr window,string kind,string key) {
         var nodes=Tree(window);var candidates=new List<Dictionary<string,object>>();
-        int matched=0,errors=0,documents=0,headings=0,exact=0,withoutSlash=0,valuePatterns=0;
+        int matched=0,errors=0,documents=0,headings=0,exact=0,withoutSlash=0,valuePatterns=0,extensionDocuments=0,welcomeDocuments=0,newTabDocuments=0,addressNames=0;
         foreach(var node in nodes) {
             Check();Owned(node);
             try {
                 var current=node.Current;int flags=BrowserExtensionPredicates.DeveloperLabelFlags(current.Name);
                 if(current.Name=="Extensions") headings++;
-                if(current.ControlType==ControlType.Document) documents++;
+                if(current.ControlType==ControlType.Document) {
+                    documents++;
+                    if(current.Name=="Extensions") extensionDocuments++;
+                    if(new[]{"Welcome","Welcome to Google Chrome","Welcome to Microsoft Edge"}.Contains(current.Name)) welcomeDocuments++;
+                    if(current.Name=="New Tab" || current.Name=="New tab") newTabDocuments++;
+                }
+                if(current.Name=="Address and search bar" && current.ControlType==ControlType.Edit) addressNames++;
                 object pattern;
                 bool valueNode=current.ControlType==ControlType.Edit || current.ControlType==ControlType.Document;
-                if(valueNode) {
+                if(valueNode && !current.IsPassword) {
                     if(node.TryGetCurrentPattern(ValuePattern.Pattern,out pattern)) {
                         valuePatterns++;int form=BrowserExtensionPredicates.InternalUriForm(((ValuePattern)pattern).Current.Value,kind);
                         if(form==1) exact++;else if(form==2) withoutSlash++;
@@ -293,8 +381,9 @@ public static class BrowserExtensionFixtureProgram {
             } catch(ElementNotAvailableException) { errors++; }
             catch(COMException) { errors++; }
         }
-        Report["developer_observation"]=new Dictionary<string,object> {
+        Report[key]=new Dictionary<string,object> {
             {"nodes",nodes.Count},{"property_errors",errors},{"document_count",documents},{"extensions_label_exact_count",headings},
+            {"extensions_document_exact_count",extensionDocuments},{"welcome_document_known_count",welcomeDocuments},{"new_tab_document_known_count",newTabDocuments},{"address_edit_known_name_count",addressNames},
             {"value_pattern_count",valuePatterns},{"internal_uri_exact_count",exact},{"internal_uri_without_slash_count",withoutSlash},
             // net48 managed UIA omits LegacyIAccessiblePattern. This means
             // not observed, never a claim that the native control lacks it.
@@ -365,6 +454,10 @@ public static class BrowserExtensionFixtureProgram {
         public void Dispose() { if(job!=IntPtr.Zero) { Native.TerminateJobObject(job,1);Native.CloseHandle(job);job=IntPtr.Zero; }if(process!=IntPtr.Zero) { Native.CloseHandle(process);process=IntPtr.Zero; } }
     }
     static class Native {
+        [StructLayout(LayoutKind.Sequential)] struct Keyboard { public ushort Key,Scan;public uint Flags,Time;public UIntPtr Extra; }
+        [StructLayout(LayoutKind.Sequential)] struct Mouse { public int X,Y;public uint Data,Flags,Time;public UIntPtr Extra; }
+        [StructLayout(LayoutKind.Explicit)] struct Union { [FieldOffset(0)] public Keyboard Keyboard;[FieldOffset(0)] public Mouse Mouse; }
+        [StructLayout(LayoutKind.Sequential)] struct Input { public uint Type;public Union Data; }
         [StructLayout(LayoutKind.Sequential)] public struct BasicLimits { public long ProcessTime,JobTime;public uint Flags;public UIntPtr Min,Max;public uint Active;public UIntPtr Affinity;public uint Priority,Scheduling; }
         [StructLayout(LayoutKind.Sequential)] public struct Io { public ulong ReadOps,WriteOps,OtherOps,ReadBytes,WriteBytes,OtherBytes; }
         [StructLayout(LayoutKind.Sequential)] public struct ExtendedLimits { public BasicLimits Basic;public Io Io;public UIntPtr ProcessMemory,JobMemory,PeakProcess,PeakJob; }
@@ -390,9 +483,31 @@ public static class BrowserExtensionFixtureProgram {
         [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindow callback,IntPtr data);
         [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+        [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] inputs,int bytes);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
         [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window,uint flags);
         [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr window,StringBuilder value,int length);
+        static Input Key(ushort key,bool up) { return new Input {Type=1,Data=new Union {Keyboard=new Keyboard {Key=key,Flags=up ? 2U : 0U}}}; }
+        static void Foreground(IntPtr window) { Check();if(!browser.OwnsWindow(window) || GetForegroundWindow()!=window) Fail("navigation-input-target-not-owned"); }
+        static void Unheld(ushort key) {
+            foreach(int candidate in new[]{0x11,0x12,0x10,0x5b,0x5c,(int)key})
+                if((GetAsyncKeyState(candidate)&0x8000)!=0) Fail("navigation-input-key-already-held");
+        }
+        static void Send(IntPtr window,Input[] inputs,Input[] release) {
+            Foreground(window);
+            if(SendInput((uint)inputs.Length,inputs,Marshal.SizeOf(typeof(Input)))!=(uint)inputs.Length) {
+                Foreground(window);SendInput((uint)release.Length,release,Marshal.SizeOf(typeof(Input)));
+                Fail("navigation-input-incomplete");
+            }
+        }
+        public static void AddressShortcut(IntPtr window) {
+            Unheld(0x4c);Send(window,new[]{Key(0x11,false),Key(0x4c,false),Key(0x4c,true),Key(0x11,true)},new[]{Key(0x4c,true),Key(0x11,true)});
+        }
+        public static void Enter(IntPtr window) { Unheld(0x0d);Send(window,new[]{Key(0x0d,false),Key(0x0d,true)},new[]{Key(0x0d,true)}); }
+        public static void Escape(IntPtr window) { Unheld(0x1b);Send(window,new[]{Key(0x1b,false),Key(0x1b,true)},new[]{Key(0x1b,true)}); }
     }
 }
 #endif
