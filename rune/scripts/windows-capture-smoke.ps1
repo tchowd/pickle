@@ -7,7 +7,9 @@ using System.IO;
 using System.Threading.Tasks;
 public sealed class PickleCapturePipe {
   readonly byte[] stored;
-  int count;
+  volatile int count;
+  public int StoredBytes { get { return count; } }
+  public volatile bool Eof;
   public volatile bool Overflow;
   public volatile bool Failed;
   public Task Completion;
@@ -22,7 +24,7 @@ public sealed class PickleCapturePipe {
       var buffer=new byte[1024];
       for (;;) {
         int read=await stream.ReadAsync(buffer,0,buffer.Length).ConfigureAwait(false);
-        if (read==0) break;
+        if (read==0) { Eof=true; break; }
         int room=stored.Length-count;
         int keep=Math.Min(room,read);
         Array.Copy(buffer,0,stored,count,keep);
@@ -36,7 +38,31 @@ public sealed class PickleCapturePipe {
     var copy=new byte[count];Array.Copy(stored,copy,count);return copy;
   }
 }
+
 '@
+}
+
+function New-PickleCaptureProcessReport {
+  param(
+    [ValidateSet('start','ownership','process-wait','pipe-wait','pipe-state','exit-code','report','complete')][string]$Stage,
+    [bool]$Owned,[bool]$Started,[Nullable[int]]$ExitCode,[Nullable[bool]]$Exited,
+    [bool]$ForcedStop,[bool]$CleanupFailed,[bool]$Verified,$Output,$Errors
+  )
+  # Only these scalar properties enter evidence; never serialize a Process,
+  # exception, path, or collected output into the process-status report.
+  return [ordered]@{
+    schema=1;test='windows-owned-window-capture-process';passed=$Verified;stage=$Stage;
+    owned=$Owned;process_started=$Started;exit_code=$ExitCode;process_exited=$Exited;
+    forced_stop=$ForcedStop;cleanup_failed=$CleanupFailed;
+    stdout_bytes=$(if ($null -eq $Output) { 0 } else { [int]$Output.StoredBytes });
+    stderr_bytes=$(if ($null -eq $Errors) { 0 } else { [int]$Errors.StoredBytes });
+    stdout_eof=($null -ne $Output -and [bool]$Output.Eof);
+    stderr_eof=($null -ne $Errors -and [bool]$Errors.Eof);
+    stdout_overflow=($null -ne $Output -and [bool]$Output.Overflow);
+    stderr_overflow=($null -ne $Errors -and [bool]$Errors.Overflow);
+    stdout_failed=($null -ne $Output -and [bool]$Output.Failed);
+    stderr_failed=($null -ne $Errors -and [bool]$Errors.Failed)
+  }
 }
 
 function Assert-PickleWindowCaptureReport([string]$Text) {
@@ -69,24 +95,28 @@ function Invoke-PickleWindowCaptureProbe([string]$Application,[string]$EvidenceP
   $expected=[IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Application).Path)
   if (Test-Path -LiteralPath $EvidencePath) { Remove-Item -LiteralPath $EvidencePath }
   $stderrPath=[IO.Path]::ChangeExtension($EvidencePath,'.stderr.log')
+  $processPath=[IO.Path]::ChangeExtension($EvidencePath,'.process.json')
+  if (Test-Path -LiteralPath $processPath) { Remove-Item -LiteralPath $processPath }
   $start=[Diagnostics.ProcessStartInfo]::new()
   $start.FileName=$expected;$start.Arguments='--verify-windows-capture'
   $start.UseShellExecute=$false;$start.CreateNoWindow=$true
   $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
   $process=$null;$output=$null;$errors=$null;$text=$null;$verified=$false
+  $owned=$false;$forcedStop=$false;$cleanupFailed=$false;$primary=$null;$stage='start'
   try {
     $process=[Diagnostics.Process]::Start($start)
     # Retain this exact child handle through all waits and forced cleanup.
     $null=$process.Handle
     $output=[PickleCapturePipe]::Start($process.StandardOutput.BaseStream,16384)
     $errors=[PickleCapturePipe]::Start($process.StandardError.BaseStream,16384)
-    $owned=$false;$timer=[Diagnostics.Stopwatch]::StartNew()
+    $stage='ownership';$timer=[Diagnostics.Stopwatch]::StartNew()
     while (!$process.HasExited) {
       if (!$owned) {
         try { $path=$process.MainModule.FileName } catch { $path=$null }
         if ($path) {
           if (![string]::Equals([IO.Path]::GetFullPath($path),$expected,[StringComparison]::OrdinalIgnoreCase)) { throw 'The capture diagnostic did not own the exact installed executable.' }
           $owned=$true
+          $stage='process-wait'
         }
       }
       if ($output.Overflow -or $errors.Overflow) { throw 'Owned capture diagnostic output exceeded its bound.' }
@@ -94,27 +124,48 @@ function Invoke-PickleWindowCaptureProbe([string]$Application,[string]$EvidenceP
       if ($process.WaitForExit(50)) { break }
     }
     if (!$owned) { throw 'Installed executable ownership was not observed before the diagnostic exited.' }
+    $stage='pipe-wait'
     if (!$output.Completion.Wait(3000) -or !$errors.Completion.Wait(3000)) { throw 'Owned capture diagnostic pipes did not reach EOF.' }
-    if ($output.Failed -or $errors.Failed -or $output.Overflow -or $errors.Overflow) { throw 'Owned capture diagnostic output was incomplete or exceeded its bound.' }
+    $stage='pipe-state'
+    if ($output.Failed -or $errors.Failed -or $output.Overflow -or $errors.Overflow -or !$output.Eof -or !$errors.Eof) { throw 'Owned capture diagnostic output was incomplete or exceeded its bound.' }
+    $stage='exit-code'
     if ($process.ExitCode -ne 0) { throw 'Installed owned-window capture diagnostic failed. See its bounded stderr category.' }
     $utf8=[Text.UTF8Encoding]::new($false,$true)
+    $stage='report'
     $text=$utf8.GetString($output.Bytes())
     $null=Assert-PickleWindowCaptureReport $text
     $verified=$true
+    $stage='complete'
+  } catch {
+    $primary=$_
   } finally {
     if ($null -ne $process) {
       try {
         if (!$process.HasExited) {
+          $forcedStop=$true
           $process.Kill()
           if (!$process.WaitForExit(10000)) { throw 'Exact owned capture diagnostic process did not stop.' }
         }
         foreach ($pipe in @($output,$errors)) {
-          if ($null -ne $pipe -and !$pipe.Completion.Wait(3000)) { $verified=$false }
+          if ($null -ne $pipe -and !$pipe.Completion.Wait(3000)) { $verified=$false;$cleanupFailed=$true }
         }
         if ($null -ne $errors -and $errors.Completion.IsCompleted) { [IO.File]::WriteAllBytes($stderrPath,$errors.Bytes()) }
-      } finally { $process.Dispose() }
+      } catch { $cleanupFailed=$true;$verified=$false }
     }
+    $exited=$null;$exitCode=$null
+    if ($null -ne $process) {
+      try { $exited=$process.HasExited;if ($exited) { $exitCode=[int]$process.ExitCode } }
+      catch { $cleanupFailed=$true;$verified=$false }
+    }
+    try {
+      $record=New-PickleCaptureProcessReport -Stage $stage -Owned $owned -Started ($null -ne $process) -ExitCode $exitCode -Exited $exited -ForcedStop $forcedStop -CleanupFailed $cleanupFailed -Verified $verified -Output $output -Errors $errors
+      [IO.File]::WriteAllText($processPath,($record | ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+    } catch {
+      $verified=$false;$cleanupFailed=$true
+      if ($null -eq $primary) { $primary='Owned capture process evidence could not be written.' }
+    } finally { if ($null -ne $process) { $process.Dispose() } }
   }
+  if ($null -ne $primary) { throw $primary }
   if (!$verified) { throw 'Owned capture diagnostic cleanup or EOF was not verified.' }
   # Publish only the actual successful app report, after process exit + EOF.
   [IO.File]::WriteAllText($EvidencePath,$text,[Text.UTF8Encoding]::new($false))

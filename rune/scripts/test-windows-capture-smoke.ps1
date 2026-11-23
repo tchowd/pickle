@@ -35,6 +35,31 @@ Initialize-PickleCapturePipe
 $stream=[IO.MemoryStream]::new([byte[]]::new(25000))
 try {
   $pipe=[PickleCapturePipe]::Start($stream,16384)
-  if (!$pipe.Completion.Wait(3000) -or !$pipe.Overflow -or $pipe.Failed -or $pipe.Bytes().Length -ne 16384) { throw 'Bounded output collector did not cap and fully drain its controlled input.' }
+  if (!$pipe.Completion.Wait(3000) -or !$pipe.Overflow -or $pipe.Failed -or !$pipe.Eof -or $pipe.StoredBytes -ne 16384 -or $pipe.Bytes().Length -ne 16384) { throw 'Bounded output collector did not cap and fully drain its controlled input.' }
 } finally { $stream.Dispose() }
-Write-Host 'PASS: fixed capture report contract, false/ill-typed/extra-field refusals, bounded pipe storage and EOF.'
+$fake=[pscustomobject]@{StoredBytes=0;Eof=$true;Overflow=$false;Failed=$false;unexpected='private text must not be copied'}
+$record=New-PickleCaptureProcessReport -Stage 'exit-code' -Owned $true -Started $true -ExitCode -1073741819 -Exited $true -ForcedStop $false -CleanupFailed $false -Verified $false -Output $fake -Errors $fake
+$wire=$record | ConvertTo-Json -Compress
+$read=$wire | ConvertFrom-Json
+if ($read.exit_code -ne -1073741819 -or ($read.exit_code -isnot [int] -and $read.exit_code -isnot [long]) -or !$read.owned -or !$read.process_exited -or $read.passed -or $read.forced_stop -or $read.stdout_bytes -ne 0 -or $read.stderr_bytes -ne 0 -or !$read.stdout_eof -or !$read.stderr_eof -or $wire.Contains('private') -or $wire.Contains('unexpected')) { throw 'Signed fatal exit or zero-byte EOF evidence was lost or arbitrary data copied.' }
+$unfinished=[pscustomobject]@{StoredBytes=16384;Eof=$false;Overflow=$true;Failed=$true}
+$record=New-PickleCaptureProcessReport -Stage 'pipe-wait' -Owned $true -Started $true -ExitCode $null -Exited $false -ForcedStop $true -CleanupFailed $true -Verified $false -Output $unfinished -Errors $null
+if ($null -ne $record.exit_code -or $record.process_exited -or !$record.forced_stop -or !$record.cleanup_failed -or !$record.stdout_overflow -or !$record.stdout_failed -or $record.stdout_eof -or $record.stderr_bytes -ne 0 -or $record.stderr_eof) { throw 'Forced-stop/incomplete-pipe evidence incorrectly implied clean EOF.' }
+$badStage=$false
+try { $null=New-PickleCaptureProcessReport -Stage 'untrusted arbitrary message' } catch { $badStage=$true }
+if (!$badStage) { throw 'A non-categorical process evidence stage was admitted.' }
+# Both failures are owned and deterministic: this text file is not executable,
+# and the evidence parent directory does not exist. No process or GUI is run.
+# The second filesystem failure must not replace the Process.Start error.
+$temp=Join-Path ([IO.Path]::GetTempPath()) ('pickle-capture-primary-'+[guid]::NewGuid().ToString('N'))
+$null=[IO.Directory]::CreateDirectory($temp)
+try {
+  $invalid=Join-Path $temp 'invalid.exe'
+  [IO.File]::WriteAllText($invalid,'owned invalid executable',[Text.UTF8Encoding]::new($false))
+  $evidence=Join-Path (Join-Path $temp 'absent') 'capture.json'
+  $preserved=$false
+  try { Invoke-PickleWindowCaptureProbe -Application $invalid -EvidencePath $evidence }
+  catch { $preserved=($_.InvocationInfo.Line.Contains('[Diagnostics.Process]::Start($start)')) }
+  if (!$preserved -or (Test-Path -LiteralPath $evidence)) { throw 'Evidence-write failure replaced the original owned launch failure or published capture success.' }
+} finally { Remove-Item -LiteralPath $temp -Recurse -Force }
+Write-Host 'PASS: fixed capture contract, bounded collector/EOF, signed fatal exit and failure-only scalar process evidence.'

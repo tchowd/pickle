@@ -469,7 +469,42 @@ fn command_line(command: &Command) -> io::Result<Vec<u16>> {
 /// Environment/cwd overrides are rejected rather than silently ignored. The
 /// exact absolute .exe and argument builder still come from validated settings.
 pub(crate) fn spawn(command: &Command) -> io::Result<Child> {
-    spawn_with_stdio(command, StdioMode::Piped, false)
+    spawn_with_stdio(command, StdioMode::Piped, false, None)
+}
+
+/// Explicit diagnostic consumers only. Ordinary transcriber calls install no
+/// observer and perform no extra PID queries or logging.
+#[derive(serde::Serialize)]
+pub(crate) struct SpawnObservation {
+    pub stage: &'static str,
+    pub hresult: i32,
+    pub parent_pid: u32,
+    pub child_pid: Option<u32>,
+    pub process_handle_pid: Option<u32>,
+    pub contained: Option<bool>,
+    pub creation_flags: u32,
+}
+type Observer<'a> = Option<&'a dyn Fn(SpawnObservation)>;
+fn observe(
+    observer: Observer<'_>,
+    stage: &'static str,
+    hresult: i32,
+    child_pid: Option<u32>,
+    process_handle_pid: Option<u32>,
+    contained: Option<bool>,
+    breakaway: bool,
+) {
+    if let Some(observer) = observer {
+        observer(SpawnObservation {
+            stage,
+            hresult,
+            parent_pid: unsafe { windows::Win32::System::Threading::GetCurrentProcessId() },
+            child_pid,
+            process_handle_pid,
+            contained,
+            creation_flags: fixture_creation_flags(breakaway),
+        });
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -521,11 +556,20 @@ fn capture_fixture_command(executable: &Path) -> Command {
 }
 /// A failure-only diagnostic control, never a capture fallback. There is no
 /// caller-supplied executable, argument, environment, or working directory.
-pub(crate) fn spawn_self_version_control() -> io::Result<Child> {
+pub(crate) fn spawn_self_version_control(observer: Observer<'_>) -> io::Result<Child> {
     spawn_with_stdio(
         &version_control_command(&std::env::current_exe()?),
         StdioMode::None,
         false,
+        observer,
+    )
+}
+pub(crate) fn spawn_self_capture_fixture(observer: Observer<'_>) -> io::Result<Child> {
+    spawn_with_stdio(
+        &capture_fixture_command(&std::env::current_exe()?),
+        StdioMode::Piped,
+        false,
+        observer,
     )
 }
 
@@ -547,7 +591,10 @@ pub(crate) fn fixture_creation_flags(breakaway: bool) -> u32 {
 /// access-denied failure and a fresh successful query permitting breakaway.
 /// The parent's job is not ours to change. Our own JOB_LIST/KILL_ON_CLOSE job
 /// remains mandatory and is assigned before the new initial thread can run.
-pub(crate) fn retry_capture_fixture_breakaway(original: &io::Error) -> Option<io::Result<Child>> {
+pub(crate) fn retry_capture_fixture_breakaway(
+    original: &io::Error,
+    observer: Observer<'_>,
+) -> Option<io::Result<Child>> {
     use windows::Win32::System::JobObjects::QueryInformationJobObject;
     if native_failure(original) != Some(("Start contained transcriber", 0x80070005_u32 as i32)) {
         return None;
@@ -570,11 +617,16 @@ pub(crate) fn retry_capture_fixture_breakaway(original: &io::Error) -> Option<io
     }
     Some((|| {
         let command = capture_fixture_command(&std::env::current_exe()?);
-        spawn_with_stdio(&command, StdioMode::Piped, true)
+        spawn_with_stdio(&command, StdioMode::Piped, true, observer)
     })())
 }
 
-fn spawn_with_stdio(command: &Command, mode: StdioMode, breakaway: bool) -> io::Result<Child> {
+fn spawn_with_stdio(
+    command: &Command,
+    mode: StdioMode,
+    breakaway: bool,
+    observer: Observer<'_>,
+) -> io::Result<Child> {
     let program = Path::new(command.get_program());
     if !program.is_absolute()
         || !program
@@ -630,7 +682,16 @@ fn spawn_with_stdio(command: &Command, mode: StdioMode, breakaway: bool) -> io::
     }
     startup.lpAttributeList = attributes.pointer;
     let mut process = PROCESS_INFORMATION::default();
-    unsafe {
+    observe(
+        observer,
+        "create-process-before",
+        0,
+        None,
+        None,
+        None,
+        breakaway,
+    );
+    let created = unsafe {
         CreateProcessW(
             PCWSTR(executable.as_ptr()),
             Some(PWSTR(line.as_mut_ptr())),
@@ -645,11 +706,37 @@ fn spawn_with_stdio(command: &Command, mode: StdioMode, breakaway: bool) -> io::
             &startup.StartupInfo,
             &mut process,
         )
-    }
-    .map_err(|e| failure("Start contained transcriber", e))?;
+    };
+    // Query only the exact handle returned by this call, and only for the
+    // explicit probe observer. No process enumeration or production extra work.
+    let process_handle_pid = if observer.is_some() && created.is_ok() {
+        let pid = unsafe { windows::Win32::System::Threading::GetProcessId(process.hProcess) };
+        (pid != 0).then_some(pid)
+    } else {
+        None
+    };
+    observe(
+        observer,
+        "create-process-returned",
+        created.as_ref().err().map_or(0, |error| error.code().0),
+        created.as_ref().ok().map(|_| process.dwProcessId),
+        process_handle_pid,
+        None,
+        breakaway,
+    );
+    created.map_err(|e| failure("Start contained transcriber", e))?;
     // Attribute values reference the job/pipe handle arrays. Delete the list
     // while all values and their handles still live, before transferring pipes.
     drop(attributes);
+    observe(
+        observer,
+        "attributes-dropped",
+        0,
+        Some(process.dwProcessId),
+        process_handle_pid,
+        None,
+        breakaway,
+    );
     let process_handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess.0) };
     let _thread = unsafe { OwnedHandle::from_raw_handle(process.hThread.0) };
     let (stdin, stdout) = match pipes {
@@ -663,6 +750,15 @@ fn spawn_with_stdio(command: &Command, mode: StdioMode, breakaway: bool) -> io::
         stdout,
     };
     let mut contained = BOOL::default();
+    observe(
+        observer,
+        "membership-before",
+        0,
+        Some(process.dwProcessId),
+        process_handle_pid,
+        None,
+        breakaway,
+    );
     let membership = unsafe {
         IsProcessInJob(
             raw(&child.process),
@@ -670,12 +766,39 @@ fn spawn_with_stdio(command: &Command, mode: StdioMode, breakaway: bool) -> io::
             &mut contained,
         )
     };
+    observe(
+        observer,
+        "membership-returned",
+        membership.as_ref().err().map_or(0, |error| error.code().0),
+        Some(process.dwProcessId),
+        process_handle_pid,
+        membership.as_ref().ok().map(|_| contained.as_bool()),
+        breakaway,
+    );
     if membership.is_err() || !contained.as_bool() {
+        observe(
+            observer,
+            "membership-cleanup-before",
+            0,
+            Some(process.dwProcessId),
+            process_handle_pid,
+            None,
+            breakaway,
+        );
         let _ = unsafe { TerminateProcess(raw(&child.process), 1) };
         // Retain the exact process/job handles through a bounded termination
         // wait. Returning drops the kill-on-close job even if no ACK arrives;
         // never replace the original membership failure with cleanup details.
         let _ = unsafe { WaitForSingleObject(raw(&child.process), 1000) };
+        observe(
+            observer,
+            "membership-cleanup-waited",
+            0,
+            Some(process.dwProcessId),
+            process_handle_pid,
+            None,
+            breakaway,
+        );
         return Err(match membership {
             Err(error) => failure("Check contained process job", error),
             Ok(()) => io::Error::other("The transcriber did not enter its required job"),
@@ -683,6 +806,15 @@ fn spawn_with_stdio(command: &Command, mode: StdioMode, breakaway: bool) -> io::
     }
     // CreateProcessW assigned the job before the initial thread could execute.
     // No PCM has entered writer; these unused child pipe copies now close here.
+    observe(
+        observer,
+        "spawn-complete",
+        0,
+        Some(process.dwProcessId),
+        process_handle_pid,
+        Some(true),
+        breakaway,
+    );
     Ok(child)
 }
 

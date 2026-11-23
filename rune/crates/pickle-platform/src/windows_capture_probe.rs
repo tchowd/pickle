@@ -4,7 +4,6 @@ use super::{CapturedSelection, PlatformError, windows_child_job};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    process::Command,
     sync::mpsc::{self, Receiver, SyncSender},
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -35,6 +34,26 @@ const CLASS: PCWSTR = w!("PickleOwnedWindowCaptureProbe");
 fn error(category: &'static str) -> PlatformError {
     PlatformError(category.into())
 }
+fn diagnostic(value: serde_json::Value) {
+    if let Ok(mut bytes) = serde_json::to_vec(&value)
+        && bytes.len() <= 4096
+    {
+        bytes.push(b'\n');
+        let mut output = std::io::stderr().lock();
+        let _ = output.write_all(&bytes).and_then(|_| output.flush());
+    }
+}
+fn breadcrumb(stage: &'static str) {
+    diagnostic(
+        serde_json::json!({"schema":1,"test":"windows-owned-window-capture-breadcrumb","stage":stage}),
+    );
+}
+fn spawn_observation(role: &'static str, observation: windows_child_job::SpawnObservation) {
+    diagnostic(
+        serde_json::json!({"schema":1,"test":"windows-owned-window-capture-spawn",
+        "role":role,"native":observation}),
+    );
+}
 
 fn start_io_failure(stage: &'static str, failure: &std::io::Error) -> PlatformError {
     let native = windows_child_job::native_failure(failure);
@@ -48,8 +67,11 @@ fn start_io_failure(stage: &'static str, failure: &std::io::Error) -> PlatformEr
     );
     error("fixture-start")
 }
-fn spawn_fixture(command: &Command) -> Result<windows_child_job::Child, PlatformError> {
-    match windows_child_job::spawn(command) {
+fn spawn_fixture() -> Result<windows_child_job::Child, PlatformError> {
+    breadcrumb("fixture-spawn-before");
+    match windows_child_job::spawn_self_capture_fixture(Some(&|value| {
+        spawn_observation("initial", value)
+    })) {
         Ok(child) => {
             eprintln!(
                 "{}",
@@ -61,9 +83,25 @@ fn spawn_fixture(command: &Command) -> Result<windows_child_job::Child, Platform
             Ok(child)
         }
         Err(original) => {
+            diagnostic(
+                serde_json::json!({"schema":1,"test":FAILURE_TEST,"stage":"initial-spawn-failed",
+                "failure":io_evidence(&original)}),
+            );
             let parent = windows_child_job::parent_spawn_snapshot();
+            diagnostic(
+                serde_json::json!({"schema":1,"test":FAILURE_TEST,"stage":"parent-observed","parent":parent}),
+            );
+            breadcrumb("control-before");
             let control = version_control_evidence();
-            let retry = windows_child_job::retry_capture_fixture_breakaway(&original);
+            diagnostic(
+                serde_json::json!({"schema":1,"test":FAILURE_TEST,"stage":"control-returned","control":control}),
+            );
+            breadcrumb("retry-before");
+            let retry = windows_child_job::retry_capture_fixture_breakaway(
+                &original,
+                Some(&|value| spawn_observation("retry", value)),
+            );
+            breadcrumb("retry-returned");
             let retry_evidence = match &retry {
                 None => serde_json::json!({"attempted":false}),
                 Some(Ok(_)) => serde_json::json!({"attempted":true,"spawned":true,
@@ -96,7 +134,9 @@ fn io_evidence(failure: &std::io::Error) -> serde_json::Value {
         "native_operation":native.map(|value|value.0),"hresult":native.map(|value|value.1)})
 }
 fn version_control_evidence() -> serde_json::Value {
-    match windows_child_job::spawn_self_version_control() {
+    match windows_child_job::spawn_self_version_control(Some(&|value| {
+        spawn_observation("control", value)
+    })) {
         Err(failure) => serde_json::json!({"diagnostic_only":true,"spawned":false,
             "inherits_stdio":false,"stage":"spawn","failure":io_evidence(&failure)}),
         Ok(mut child) => {
@@ -208,11 +248,7 @@ struct FixtureChild {
 }
 impl FixtureChild {
     fn start() -> Result<Self, PlatformError> {
-        let executable = std::env::current_exe()
-            .map_err(|failure| start_io_failure("current-executable", &failure))?;
-        let mut command = Command::new(executable);
-        command.arg("--windows-capture-owned-fixture");
-        let mut child = spawn_fixture(&command)?;
+        let mut child = spawn_fixture()?;
         drop(child.stdin.take());
         let output = child.stdout.take().ok_or_else(|| {
             start_io_failure("stdout-missing", &std::io::Error::other("missing pipe"))
@@ -408,6 +444,7 @@ fn source(ready: &Ready) -> Result<CapturedSelection, PlatformError> {
 }
 
 pub(super) fn verify_window_capture_runtime() -> Result<serde_json::Value, PlatformError> {
+    breadcrumb("verify-enter");
     if !super::windows_context::has_package_identity() {
         return Err(error("identity"));
     }
@@ -415,6 +452,7 @@ pub(super) fn verify_window_capture_runtime() -> Result<serde_json::Value, Platf
     let ready = fixture.ready()?;
     let source = source(&ready)?;
     let diagnostic = std::sync::Arc::new(super::windows_context::CaptureDiagnostics::new());
+    breadcrumb("capture-before");
     let captured = super::windows_context::capture_page_observed(
         &source,
         CancellationToken::new(),
