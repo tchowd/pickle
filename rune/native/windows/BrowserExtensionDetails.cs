@@ -12,6 +12,11 @@ using System.Windows.Automation;
 #endif
 
 public static class BrowserExtensionDetailsPredicates {
+    // Chrome157 manager.ts changes the document title on the Details route.
+    // Edge's title projection is not established by that Chrome source.
+    public static string DocumentTitle(string kind,string name) {
+        return kind=="chrome" ? "Extensions - "+name : kind=="edge" ? "Extensions" : null;
+    }
     public static bool Read(Func<bool> bound,Func<string> read,out string value) {
         value=null;if(!bound()) return false;string candidate=read();
         if(candidate==null || candidate.Length>4096 || !bound()) return false;value=candidate;return true;
@@ -29,6 +34,10 @@ public static class BrowserExtensionDetailsPredicates {
         var values=labels.ToArray();return values.Length==2 && values.Contains("Version") && values.Contains(expected);
     }
     public static void SelfTest() {
+        if(DocumentTitle("chrome","Known extension")!="Extensions - Known extension" ||
+            DocumentTitle("chrome","Other extension")=="Extensions - Known extension" ||
+            DocumentTitle("edge","Known extension")!="Extensions" || DocumentTitle("unknown","Known extension")!=null)
+            throw new Exception("details-route-specific-document-title");
         int reads=0;string value;bool bound=true;
         if(Read(()=>false,()=> { reads++;return "forbidden"; },out value) || reads!=0) throw new Exception("details-no-foreign-read");
         if(Read(()=>bound,()=> { reads++;bound=false;return "public"; },out value) || value!=null) throw new Exception("details-route-changed-during-read");
@@ -66,10 +75,11 @@ public static partial class BrowserExtensionFixtureProgram {
         public void Dispose() { if(retained!=IntPtr.Zero) Native.CloseHandle(retained);retained=IntPtr.Zero; }
     }
     sealed class DetailReader {
-        readonly IntPtr window;readonly AutomationElement root,document;readonly string route;
-        public DetailReader(IntPtr value,AutomationElement doc,string url) { window=value;root=AutomationElement.FromHandle(window);document=doc;route=url; }
+        readonly IntPtr window;readonly AutomationElement root,document;readonly string route,title;
+        public DetailReader(IntPtr value,AutomationElement doc,string url,string expectedTitle) { window=value;root=AutomationElement.FromHandle(window);document=doc;route=url;title=expectedTitle; }
         public bool Committed() {
             Check();if(!browser.OwnsWindow(window) || !Automation.Compare(root,AutomationElement.FromHandle(window)) || !DiagnosticBound(document,window)) return false;
+            string currentTitle;if(!BrowserExtensionDetailsPredicates.Read(()=>DiagnosticBound(document,window),()=>document.Current.Name,out currentTitle) || currentTitle!=title) return false;
             object value;if(!document.TryGetCurrentPattern(ValuePattern.Pattern,out value) || !DiagnosticBound(document,window)) return false;
             string current=((ValuePattern)value).Current.Value;
             return current==route && DiagnosticBound(document,window) && browser.OwnsWindow(window) && Automation.Compare(root,AutomationElement.FromHandle(window));
@@ -105,7 +115,7 @@ public static partial class BrowserExtensionFixtureProgram {
     }
     static string CandidateExtensionId(IntPtr window,string kind) {
         var document=OwnedExtensionsDocument(window);if(document==null) return null;
-        var reader=new DetailReader(window,document,kind+"://extensions/");if(!reader.Committed()) return null;
+        var reader=new DetailReader(window,document,kind+"://extensions/","Extensions");if(!reader.Committed()) return null;
         var groups=new List<AutomationElement>();foreach(var node in reader.Nodes(document)) {
             if(node.Current.ControlType!=ControlType.Group) continue;string aid;if(!reader.ReadId(node,out aid)) return null;if(aid=="extension-id") groups.Add(node);
         }
@@ -115,14 +125,24 @@ public static partial class BrowserExtensionFixtureProgram {
         }
         var unique=ids.Distinct().ToArray();return unique.Length==1 && reader.Committed() ? unique[0] : null;
     }
-    static void NavigateExtensionDetails(IntPtr window,string kind,string candidate) {
+    static AutomationElement OwnedExtensionDetailsDocument(IntPtr window,string kind,string name) {
+        string expected=BrowserExtensionDetailsPredicates.DocumentTitle(kind,name);if(expected==null) return null;
+        var documents=new List<AutomationElement>();foreach(var node in Tree(window,false)) {
+            if(!DiagnosticBound(node,window)) return null;
+            if(node.Current.ControlType!=ControlType.Document || node.Current.IsOffscreen) continue;
+            string label;if(!BrowserExtensionDetailsPredicates.Read(()=>DiagnosticBound(node,window),()=>node.Current.Name,out label)) return null;
+            if(label==expected) documents.Add(node);
+        }
+        return documents.Count==1 ? documents[0] : null;
+    }
+    static void NavigateExtensionDetails(IntPtr window,string kind,string candidate,string name) {
         string route=kind+"://extensions/?id="+candidate;
         if(!BrowserExtensionPredicates.ExtensionId(candidate) || !browser.OwnsWindow(window)) Fail("detail-candidate-invalid");
         Native.SetForegroundWindow(window);Wait(()=>Native.GetForegroundWindow()==window && browser.OwnsWindow(window),3,"navigation-foreground-unavailable");
         Native.AddressShortcut(window);AutomationElement address=null;Wait(()=> { address=FocusedAddress(window);return address!=null; },5,"owned-address-bar-unavailable");
         object value;if(!address.TryGetCurrentPattern(ValuePattern.Pattern,out value)) Fail("address-value-pattern-unavailable");
         ((ValuePattern)value).SetValue(route);if(((ValuePattern)value).Current.Value!=route) Fail("detail-route-unavailable");Native.Enter(window);
-        Wait(()=> { var doc=OwnedExtensionsDocument(window);return doc!=null && new DetailReader(window,doc,route).Committed(); },10,"detail-route-unavailable");
+        Wait(()=> { var doc=OwnedExtensionDetailsDocument(window,kind,name);return doc!=null && new DetailReader(window,doc,route,BrowserExtensionDetailsPredicates.DocumentTitle(kind,name)).Committed(); },10,"detail-route-unavailable");
     }
     static DetailObservation ObserveDetails(DetailReader reader,string candidate,string name,string version,KnownExtensionFolder folder) {
         if(!reader.Committed()) return null;var result=new DetailObservation {Document=reader.Document};
@@ -152,10 +172,10 @@ public static partial class BrowserExtensionFixtureProgram {
     static string ProveLoadedExtensionDetails(IntPtr window,string kind,string extension,string name,string version) {
         Report["detail_identity_stage"]="candidate";string candidate=null;Wait(()=> { candidate=CandidateExtensionId(window,kind);return candidate!=null; },10,"detail-candidate-unavailable");
         // No loaded/identity flag is set from the candidate or list-wide labels.
-        Report["detail_identity_stage"]="route";NavigateExtensionDetails(window,kind,candidate);
+        Report["detail_identity_stage"]="route";NavigateExtensionDetails(window,kind,candidate,name);
         using(var folder=new KnownExtensionFolder(extension,name,version)) {
             DetailObservation first=null,last=null;string route=kind+"://extensions/?id="+candidate;
-            Wait(()=> { var doc=OwnedExtensionsDocument(window);if(doc==null) return false;var reader=new DetailReader(window,doc,route);
+            Wait(()=> { var doc=OwnedExtensionDetailsDocument(window,kind,name);if(doc==null) return false;var reader=new DetailReader(window,doc,route,BrowserExtensionDetailsPredicates.DocumentTitle(kind,name));
                 first=ObserveDetails(reader,candidate,name,version,folder);if(first==null) return false;
                 last=ObserveDetails(reader,candidate,name,version,folder);return last!=null && Automation.Compare(first.Document,last.Document) && Automation.Compare(first.Name,last.Name) &&
                     Automation.Compare(first.Version,last.Version) && Automation.Compare(first.IdSection,last.IdSection) && Automation.Compare(first.PathSection,last.PathSection) && Automation.Compare(first.PathLink,last.PathLink) &&
