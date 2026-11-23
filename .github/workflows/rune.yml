@@ -84,6 +84,7 @@ jobs:
           bash scripts/build-macos-fixture.sh
           bash native/macos/tests/run-page-fixture.sh
           bash native/macos/tests/run-invocation-fixture.sh
+          bash native/macos/tests/run-window-fixture.sh
       - name: Package Windows development build
         if: runner.os == 'Windows'
         shell: pwsh
