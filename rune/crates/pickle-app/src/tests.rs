@@ -627,7 +627,8 @@ mod reader_parity {
         assert_eq!(saved.action, "Follow-up");
         assert_eq!(saved.answer, rt.state.conversation[0].answer);
         assert_eq!(saved.passage, snapshot.as_ref().unwrap().text);
-        assert_eq!(saved.question.as_deref(), Some(pending.question.as_str()));
+        assert_eq!(saved.question.as_deref(), Some("Explain “evidence”"));
+        assert_ne!(saved.question.as_deref(), Some(pending.question.as_str()));
         click(&mut rt, "copy-answer");
         assert_eq!(
             clipboard.text().unwrap().as_str(),

@@ -1276,7 +1276,7 @@ impl AppState {
                 app_name: snapshot.app_name.clone(),
                 app_id: snapshot.app_id.clone(),
                 action: "Follow-up".into(),
-                question: Some(turn.question.clone()),
+                question: Some(turn.label.clone().unwrap_or_else(|| turn.question.clone())),
                 passage: snapshot.text.clone(),
                 answer: turn.answer.clone(),
                 quality: turn.quality.visible_label(),

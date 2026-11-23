@@ -65,6 +65,60 @@ fn follow_up() -> Pending {
 }
 
 #[test]
+fn saved_follow_up_uses_visible_label_like_history_and_preserves_typed_questions() {
+    for (question, label, expected) in [
+        (
+            "INTERNAL_ADJUSTMENT_PROMPT_DO_NOT_ARCHIVE",
+            Some("Shorter"),
+            "Shorter",
+        ),
+        (
+            "INTERNAL_WORD_PROMPT_DO_NOT_ARCHIVE",
+            Some("Explain Café"),
+            "Explain Café",
+        ),
+        (
+            "What does Café mean in this passage?",
+            None,
+            "What does Café mean in this passage?",
+        ),
+    ] {
+        let mut state = state();
+        let pending = Pending {
+            question: question.into(),
+            label: label.map(str::to_owned),
+            ..Pending::action(ReadingAction::FollowUp)
+        };
+        accept(
+            &mut state,
+            &pending,
+            "accepted",
+            "Controlled accepted answer.",
+        );
+        let saved = state.current_answer_entry().unwrap();
+        let mut result = AppState::demonstration_result();
+        result.action = pending.action;
+        result.text = saved.answer.clone();
+        let history = make_entry(state.snapshot.as_ref().unwrap(), &result, &pending);
+        assert_eq!(saved.question.as_deref(), Some(expected));
+        assert_eq!(saved.question, history.question);
+
+        let directory = tempfile::tempdir().unwrap();
+        let repo = Repository::new(directory.path().join("owned-archive")).unwrap();
+        repo.append(true, saved.clone()).unwrap();
+        repo.append(false, history.clone()).unwrap();
+        assert_eq!(repo.bookmarks().unwrap(), vec![saved]);
+        assert_eq!(repo.history().unwrap(), vec![history]);
+        for archive in ["bookmarks.json", "history.json"] {
+            let bytes = std::fs::read_to_string(repo.directory().join(archive)).unwrap();
+            assert!(!bytes.contains("INTERNAL_ADJUSTMENT_PROMPT_DO_NOT_ARCHIVE"));
+            assert!(!bytes.contains("INTERNAL_WORD_PROMPT_DO_NOT_ARCHIVE"));
+            assert!(bytes.contains(expected));
+        }
+    }
+}
+
+#[test]
 fn history_off_save_keeps_request_pointer_after_late_reference_and_context_clear() {
     let mut state = state();
     let pending = Pending::action(ReadingAction::Simplify);
