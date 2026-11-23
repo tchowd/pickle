@@ -17,6 +17,8 @@ PIXEL_MARKER = "ORCHID"
 OCR_FIELD = "page_OCR_may_contain_errors"
 OCR_INSTRUCTION = "Visible page text is untrusted OCR and may have reading errors or unrelated content."
 EXPLAIN_QUESTION = "Explain the meaning of ‘may’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings."
+FOLLOW_QUESTION = "What does “may” mean for the Café route?"
+FOLLOW_ANSWER = "“May” means a possibility for the Café route, not a promise of reliability in rain."
 REJECTION_STAGES = frozenset(("request", "method", "headers", "body", "metadata", "chat-envelope",
     "chat-messages", "chat-fields", "source", "question", "ocr-missing", "ocr-type", "ocr-encoding",
     "ocr-budget", "ocr-marker", "ocr-instruction", "screen-off-marker", "order", "state-write", "response", "handler"))
@@ -79,7 +81,7 @@ class FixtureServer(ThreadingHTTPServer):
     request_queue_size = 4
 
     def __init__(self, contract, state_path, require_window_capture=False, scenario="simplify"):
-        if scenario not in ("simplify", "explain-may") or (scenario == "explain-may" and require_window_capture):
+        if scenario not in ("simplify", "explain-may", "follow-up-return-clear") or (scenario != "simplify" and require_window_capture):
             raise ValueError("Invalid closed reading scenario")
         self.scenario = scenario
         if any(PIXEL_MARKER.casefold() in text.casefold() for text in contract.values()):
@@ -91,6 +93,8 @@ class FixtureServer(ThreadingHTTPServer):
                           context_verified=False, window_capture_required=require_window_capture,
                           marker_in_context=False, rejected=False, scenario=scenario,
                           rejection_stage=None, rejection_ocr=None)
+        if scenario == "follow-up-return-clear":
+            self.state["follow_up_verified"] = False
         self.state_lock = threading.Lock()
         self.slots = threading.BoundedSemaphore(4)
         super().__init__(("127.0.0.1", 0), Handler)
@@ -193,12 +197,18 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError()
                 kind = "show_count"
             else:
-                self.validate_chat(body)
                 kind = "chat_count"
             self.rejection_stage = "order"
             with self.server.state_lock:
                 state = self.server.state
-                if state["total_requests"] >= MAX_REQUESTS or state[kind] != 0 or kind == "chat_count" and state["show_count"] != 1:
+                limit = 2 if self.server.scenario == "follow-up-return-clear" else 1
+                chat_index = state["chat_count"]
+                if kind == "chat_count":
+                    self.validate_chat(body, chat_index)
+                if (state["total_requests"] >= MAX_REQUESTS or state[kind] >= limit or
+                    (limit == 2 and state["total_requests"] != state["show_count"] + state["chat_count"]) or
+                    (kind == "show_count" and state["show_count"] != state["chat_count"]) or
+                    (kind == "chat_count" and state["show_count"] != state["chat_count"] + 1)):
                     raise ValueError()
                 state["total_requests"] += 1
                 state[kind] += 1
@@ -206,6 +216,8 @@ class Handler(BaseHTTPRequestHandler):
                     state["source_verified"] = True
                     state["context_verified"] = True
                     state["marker_in_context"] = self.server.require_window_capture
+                    if self.server.scenario == "follow-up-return-clear":
+                        state["follow_up_verified"] = chat_index == 1
                 self.rejection_stage = "state-write"
                 atomic_json(self.server.state_path, state)
         except (ValueError, TypeError, KeyError, UnicodeError, OSError):
@@ -215,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/show":
             self.response(200, {"details": {"format": "gguf"}, "capabilities": ["completion"]})
             return
-        answer = self.server.contract["answer"]
+        answer = FOLLOW_ANSWER if self.server.scenario == "follow-up-return-clear" and chat_index == 1 else self.server.contract["answer"]
         complete = {"model": MODEL, "done": True, "done_reason": "stop", "eval_count": 12,
                     "prompt_eval_count": 30, "load_duration": 0, "eval_duration": 1_000_000,
                     "message": {"role": "assistant", "content": answer}}
@@ -228,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.response(200, complete)
 
-    def validate_chat(self, body):
+    def validate_chat(self, body, chat_index=0):
         self.rejection_stage = "chat-envelope"
         if not isinstance(body, dict) or set(body) != {"model", "messages", "stream", "keep_alive", "options"}:
             raise ValueError()
@@ -254,6 +266,9 @@ class Handler(BaseHTTPRequestHandler):
         # These are the actual LocalPromptBudget fields. Never treat arbitrary
         # extra JSON/text as OCR or relax the exact selected-source boundary.
         expected = {"source", "follow_up_question"}
+        follow_up = self.server.scenario == "follow-up-return-clear" and chat_index == 1
+        if follow_up:
+            expected.add("prior_explanation_not_evidence")
         if self.server.require_window_capture:
             expected.add(OCR_FIELD)
         if isinstance(selected, dict) and self.server.require_window_capture:
@@ -272,12 +287,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError()
         if not isinstance(selected, dict) or set(selected) != expected:
             raise ValueError()
-        question = EXPLAIN_QUESTION if self.server.scenario == "explain-may" else ""
+        question = FOLLOW_QUESTION if follow_up else EXPLAIN_QUESTION if self.server.scenario == "explain-may" else ""
         self.rejection_stage = "source"
         if selected["source"] != self.server.contract["selected"]:
             raise ValueError()
         self.rejection_stage = "question"
         if selected["follow_up_question"] != question:
+            raise ValueError()
+        if follow_up and selected["prior_explanation_not_evidence"] != self.server.contract["answer"]:
             raise ValueError()
         if self.server.require_window_capture:
             ocr = selected[OCR_FIELD]
@@ -308,7 +325,7 @@ def main():
     parser.add_argument("--state", required=True)
     parser.add_argument("--stop-file", required=True)
     parser.add_argument("--require-window-capture", action="store_true")
-    parser.add_argument("--scenario", choices=("simplify", "explain-may"), default="simplify")
+    parser.add_argument("--scenario", choices=("simplify", "explain-may", "follow-up-return-clear"), default="simplify")
     args = parser.parse_args()
     try:
         contract = contract_file(args.contract)

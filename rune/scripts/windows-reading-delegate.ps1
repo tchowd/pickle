@@ -17,7 +17,7 @@ function ConvertTo-PickleReadingWindowsArgument([AllowEmptyString()][string]$Val
   return $result.ToString()
 }
 
-function New-PickleReadingCoreStart([string]$PowerShell,[string]$Script,[string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
+function New-PickleReadingCoreStart([string]$PowerShell,[string]$Script,[string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify') {
   $start=[Diagnostics.ProcessStartInfo]::new()
   $start.FileName=$PowerShell;$start.UseShellExecute=$false
   $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$Script,'-Application',$Application,'-DataDirectory',$DataDirectory,'-EvidencePath',$EvidencePath,'-Configuration',$Configuration)
@@ -27,7 +27,7 @@ function New-PickleReadingCoreStart([string]$PowerShell,[string]$Script,[string]
   return $start
 }
 
-function Invoke-PickleReadingCore([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[ValidateSet('debug','release')][string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
+function Invoke-PickleReadingCore([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[ValidateSet('debug','release')][string]$Configuration,[switch]$RequireWindowCapture,[ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify') {
   if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'The reading delegate runs only on Windows.' }
   $command=Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1
   $powerShell=[IO.Path]::GetFullPath($command.Source)

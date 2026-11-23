@@ -23,7 +23,10 @@ public static class ReadingFixturePredicates {
     public const string PixelMarker="ORCHID";
     public const string ExplainTerm="may";
     public const string ExplainLabel="Explain \u201cmay\u201d";
-    public static bool Scenario(string value) { return value=="simplify" || value=="explain-may"; }
+    public const string FollowQuestion="What does \u201cmay\u201d mean for the Caf\u00e9 route?";
+    public const string FollowAnswer="\u201cMay\u201d means a possibility for the Caf\u00e9 route, not a promise of reliability in rain.";
+    public const string UnsentDraft="Unsent Caf\u00e9 draft \u2014 keep me";
+    public static bool Scenario(string value) { return value=="simplify" || value=="explain-may" || value=="follow-up-return-clear"; }
     public static bool MarkerAbsent(IEnumerable<string> values) {
         return values!=null && values.All(value=>value!=null &&
             value.IndexOf(PixelMarker,StringComparison.OrdinalIgnoreCase)<0);
@@ -83,6 +86,13 @@ public static class ReadingFixturePredicates {
         normalized["action"]="Simplify"; normalized["question"]=null;
         return SavedEntry(normalized,selected,answer);
     }
+    public static bool FollowSavedEntry(Dictionary<string,object> entry,string selected) {
+        if(entry==null || !entry.ContainsKey("action") || !entry.ContainsKey("question") ||
+            !(entry["action"] is string) || (string)entry["action"]!="Follow-up" ||
+            !(entry["question"] is string) || (string)entry["question"]!=FollowQuestion) return false;
+        var normalized=new Dictionary<string,object>(entry);normalized["action"]="Simplify";normalized["question"]=null;
+        return SavedEntry(normalized,selected,FollowAnswer);
+    }
     public static void SelfTest() {
         const string chosen="Caf\u00e9 selected passage.";
         if (!Contract("BEFORE",chosen,"AFTER","A controlled answer.")) throw new Exception("contract");
@@ -128,7 +138,13 @@ public static class ReadingFixturePredicates {
             var bad=new Dictionary<string,object>(explained); bad[key]="unexpected";
             if (ExplainSavedEntry(bad,chosen,"A controlled answer.")) throw new Exception("explain-absence-negative");
         }
-        if (!Scenario("simplify") || !Scenario("explain-may") || Scenario("follow-up")) throw new Exception("scenario");
+        var followed=new Dictionary<string,object>(saved);followed["action"]="Follow-up";followed["question"]=FollowQuestion;followed["answer"]=FollowAnswer;
+        if(!FollowSavedEntry(followed,chosen) || FollowSavedEntry(saved,chosen) || SavedEntry(followed,chosen,FollowAnswer)) throw new Exception("follow-up-entry");
+        foreach(string key in new[]{"question","action","answer","quality","chart","reference"}) {
+            var bad=new Dictionary<string,object>(followed);bad[key]="unexpected";
+            if(FollowSavedEntry(bad,chosen)) throw new Exception("follow-up-entry-negative");
+        }
+        if (!Scenario("simplify") || !Scenario("explain-may") || !Scenario("follow-up-return-clear") || Scenario("follow-up")) throw new Exception("scenario");
     }
 }
 
@@ -406,6 +422,13 @@ public static class ReadingFixtureProgram {
         if (!value.TryGetValue("source_verified",out field) || !(field is bool) || (bool)field!=complete) Fail("provider-source-unverified");
         if (!value.TryGetValue("context_verified",out field) || !(field is bool) || (bool)field!=complete) Fail("provider-context-unverified");
     }
+    static void FollowServer(string path) {
+        var value=ReadJson(path);string[] keys={"total_requests","show_count","chat_count"};int[] expected={4,2,2};
+        for(int i=0;i<keys.Length;i++) if(!value.ContainsKey(keys[i]) || !(value[keys[i]] is int) || (int)value[keys[i]]!=expected[i]) Fail("unexpected-follow-up-request-count");
+        foreach(string key in new[]{"source_verified","context_verified","follow_up_verified"})
+            if(!value.ContainsKey(key) || !(value[key] is bool) || !(bool)value[key]) Fail("follow-up-provider-unverified");
+        if(!value.ContainsKey("rejected") || !(value["rejected"] is bool) || (bool)value["rejected"]) Fail("provider-rejected-input");
+    }
     static void VerifyPixelMarker(IntPtr fixture,int pid) {
         stage="source-pixel-marker";
         if (!Owned(fixture,pid)) Fail("marker-source-not-owned");
@@ -561,15 +584,23 @@ public static class ReadingFixtureProgram {
             new[]{"entry-quality-","entry-reference-","entry-chart-kind-"}.All(prefix=>Find(root,prefix+id,pid)==null);
     }
     static bool ExplainScenario(Dictionary<string,string> options) { return options["--scenario"]=="explain-may"; }
+    static bool FollowScenario(Dictionary<string,string> options) { return options["--scenario"]=="follow-up-return-clear"; }
+    static bool RequestMetadata(AutomationElement root,int pid,string id,string question) {
+        var request=Find(root,"entry-request-"+id,pid);var text=Find(root,"entry-question-"+id,pid);
+        return request!=null && !request.Current.IsOffscreen && text!=null && !text.Current.IsOffscreen &&
+            text.Current.ControlType==ControlType.Text && text.Current.Name==question &&
+            new[]{"entry-quality-","entry-reference-","entry-chart-kind-"}.All(prefix=>Find(root,prefix+id,pid)==null);
+    }
     static void DriveSaved(Contract contract,Dictionary<string,string> options) {
         stage="saved-entry-read";
-        bool explain=ExplainScenario(options);
+        bool explain=ExplainScenario(options),follow=FollowScenario(options);
+        string expectedAnswer=follow ? ReadingFixturePredicates.FollowAnswer : contract.Answer;
         var entry=ReadJson(options["--saved-entry"]);
-        if (!(explain ? ReadingFixturePredicates.ExplainSavedEntry(entry,contract.Selected,contract.Answer) :
+        if (!(follow ? ReadingFixturePredicates.FollowSavedEntry(entry,contract.Selected) : explain ? ReadingFixturePredicates.ExplainSavedEntry(entry,contract.Selected,contract.Answer) :
             ReadingFixturePredicates.SavedEntry(entry,contract.Selected,contract.Answer))) Fail("saved-entry-contract-mismatch");
         string id=(string)entry["id"];
         evidence["saved_entry_verified"]=true; evidence["saved_entry_id_sha256"]=Hash(id);
-        evidence["answer_sha256"]=Hash(contract.Answer);
+        evidence["answer_sha256"]=Hash(expectedAnswer);
         int appPid=Pid(options["--application-pid"]);
         if (appPid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
         evidence["application_pid"]=appPid;
@@ -600,6 +631,10 @@ public static class ReadingFixtureProgram {
                 if (card==null || !ExplainMetadata(card,appPid,id) ||
                     !Texts(card,appPid).Contains("ReadingFixture \u00b7 Explain")) Fail("saved-card-explain-metadata-mismatch");
                 evidence["saved_card_explain_metadata_verified"]=true;
+            } else if(follow) {
+                var card=Find(root,"entry-"+id,appPid);
+                if(card==null || !RequestMetadata(card,appPid,id,ReadingFixturePredicates.FollowQuestion) || !Texts(card,appPid).Contains("ReadingFixture \u00b7 Follow-up")) Fail("saved-card-follow-up-metadata-mismatch");
+                evidence["saved_card_follow_up_metadata_verified"]=true;
             } else if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-card-metadata");
             stage="saved-detail";
             Invoke(read,appPid);
@@ -608,12 +643,15 @@ public static class ReadingFixtureProgram {
                 root=Root(app,appPid);
                 if (!LibraryReady(root,appPid) || Find(root,"entry-back",appPid)==null || Find(root,"copy-saved-detail",appPid)==null) return false;
                 var answer=Find(root,"answer",appPid);
-                return answer!=null && Texts(answer,appPid).SequenceEqual(new[]{contract.Answer}) &&
+                return answer!=null && Texts(answer,appPid).SequenceEqual(new[]{expectedAnswer}) &&
                     Texts(root,appPid).Count(text=>text==contract.Selected)==1;
             },10,"saved-detail-content-mismatch");
             if (explain) {
                 if (!ExplainMetadata(root,appPid,id)) Fail("saved-detail-explain-metadata-mismatch");
                 evidence["saved_detail_raw_term_verified"]=true;
+            } else if(follow) {
+                if(!RequestMetadata(root,appPid,id,ReadingFixturePredicates.FollowQuestion)) Fail("saved-detail-follow-up-metadata-mismatch");
+                evidence["saved_detail_raw_question_verified"]=true;
             } else {
                 if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-detail-metadata");
                 evidence["saved_metadata_absence_verified"]=true;
@@ -627,8 +665,64 @@ public static class ReadingFixtureProgram {
             evidence["ordinary_quit_verified"]=true; evidence["app_exit_code"]=application.ExitCode;
         }
     }
+    static bool FocusedFollowField(IntPtr app,int pid,string expected) {
+        if(!Owned(app,pid) || Native.GetForegroundWindow()!=app) return false;
+        var focused=AutomationElement.FocusedElement;
+        if(focused==null || focused.Current.ProcessId!=pid || focused.Current.AutomationId!="follow-up" ||
+            focused.Current.ControlType!=ControlType.Edit || !focused.Current.IsEnabled || focused.Current.IsOffscreen || focused.Current.IsPassword) return false;
+        object pattern;if(!focused.TryGetCurrentPattern(ValuePattern.Pattern,out pattern) || ((ValuePattern)pattern).Current.IsReadOnly || ((ValuePattern)pattern).Current.Value!=expected) return false;
+        var root=Root(app,pid);var node=focused;
+        for(int depth=0;node!=null && depth<32;depth++) {
+            if(DateTime.UtcNow>=overall) Fail("follow-up-focus-deadline");
+            if(node.Current.ProcessId!=pid) return false;if(Automation.Compare(node,root)) return true;
+            node=TreeWalker.RawViewWalker.GetParent(node);
+        }
+        return false;
+    }
+    static void TypeFollowField(IntPtr app,int pid,Process application,string value) {
+        Focus(app,pid);Native.End(app,pid);AutomationElement field=null;
+        Wait(()=> {field=Find(Root(app,pid),"follow-up",pid);return field!=null && field.Current.IsEnabled && !field.Current.IsOffscreen && field.Current.IsKeyboardFocusable;},5,"follow-up-field-unavailable");
+        field.SetFocus();
+        Wait(()=>!application.HasExited && FocusedFollowField(app,pid,""),5,"follow-up-field-focus-unavailable");
+        Native.Unicode(app,pid,value);
+        Wait(()=>!application.HasExited && FocusedFollowField(app,pid,value),5,"follow-up-unicode-value-mismatch");
+    }
+    static void FollowUpReturn(Contract contract,Dictionary<string,string> options,IntPtr app,int appPid,Process application) {
+        stage="follow-up-input";
+        TypeFollowField(app,appPid,application,ReadingFixturePredicates.FollowQuestion);
+        Server(options["--server-state"],true);
+        evidence["follow_up_question_value_verified"]=true;evidence["follow_up_typed_events"]=ReadingFixturePredicates.FollowQuestion.Length*2;
+        if(!FocusedFollowField(app,appPid,ReadingFixturePredicates.FollowQuestion)) Fail("follow-up-focus-changed-before-return");
+        Native.Return(app,appPid);evidence["follow_up_return_events"]=2;stage="follow-up-reading";
+        Wait(()=> {
+            if(application.HasExited) Fail("application-exited-during-follow-up");
+            var root=Root(app,appPid);var turn=Find(root,"turn-0",appPid);if(turn==null) return false;
+            var answer=Find(turn,"answer",appPid);
+            return Texts(turn,appPid).Count(s=>s==ReadingFixturePredicates.FollowQuestion)==1 && answer!=null &&
+                Texts(answer,appPid).SequenceEqual(new[]{ReadingFixturePredicates.FollowAnswer}) && Find(root,"cancel-request",appPid)==null && Find(root,"answer-draft",appPid)==null;
+        },20,"accepted-return-follow-up-unavailable");
+        FollowServer(options["--server-state"]);evidence["accepted_follow_up_verified"]=true;
+    }
+    static void ClearFollowUps(Contract contract,Dictionary<string,string> options,IntPtr app,int appPid,Process application) {
+        stage="clear-follow-ups";
+        TypeFollowField(app,appPid,application,ReadingFixturePredicates.UnsentDraft);
+        evidence["unsent_draft_typed_events"]=ReadingFixturePredicates.UnsentDraft.Length*2;
+        FollowServer(options["--server-state"]);
+        Invoke(Find(Root(app,appPid),"clear-follow-ups",appPid),appPid);
+        Wait(()=> {
+            var root=Root(app,appPid);var input=Find(root,"follow-up",appPid);object value;
+            return !application.HasExited && Find(root,"turn-0",appPid)==null && Find(root,"clear-follow-ups",appPid)==null &&
+                input!=null && input.TryGetCurrentPattern(ValuePattern.Pattern,out value) && ((ValuePattern)value).Current.Value==ReadingFixturePredicates.UnsentDraft;
+        },5,"clear-follow-ups-or-draft-mismatch");
+        RecheckSource(contract,app,appPid,application);
+        var baseAnswer=Find(Root(app,appPid),"answer",appPid);
+        if(baseAnswer==null || !Texts(baseAnswer,appPid).SequenceEqual(new[]{contract.Answer})) Fail("clear-base-answer-mismatch");
+        Focus(app,appPid);Native.End(app,appPid);
+        Wait(()=> {var field=Find(Root(app,appPid),"follow-up",appPid);object pattern;return field!=null && field.TryGetCurrentPattern(ValuePattern.Pattern,out pattern) && ((ValuePattern)pattern).Current.Value==ReadingFixturePredicates.UnsentDraft;},5,"clear-unsent-draft-lost-after-source-recheck");
+        FollowServer(options["--server-state"]);evidence["clear_follow_ups_verified"]=true;evidence["clear_base_source_draft_preserved"]=true;
+    }
     static void Drive(Contract contract,Dictionary<string,string> options) {
-        bool explain=ExplainScenario(options);
+        bool explain=ExplainScenario(options),follow=FollowScenario(options);
         int appPid=Pid(options["--application-pid"]), fixturePid=Pid(options["--fixture-pid"]);
         if (appPid==fixturePid || appPid==Process.GetCurrentProcess().Id || fixturePid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
         IntPtr fixture=Handle(options["--fixture-hwnd"]), app=IntPtr.Zero;
@@ -705,8 +799,10 @@ public static class ReadingFixtureProgram {
             Server(options["--server-state"],true); evidence["provider_source_verified"]=true; evidence["completed_answer_verified"]=true;
             if (explain) evidence["accepted_explain_turn_verified"]=true;
             RecheckSource(contract,app,appPid,application);
+            if(follow) { FollowUpReturn(contract,options,app,appPid,application);RecheckSource(contract,app,appPid,application); }
             SaveAnswer(app,appPid,application);
-            Server(options["--server-state"],true);
+            if(follow) ClearFollowUps(contract,options,app,appPid,application);
+            else Server(options["--server-state"],true);
             stage="ordinary-quit";
             Focus(app,appPid); Native.Chord(app,appPid,0x51,false);
             Wait(()=>application.HasExited,10,"application-did-not-quit");
@@ -767,6 +863,29 @@ public static class ReadingFixtureProgram {
             down.Data.Keyboard.Flags=1; up.Data.Keyboard.Flags=3;
             if (SendInput(2,new[]{down,up},Marshal.SizeOf(typeof(Input)))!=2) {
                 SendInput(1,new[]{up},Marshal.SizeOf(typeof(Input))); Fail("input-insertion-incomplete");
+            }
+        }
+        static void PlainInputTarget(IntPtr hwnd,int pid,ushort key) {
+            if(!Owned(hwnd,pid) || GetForegroundWindow()!=hwnd) Fail("input-target-not-owned");
+            foreach(int held in new[]{0x11,0x12,0x10,0x5b,0x5c,(int)key})
+                if((GetAsyncKeyState(held)&0x8000)!=0) Fail("input-key-already-held");
+        }
+        public static void Unicode(IntPtr hwnd,int pid,string value) {
+            PlainInputTarget(hwnd,pid,0x0d);
+            if(value==null || value.Length==0 || value.Length>150 || value.Any(c=>Char.IsControl(c)||Char.IsSurrogate(c))) Fail("invalid-fixed-unicode-input");
+            var inputs=new List<Input>();var release=new List<Input>();
+            foreach(char unit in value) {
+                var down=new Input{Type=1,Data=new Union{Keyboard=new Keyboard{Scan=unit,Flags=4}}};
+                var up=down;up.Data.Keyboard.Flags=6;inputs.Add(down);inputs.Add(up);release.Add(up);
+            }
+            if(SendInput((uint)inputs.Count,inputs.ToArray(),Marshal.SizeOf(typeof(Input)))!=(uint)inputs.Count) {
+                SendInput((uint)release.Count,release.ToArray(),Marshal.SizeOf(typeof(Input)));Fail("input-insertion-incomplete");
+            }
+        }
+        public static void Return(IntPtr hwnd,int pid) {
+            PlainInputTarget(hwnd,pid,0x0d);var up=Key(0x0d,true);
+            if(SendInput(2,new[]{Key(0x0d,false),up},Marshal.SizeOf(typeof(Input)))!=2) {
+                SendInput(1,new[]{up},Marshal.SizeOf(typeof(Input)));Fail("input-insertion-incomplete");
             }
         }
         public static void Chord(IntPtr hwnd,int pid,ushort key,bool alt) {

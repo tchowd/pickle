@@ -4,9 +4,9 @@ param(
   [ValidateSet('debug','release')][string]$Configuration = 'debug',
   [string]$ExpectedVersion
 )
-function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCapture,[string]$Configuration,[ValidateSet('simplify','explain-may')][string]$Scenario='simplify') {
+function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCapture,[string]$Configuration,[ValidateSet('simplify','explain-may','follow-up-return-clear')][string]$Scenario='simplify') {
   if ($Evidence.scenario -cne $Scenario -or $Evidence.driver.scenario -cne $Scenario -or $Evidence.restart_driver.scenario -cne $Scenario -or $Evidence.server.scenario -cne $Scenario) { throw 'The package reading evidence scenario differed.' }
-  if ($Scenario -ceq 'explain-may' -and ($RequireWindowCapture -or $Configuration -cne 'debug')) { throw 'The Explain gate requires a separate screen-off debug workflow.' }
+  if ($Scenario -cne 'simplify' -and ($RequireWindowCapture -or $Configuration -cne 'debug')) { throw 'Additional reading gates require a separate screen-off debug workflow.' }
   if (($Evidence.schema -isnot [int] -and $Evidence.schema -isnot [long]) -or $Evidence.schema -ne 1 -or $Evidence.test -cne 'windows-installed-reading-workflow' -or $Evidence.configuration -cne $Configuration) { throw 'The package reading evidence did not match this acceptance run.' }
   foreach ($key in @('passed','ordinary_exit','lease_released','control_removed','restart_ordinary_exit','restart_lease_released','restart_control_removed','saved_archive_verified','saved_archive_unchanged','profile_restored','owned_children_stopped')) {
     if ($Evidence.$key -isnot [bool] -or !$Evidence.$key) { throw 'The installed reading, Save, restart and cleanup workflow did not pass completely.' }
@@ -18,7 +18,8 @@ function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCaptu
     if ($Evidence.server.$key -isnot [bool] -or !$Evidence.server.$key) { throw 'The owned provider did not verify the selected source and context boundary.' }
   }
   if ($Evidence.server.rejected -isnot [bool] -or $Evidence.server.rejected) { throw 'The owned provider rejected a request.' }
-  foreach ($item in @(@('total_requests',2),@('show_count',1),@('chat_count',1))) {
+  $requests=if ($Scenario -ceq 'follow-up-return-clear') { 2 } else { 1 }
+  foreach ($item in @(@('total_requests',($requests*2)),@('show_count',$requests),@('chat_count',$requests))) {
     $value=$Evidence.server.($item[0])
     if (($value -isnot [int] -and $value -isnot [long]) -or $value -ne $item[1]) { throw 'The owned provider request count differed.' }
   }
@@ -31,6 +32,9 @@ function Assert-PicklePackageReadingEvidence($Evidence,[bool]$RequireWindowCaptu
       if ($Evidence.driver.$key -isnot [bool] -or !$Evidence.driver.$key) { throw 'The accepted before-base Explain request was not verified.' }
     }
     $restartKeys+=@('saved_card_explain_metadata_verified','saved_detail_raw_term_verified')
+  } elseif ($Scenario -ceq 'follow-up-return-clear') {
+    Assert-PickleFollowUpKeyboardEvidence $Evidence.driver $Evidence.server $Evidence.restart_driver
+    $restartKeys+=@('saved_card_follow_up_metadata_verified','saved_detail_raw_question_verified')
   } else { $restartKeys+='saved_metadata_absence_verified' }
   foreach ($key in $restartKeys) {
     if ($Evidence.restart_driver.$key -isnot [bool] -or !$Evidence.restart_driver.$key) { throw 'The native saved-answer restart driver did not pass completely.' }
@@ -132,6 +136,9 @@ if (!$hasIdentity -and $Configuration -ceq 'debug' -and $env:GITHUB_ACTIONS -ceq
   $explainEvidence=Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-explain-reading.json'
   Invoke-PickleReadingCore $application $supportRoot $explainEvidence $Configuration -Scenario 'explain-may'
   Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $explainEvidence) $false $Configuration -Scenario 'explain-may'
+  $followEvidence=Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-follow-up-reading.json'
+  Invoke-PickleReadingCore $application $supportRoot $followEvidence $Configuration -Scenario 'follow-up-return-clear'
+  Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $followEvidence) $false $Configuration -Scenario 'follow-up-return-clear'
 }
 . (Join-Path $PSScriptRoot 'windows-extension-smoke.ps1')
 if (Test-PickleExtensionSetupGate $Configuration $hasIdentity $PSEdition ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) $env:GITHUB_ACTIONS $env:RUNNER_ENVIRONMENT) {
