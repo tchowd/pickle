@@ -89,6 +89,37 @@
       ],
       "note": "Upstream declares the license identifiers but does not bundle full license bodies. Canonical SPDX texts are reproduced unmodified, including any template placeholders, alongside actual upstream declarations/notices. This record does not invent copyright holders or create a new license grant."
     },
+    "convert_case@0.4.0": {
+      "declared_license": "MIT",
+      "upstream_repository": "https://github.com/rutrum/convert-case",
+      "upstream_revision": "300d9eef9e8c970e15f324afbc3df8b6a4ebbf71",
+      "revision_basis": "Cargo .cargo_vcs_info.json; upstream Cargo.toml and src/lib.rs exactly match the locked published crate",
+      "files": [
+        {
+          "path": "licenses/SPDX-MIT.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/ab9b0904b43db6f4b67431efd8821feb821f1c8b/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "kind": "canonical-license-text"
+        },
+        {
+          "path": "licenses/convert_case-0.4.0-upstream-Cargo.toml.txt",
+          "source": "https://raw.githubusercontent.com/rutrum/convert-case/300d9eef9e8c970e15f324afbc3df8b6a4ebbf71/Cargo.toml",
+          "sha256": "5f821f7641c67da8a4e0eb2ebf994f5ba88ad811a3529cb91017d26c8075aea2",
+          "kind": "upstream-declaration"
+        }
+      ],
+      "note": "The locked crate and its exact upstream Cargo VCS revision declare MIT but contain no license body or copyright notice. The actual upstream declaration is preserved alongside the unmodified pinned canonical SPDX MIT text, including its template placeholders. This record does not invent copyright holders, import a later repository license, or create a new license grant.",
+      "source_checks": [
+        {
+          "path": "Cargo.toml.orig",
+          "sha256": "5f821f7641c67da8a4e0eb2ebf994f5ba88ad811a3529cb91017d26c8075aea2"
+        },
+        {
+          "path": "src/lib.rs",
+          "sha256": "bcd9f76f198f739ec65d01b7186a12e7cbbaad8101728e4053b7f1a1efd3b3c8"
+        }
+      ]
+    },
     "dispatch@0.2.0": {
       "declared_license": "MIT",
       "upstream_repository": "http://github.com/SSheldon/rust-dispatch",

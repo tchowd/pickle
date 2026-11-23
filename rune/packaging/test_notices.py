@@ -146,6 +146,37 @@ class NoticesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 NOTICES.upstream_override(package)
 
+    def test_convert_case_missing_license_override_rejects_revision_manifest_and_source_drift(self):
+        overrides = json.loads((NOTICES.PACKAGING / "license-overrides.json").read_text(encoding="utf-8"))
+        item = overrides["packages"]["convert_case@0.4.0"]
+        declaration = NOTICES.PACKAGING / "licenses/convert_case-0.4.0-upstream-Cargo.toml.txt"
+        self.assertIn('license = "MIT"', declaration.read_text(encoding="utf-8"))
+        self.assertEqual(item["upstream_revision"], "300d9eef9e8c970e15f324afbc3df8b6a4ebbf71")
+        self.assertEqual(item["source_checks"], [
+            {"path": "Cargo.toml.orig", "sha256": "5f821f7641c67da8a4e0eb2ebf994f5ba88ad811a3529cb91017d26c8075aea2"},
+            {"path": "src/lib.rs", "sha256": "bcd9f76f198f739ec65d01b7186a12e7cbbaad8101728e4053b7f1a1efd3b3c8"},
+        ])
+        self.assertEqual([file["kind"] for file in item["files"]], ["canonical-license-text", "upstream-declaration"])
+        self.assertIn("<year> <copyright holders>", (NOTICES.PACKAGING / item["files"][0]["path"]).read_text(encoding="utf-8"))
+        self.assertIn("does not invent copyright holders", item["note"])
+        # No Cargo cache or external fetch is required. The actual full-source
+        # positive path runs in strict target generation; these independent
+        # fixtures must refuse changing any recorded source-identity boundary.
+        for changed in ("revision", "manifest", "source"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                directory = pathlib.Path(temporary)
+                revision = "0" * 40 if changed == "revision" else item["upstream_revision"]
+                (directory / ".cargo_vcs_info.json").write_text(json.dumps({"git": {"sha1": revision}}), encoding="utf-8")
+                (directory / "Cargo.toml.orig").write_bytes(
+                    b"changed manifest" if changed == "manifest" else declaration.read_bytes())
+                (directory / "src").mkdir()
+                (directory / "src/lib.rs").write_bytes(b"unreviewed source")
+                package = {"name": "convert_case", "version": "0.4.0", "repository": item["upstream_repository"],
+                           "license": "MIT", "source": "registry+https://example.com/index", "manifest_path": str(directory / "Cargo.toml")}
+                expected = "Cargo revision" if changed == "revision" else "published source"
+                with self.assertRaisesRegex(ValueError, expected):
+                    NOTICES.upstream_override(package)
+
 
 if __name__ == "__main__":
     unittest.main()
