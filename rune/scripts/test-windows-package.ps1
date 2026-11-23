@@ -1,7 +1,19 @@
-param([string]$InstallerPath = 'artifacts/PickleRune-setup.exe', [string]$InstallDirectory)
+param(
+  [string]$InstallerPath = 'artifacts/PickleRune-setup.exe',
+  [string]$InstallDirectory,
+  [ValidateSet('debug','release')][string]$Configuration = 'debug',
+  [string]$ExpectedVersion
+)
 $ErrorActionPreference = 'Stop'
+$uiMode = if ($Configuration -eq 'release') { 'native-window' } else { 'headless-render' }
 Set-Location (Join-Path $PSScriptRoot '..')
 $installer = (Resolve-Path $InstallerPath).Path
+if (!$ExpectedVersion) {
+  $metadata = (& cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json)
+  if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the expected package version.' }
+  $ExpectedVersion = ($metadata.packages | Where-Object { $_.name -eq 'pickle-app' }).version
+}
+if (!$ExpectedVersion) { throw 'Supply the expected installed app version.' }
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PickleRune'
 if (Test-Path $uninstallKey) { throw 'Use a clean, isolated Windows test account. This smoke test does not overwrite an existing installed-app registration.' }
 $testDirectory = if ($InstallDirectory) { [IO.Path]::GetFullPath($InstallDirectory) } else { Join-Path ([IO.Path]::GetTempPath()) ('pickle-package-smoke-' + [guid]::NewGuid().ToString('N')) }
@@ -28,6 +40,10 @@ if ((Invoke-AppProbe @('--check-running')) -ne 0) { throw 'A Pickle instance is 
 foreach ($filename in @('PickleRune.exe', 'pickle-browser-host.exe', 'Uninstall.exe', 'Pickle.ico', 'THIRD_PARTY_NOTICES.txt', 'dependency-inventory.json', 'browser-extension/manifest.json')) {
   if (!(Test-Path (Join-Path $testDirectory $filename))) { throw "Installed payload is missing $filename." }
 }
+$variant = if (Test-Path (Join-Path $testDirectory 'PickleIdentity.msix')) { 'identity' } else { 'unpackaged' }
+$versionReport = Join-Path $PWD "artifacts/$variant-$Configuration-installed-version.txt"
+$versionProbe = Start-Process -FilePath $application -ArgumentList @('--version') -RedirectStandardOutput $versionReport -Wait -PassThru
+if ($versionProbe.ExitCode -ne 0 -or (Get-Content -Raw $versionReport).Trim() -cne "Pickle Rune $ExpectedVersion") { throw 'The installed application version does not match the expected package version.' }
 $capabilities = Join-Path $testDirectory 'capabilities.json'
 $probe = Start-Process -FilePath $application -ArgumentList @('--capabilities') -RedirectStandardOutput $capabilities -Wait -PassThru
 if ($probe.ExitCode -ne 0) { throw 'Installed application capabilities probe failed.' }
@@ -43,19 +59,29 @@ if ($hasIdentity) {
   $ocrResult = Get-Content -Raw $ocrReport | ConvertFrom-Json
   if ($ocrResult.test -cne 'windows-ocr-fixed-fixture' -or $ocrResult.passed -ne $true) { throw 'The installed OCR probe did not return its expected evidence.' }
 }
-$snapshot = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader.png' } else { 'artifacts/unpackaged-installed-reader.png' })
-$tree = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader-tree.json' } else { 'artifacts/unpackaged-installed-reader-tree.json' })
-$render = Start-Process -FilePath $application -ArgumentList @('--scene', 'sample', '--snap', "`"$snapshot`"", '--tree', "`"$tree`"") -Wait -PassThru
-if ($render.ExitCode -ne 0 -or !(Test-Path $snapshot) -or !(Test-Path $tree)) { throw 'Installed application could not render the offline sample.' }
+if ($Configuration -eq 'debug') {
+  $snapshot = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader.png' } else { 'artifacts/unpackaged-installed-reader.png' })
+  $tree = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader-tree.json' } else { 'artifacts/unpackaged-installed-reader-tree.json' })
+  $render = Start-Process -FilePath $application -ArgumentList @('--scene', 'sample', '--snap', "`"$snapshot`"", '--tree', "`"$tree`"") -Wait -PassThru
+  if ($render.ExitCode -ne 0 -or !(Test-Path $snapshot) -or !(Test-Path $tree)) { throw 'Installed debug application could not render the offline sample.' }
+}
 $uninstaller = Join-Path $testDirectory 'Uninstall.exe'
 $background = $null
 try {
-  $background = Start-Process -FilePath $application -ArgumentList @('--background') -PassThru
+  if ($Configuration -eq 'release') {
+    . (Join-Path $PSScriptRoot 'windows-native-smoke.ps1')
+    $stdout = Join-Path $PWD "artifacts/$variant-release-native-stdout.log"
+    $stderr = Join-Path $PWD "artifacts/$variant-release-native-stderr.log"
+    $background = Start-Process -FilePath $application -ArgumentList @('--sample') -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    Assert-PickleNativeReleaseWindow $background $application (Join-Path $PWD "artifacts/$variant-release-native-smoke.json")
+  } else {
+    $background = Start-Process -FilePath $application -ArgumentList @('--background') -PassThru
+  }
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   $running = $false
   while ([DateTime]::UtcNow -lt $deadline) {
     $background.Refresh()
-    if ($background.HasExited) { throw 'The packaged background application exited before holding its instance lease.' }
+    if ($background.HasExited) { throw 'The owned packaged application exited before holding its instance lease.' }
     if ((Invoke-AppProbe @('--check-running')) -eq 10) { $running = $true; break }
     Start-Sleep -Milliseconds 100
   }
@@ -110,7 +136,7 @@ if ($hasIdentity) {
   if (!(Test-Path $marker) -or !(Test-Path $dataMarker) -or (Test-Path $uninstallKey)) { throw 'Identity uninstall violated data retention or owned entry cleanup.' }
   if (Test-Path $uninstaller) { Remove-Item -LiteralPath $uninstaller }
   Remove-Item -LiteralPath $dataMarker
-  Write-Host 'PASS: signed external identity, installed runtime identity, repair, conflict refusal, live-instance guards, offline rendering, owned identity/browser cleanup and retained data.'
+  Write-Host "PASS ($Configuration, UI=$uiMode): signed external identity, installed version/runtime identity, repair, conflict refusal, live-instance guards, owned identity/browser cleanup and retained data."
   Write-Host "Test-only diagnostic directory retained at $testDirectory"
   return
 }
@@ -137,5 +163,5 @@ if (Test-Path $secondUninstaller) { Remove-Item -LiteralPath $secondUninstaller 
 if (Test-Path $uninstallKey) { throw 'The final owned installed-app registration was not removed.' }
 if (!(Test-Path $dataMarker)) { throw 'Application data was not retained after final uninstall.' }
 Remove-Item -LiteralPath $dataMarker
-Write-Host 'PASS: Windows installation, offline rendering, live-instance guards, browser cleanup, ownership-aware uninstall, and data retention.'
+Write-Host "PASS ($Configuration, UI=$uiMode): Windows installation/version, live-instance guards, browser cleanup, ownership-aware uninstall, and data retention."
 Write-Host "Test-only diagnostic directory retained at $testDirectory"

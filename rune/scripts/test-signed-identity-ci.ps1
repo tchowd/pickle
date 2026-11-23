@@ -1,3 +1,7 @@
+param(
+  [ValidateSet('debug','release')][string]$Configuration = 'debug',
+  [string]$ExpectedVersion
+)
 # This changes trust only inside a disposable hosted Windows CI runner.
 # The production builders never create certificates or modify trust stores.
 $ErrorActionPreference = 'Stop'
@@ -7,7 +11,9 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or $env:GITHUB_
 # Appx and the deployment helper's WinRT projection use the inbox Windows PowerShell runtime.
 # Modern pwsh/.NET removed built-in WinRT activation; keep the entire cleanup in the same shell.
 if ($PSEdition -eq 'Core') {
-  & "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath
+  $delegateArguments = @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$PSCommandPath,'-Configuration',$Configuration)
+  if ($ExpectedVersion) { $delegateArguments += @('-ExpectedVersion',$ExpectedVersion) }
+  & "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe" @delegateArguments
   if ($LASTEXITCODE -ne 0) { throw "Signed identity CI failed in Windows PowerShell with status $LASTEXITCODE." }
   return
 }
@@ -39,7 +45,7 @@ try {
   $publicCertificate = Join-Path $work 'public-test-certificate.cer'
   Export-Certificate -Cert $certificate -FilePath $publicCertificate | Out-Null
   Import-Certificate -FilePath $publicCertificate -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople' | Out-Null
-  & ./scripts/build-identity.ps1 -Configuration debug -PackageName $name -Publisher $certificate.Subject `
+  & ./scripts/build-identity.ps1 -Configuration $Configuration -PackageName $name -Publisher $certificate.Subject `
     -PublisherDisplayName 'Pickle CI test only' -Version '0.1.0.0' -CertificateThumbprint $certificate.Thumbprint -Installer
   $stage = Get-ChildItem artifacts/windows-* -Directory | Where-Object {
     $metadata = Join-Path $_.FullName 'PickleIdentity.json'
@@ -48,7 +54,7 @@ try {
   if (!$stage) { throw 'The signed build did not produce this test identity payload.' }
   Copy-Item -LiteralPath artifacts/PickleRune-setup.exe -Destination artifacts/PickleRune-identity-ci-test-setup.exe
   Copy-Item -LiteralPath artifacts/PickleRune-windows.zip -Destination artifacts/PickleRune-identity-ci-test-windows.zip
-  & ./scripts/test-windows-package.ps1 -InstallerPath artifacts/PickleRune-identity-ci-test-setup.exe -InstallDirectory $install
+  & ./scripts/test-windows-package.ps1 -InstallerPath artifacts/PickleRune-identity-ci-test-setup.exe -InstallDirectory $install -Configuration $Configuration -ExpectedVersion $ExpectedVersion
 }
 finally {
   try {
@@ -88,4 +94,4 @@ finally {
     if ($cleanupErrors.Count) { throw ($cleanupErrors -join [Environment]::NewLine) }
   }
 }
-Write-Host 'PASS: hosted-runner test signing, installed external identity, real fixed-fixture OCR, repair, uninstall, and exact certificate/private-key cleanup.'
+Write-Host "PASS ($Configuration): hosted-runner test signing, installed external identity/version, real fixed-fixture OCR, explicit UI smoke, repair, uninstall, and exact certificate/private-key cleanup."

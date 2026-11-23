@@ -2,7 +2,7 @@
 
 The Rust/Rune rebuild of Pickle for macOS and Windows. It lives beside the original Swift app while native compatibility and release validation continue.
 
-This is a **development build**. macOS execution has been exercised on the development Mac; the Windows platform adapter has been cross-checked, but a cross-check is not Windows runtime or installer verification. Developer ID signing/notarization, Windows release signing, published update hosting, and the full compatibility matrix remain release work.
+This is a **development build**. macOS execution has been exercised on the development Mac. Native Windows CI has passed workspace tests, rendering and application compilation, but a subsequent notice failure prevented installed-package verification in that run. See the [execution record](../docs/RUNE-IMPLEMENTATION-STATUS.md). Developer ID signing/notarization, Windows release signing, published update hosting, and the full compatibility matrix remain release work.
 
 ## Build and run
 
@@ -32,6 +32,8 @@ Open `artifacts/Pickle Rune.app`. The script also produces `artifacts/PickleRune
 
 For an optimized build, use `release` instead of `debug`. Set `PICKLE_SIGN_IDENTITY` only when the release owner's Developer ID identity is configured. Notarization is a separate explicit release step.
 
+After packaging, `bash scripts/test-macos-package.sh` checks payload presence, signature integrity, the installed executable's version/capabilities, and system-only dynamic library dependencies. It does not establish native GUI behavior, notarization or clean-machine acceptance.
+
 ### Windows package
 
 In PowerShell:
@@ -43,6 +45,8 @@ In PowerShell:
 ```
 
 The package contains `PickleRune.exe`, the Rust browser host, the extension folder, and notices. The installer is per-user and does not require running Pickle as administrator. Set `PICKLE_SIGN_CERT_THUMBPRINT` when a release signing certificate is available in the build environment. Unsigned packages remain development artifacts.
+
+On an isolated Windows test account, run `./scripts/test-windows-package.ps1 -Configuration release` for an optimized installer, or `-Configuration debug` for a debug installer. Both check installed version/capabilities, live-instance guards and ownership-aware uninstall/data retention. Debug requires Rune snapshots; release keeps agent tooling disabled and instead requires a visible window owned by the exact installed sample process plus bounded native responsiveness probes. A missing/hung window fails the test. Neither mode submits inference. CI runs optimized packages separately from debug rendering and retains their evidence; the hosted runner does not replace the declared Windows 11 interactive matrix.
 
 The Windows UI Automation reader intentionally does not claim access to elevated, password, or protected application content.
 

@@ -2,8 +2,10 @@ import importlib.util
 import json
 import hashlib
 import pathlib
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("notices", pathlib.Path(__file__).with_name("generate-notices.py"))
 NOTICES = importlib.util.module_from_spec(SPEC)
@@ -74,6 +76,59 @@ class NoticesTests(unittest.TestCase):
                 resource.resolve().relative_to((NOTICES.PACKAGING / "licenses").resolve())
                 self.assertTrue(notice["source"].startswith("https://raw.githubusercontent.com/"))
                 self.assertEqual(hashlib.sha256(resource.read_bytes()).hexdigest(), notice["sha256"])
+
+    def test_reviewed_notice_bytes_survive_windows_git_checkout(self):
+        resource_path = "rune/packaging/licenses/AccessKit-accesskit-f3026222-LICENSE-APACHE.txt"
+        original = (NOTICES.ROOT / resource_path).read_bytes()
+        attributes = (NOTICES.ROOT / ".gitattributes").read_bytes()
+        # Use independent temporary indexes, not commits or the user's Git config.
+        # The control case reproduces the exact conversion that broke Windows CI.
+        for preserve in (False, True):
+            with self.subTest(preserve=preserve), tempfile.TemporaryDirectory() as temporary:
+                repository = pathlib.Path(temporary) / "repository"
+                repository.mkdir()
+                global_attributes = pathlib.Path(temporary) / "global-attributes"
+                global_attributes.write_bytes(b"")
+                def git(*arguments):
+                    return subprocess.run(["git", "-c", "core.autocrlf=true", "-c", "core.safecrlf=false",
+                                           "-c", "core.attributesFile=" + global_attributes.as_posix(), *arguments], cwd=repository,
+                                          check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                git("init", "--quiet", "--template=")
+                resource = repository / resource_path
+                resource.parent.mkdir(parents=True)
+                resource.write_bytes(original)
+                if preserve:
+                    (repository / ".gitattributes").write_bytes(attributes)
+                    git("add", "--", ".gitattributes")
+                git("add", "--", resource_path)
+                checkout = pathlib.Path(temporary) / "checkout"
+                checkout.mkdir()
+                # A trailing slash is part of checkout-index's --prefix contract.
+                git("checkout-index", "--all", "--prefix=" + checkout.as_posix() + "/")
+                actual = (checkout / resource_path).read_bytes()
+                self.assertEqual(actual, original if preserve else original.replace(b"\n", b"\r\n"))
+                if preserve:
+                    self.assertEqual(hashlib.sha256(actual).hexdigest(), "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a")
+                else:
+                    self.assertEqual(hashlib.sha256(actual).hexdigest(), "20fe7b00e904ed690e3b9fd6073784d3fc428141dbd10b81c01fd143d0797f58")
+
+    def test_reviewed_notice_newline_changes_still_fail_strict_checksum_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            packaging = directory / "packaging"
+            (packaging / "licenses").mkdir(parents=True)
+            reviewed = b"Reviewed upstream license\nCopyright fixture\n"
+            (packaging / "licenses" / "fixture.txt").write_bytes(reviewed.replace(b"\n", b"\r\n"))
+            item = {"declared_license": "MIT", "upstream_repository": "https://example.com/fixture", "upstream_revision": "1" * 40,
+                    "files": [{"path": "licenses/fixture.txt", "sha256": hashlib.sha256(reviewed).hexdigest()}]}
+            (packaging / "license-overrides.json").write_text(json.dumps({"schema_version": 1, "packages": {"fixture@1.0.0": item}}), encoding="utf-8")
+            source = directory / "source"
+            source.mkdir()
+            package = {"name": "fixture", "version": "1.0.0", "repository": item["upstream_repository"],
+                       "license": "MIT", "source": "registry+https://example.com/index", "manifest_path": str(source / "Cargo.toml")}
+            with mock.patch.object(NOTICES, "PACKAGING", packaging):
+                with self.assertRaisesRegex(ValueError, "reviewed upstream notice failed its checksum"):
+                    NOTICES.upstream_override(package)
 
     def test_updated_cargo_vcs_revisions_require_a_new_notice_review(self):
         with tempfile.TemporaryDirectory() as temporary:
