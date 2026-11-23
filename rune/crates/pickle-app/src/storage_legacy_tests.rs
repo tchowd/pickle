@@ -2,6 +2,10 @@
 //! Only owned temporary archives are created; production capacities are unchanged.
 use super::*;
 
+#[cfg(windows)]
+#[path = "storage_legacy_windows_tests.rs"]
+mod windows;
+
 fn entry(number: usize) -> Entry {
     Entry {
         id: format!("legacy-storage-{number}"),
