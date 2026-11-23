@@ -52,10 +52,14 @@ jobs:
         run: |
           python packaging/test_notices.py
           python packaging/test_windows_runtime.py
-      - name: Test browser extraction and local gateway
+      - name: Test browser, gateway and release tooling
+        # Publisher checks do not read production credentials or invoke signing services.
+        # The dedicated release finalizers have separate native acceptance gates.
         working-directory: .
         shell: bash
         run: |
+          python rune/scripts/test_sign_update.py
+          python rune/scripts/test_finalize_macos_release.py
           node Tests/BrowserExtensionTests/extract.test.js
           python scripts/local-ai/test_gateway.py
       - name: Test legacy Mac browser host framing
@@ -91,6 +95,7 @@ jobs:
           ./scripts/build-msix.ps1 -StageDirectory $stage -PackageName 'Pickle.Rune.CI' -Publisher 'CN=Pickle CI Development' -PublisherDisplayName 'Pickle CI Development' -Version '0.1.0.0' -UnsignedDevelopment
           ./scripts/test-msix-package.ps1 -Package artifacts/PickleRune-x64.msix -ExpectedIdentity 'Pickle.Rune.CI'
           ./scripts/test-identity-registration.ps1
+          ./scripts/test-windows-release.ps1
           ./scripts/test-signed-identity-ci.ps1
       - uses: actions/upload-artifact@v4
         if: always()
@@ -108,6 +113,7 @@ jobs:
             rune/artifacts/*version.txt
             rune/artifacts/*native-*.log
             rune/artifacts/identity-ocr-result.json
+            rune/artifacts/identity-ci-test-release-report.json
             rune/artifacts/windows-runtime-report.json
   optimized-package:
     strategy:
@@ -160,5 +166,6 @@ jobs:
             rune/artifacts/*native-smoke*
             rune/artifacts/*native-*.log
             rune/artifacts/identity-ocr-result.json
+            rune/artifacts/identity-ci-test-release-report.json
             rune/artifacts/windows-runtime-report.json
             rune/artifacts/macos-package-report.json
