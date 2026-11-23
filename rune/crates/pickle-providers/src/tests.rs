@@ -179,6 +179,38 @@ fn server(replies: Vec<Reply>) -> (Url, mpsc::Receiver<Captured>) {
     (Url::parse(&format!("http://{address}/")).unwrap(), rx)
 }
 
+fn stop_listening_fixture(base: &Url, captured: &mpsc::Receiver<Captured>) {
+    // A live listener, then an explicit non-provider request, proves both that
+    // the observation window was real and that its worker terminates boundedly.
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], base.port().unwrap()));
+    let mut socket =
+        std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    socket
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    socket
+        .write_all(
+            b"GET /owned-fixture-stop HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
+        )
+        .unwrap();
+    let mut response = Vec::new();
+    socket.take(4096).read_to_end(&mut response).unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 200 Fixture\r\n"));
+    let sentinel = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(sentinel.path, "/owned-fixture-stop");
+    assert_eq!(
+        sentinel.headers.lines().next(),
+        Some("GET /owned-fixture-stop HTTP/1.1")
+    );
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
 #[test]
 fn local_address_rejects_unsafe_or_ambiguous_destinations() {
     for address in [
@@ -670,26 +702,41 @@ async fn invalid_cloud_accounts_send_no_writer_or_jev_requests() {
 
     // Finish the fixture deterministically. The only received HTTP request must
     // be this explicit sentinel; no detached ten-second listener is left over.
-    let mut socket = std::net::TcpStream::connect(("127.0.0.1", base.port().unwrap())).unwrap();
-    socket
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    socket
-        .write_all(
-            b"GET /owned-fixture-stop HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
-        )
-        .unwrap();
-    let mut response = Vec::new();
-    socket.take(4096).read_to_end(&mut response).unwrap();
-    assert!(response.starts_with(b"HTTP/1.1 200 Fixture\r\n"));
-    assert_eq!(
-        captured.recv_timeout(Duration::from_secs(2)).unwrap().path,
-        "/owned-fixture-stop"
-    );
+    stop_listening_fixture(&base, &captured);
+}
+
+#[tokio::test]
+async fn legacy_provider_initialization_sends_no_writer_or_jev_http_requests() {
+    // Original TransportTests.testProviderInitializationDoesNotSendAnything,
+    // with an actual listening loopback recipient instead of a mock counter.
+    // The base override follows new(): this observes configured idle lifetime.
+    // The default constructors are separately inspected field-only literals;
+    // this listener cannot observe a hypothetical send to the default origin.
+    let (base, captured) = server(vec![Reply::json(json!({"fixture":"finished"}))]);
+    let writer = CloudflareProvider::new(
+        ACCOUNT,
+        "public-fake-credential",
+        CloudflareProvider::DEFAULT_MODEL,
+    )
+    .with_test_base(base.clone())
+    .with_streaming(false);
     assert!(matches!(
-        captured.recv_timeout(Duration::from_secs(2)),
-        Err(mpsc::RecvTimeoutError::Disconnected)
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
     ));
+    let client = JevClient::new(ACCOUNT, "public-fake-credential").with_test_base(base.clone());
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    // No generate/evaluate call: construction, configuration and release alone
+    // must neither send data nor turn settings into a billable operation.
+    drop((writer, client));
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    stop_listening_fixture(&base, &captured);
 }
 
 // Exact fixtures from Tests/PickleCoreTests/ValidationTests.swift. These assert
@@ -1560,30 +1607,42 @@ async fn sample_is_explicitly_labeled_and_network_free() {
 
 #[tokio::test]
 async fn visual_analysis_sends_one_bounded_image_only_when_explicitly_invoked() {
-    let (base, captured) = server(vec![Reply::json(
-        json!({"success":true,"result":{"response":"Two labeled bars are visible."}}),
-    )]);
-    let client = crate::VisualContextClient::new(ACCOUNT, "fixture-key").with_test_base(base);
+    let (base, captured) = server(vec![
+        Reply::json(json!({"success":true,"result":{"response":"Two labeled bars are visible."}})),
+        Reply::json(json!({"fixture":"finished"})),
+    ]);
+    let client =
+        crate::VisualContextClient::new(ACCOUNT, "fixture-key").with_test_base(base.clone());
     assert!(
         client
             .summarize(&[], "source", CancellationToken::new())
             .await
             .is_err()
     );
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
     assert!(
         client
             .summarize(&vec![0; 750_001], "source", CancellationToken::new())
             .await
             .is_err()
     );
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
     let answer = client
         .summarize(&[1, 2, 3], "source", CancellationToken::new())
         .await
         .unwrap();
-    assert!(answer.contains("bars"));
-    let request = captured.recv().unwrap();
+    assert_eq!(answer, "Two labeled bars are visible.");
+    let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(request.path.ends_with(crate::VisualContextClient::MODEL));
+    assert_eq!(request.body["stream"], false);
     let content = request.body["messages"][1]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
     assert_eq!(
         content
             .iter()
@@ -1595,6 +1654,20 @@ async fn visual_analysis_sends_one_bounded_image_only_when_explicitly_invoked() 
         content[1]["image_url"]["url"],
         "data:image/jpeg;base64,AQID"
     );
+    // Match the original PageContextTests post-success oversize refusal while
+    // the second HTTP reply is STILL listening. Connection refusal cannot hide
+    // an accidental extra provider request; the only next request is sentinel.
+    assert!(
+        client
+            .summarize(&vec![0; 750_001], "source", CancellationToken::new())
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    stop_listening_fixture(&base, &captured);
 }
 
 #[tokio::test]
