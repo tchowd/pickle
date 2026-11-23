@@ -25,7 +25,9 @@ pub struct WorkArea {
     pub width: u32,
     pub height: u32,
 }
+mod browser_target;
 mod geometry;
+pub use browser_target::{capture_browser_target, validate_browser_target_metadata};
 mod invocation;
 #[cfg(any(target_os = "windows", test))]
 mod windows_capabilities;

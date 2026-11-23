@@ -178,17 +178,24 @@ fn pausing_rejects_a_queued_capture_without_replacing_the_current_source() {
     );
 }
 #[test]
-fn audio_from_a_browser_uses_a_valid_reference_kind_and_keeps_source_provenance() {
+fn browser_audio_keeps_source_provenance_without_claiming_a_transcript_page() {
     let mut state = AppState::default();
     let mut snapshot = SelectionSnapshot::new("Selected passage", "Browser", "browser");
     snapshot.source_url = Some("https://example.com/video".into());
     state.snapshot = Some(snapshot);
     state.apply_audio_text("A locally transcribed sentence.".into());
-    let reference = state.context_state.reference.as_ref().unwrap();
-    assert_eq!(reference.kind, "recorded audio");
-    assert_eq!(reference.url, "https://example.com/video");
-    assert!(reference.validate().is_ok());
-    assert!(reference.source().contains("recorded audio"));
+    assert!(state.context_state.reference.is_none());
+    assert_eq!(
+        state.snapshot.as_ref().unwrap().source_url.as_deref(),
+        Some("https://example.com/video")
+    );
+    assert_eq!(
+        state.context_state.audio_text,
+        "A locally transcribed sentence."
+    );
+    let context = state.context_state.reading_text();
+    assert!(context.contains("no webpage linkage verified"));
+    assert!(!context.contains("https://example.com/video"));
 }
 #[test]
 fn audio_from_a_native_editor_remains_labeled_session_text() {

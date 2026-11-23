@@ -46,6 +46,61 @@ fn wide(text: &str) -> Result<Vec<u16>, PlatformError> {
     }
     Ok(text.encode_utf16().chain(Some(0)).collect())
 }
+/// Metadata only: no UIA, selection, URL, screenshot, audio, or prompts.
+/// Worker callers impose a wait deadline and the shared resolver flight gate.
+pub(crate) fn resolve_browser_target(expected: &str) -> Result<CapturedSelection, PlatformError> {
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        return Err(error("No foreground browser window is available."));
+    }
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(foreground, Some(&mut pid)) };
+    if pid == 0
+        || pid == unsafe { GetCurrentProcessId() }
+        || !unsafe { IsWindowVisible(foreground) }.as_bool()
+    {
+        return Err(error("The foreground browser window is unavailable."));
+    }
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+        .map_err(|_| error("The foreground browser identity is unavailable."))?;
+    let mut path = vec![0u16; 32768];
+    let mut size = path.len() as u32;
+    let result = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(path.as_mut_ptr()),
+            &mut size,
+        )
+    };
+    let _ = unsafe { CloseHandle(process) };
+    result.map_err(|_| error("The foreground browser identity is unavailable."))?;
+    let executable = String::from_utf16(&path[..size as usize])
+        .map_err(|_| error("The foreground browser has an invalid executable identity."))?;
+    let source = CapturedSelection {
+        text: String::new(),
+        app_name: "Browser".into(),
+        app_id: format!("windows:{executable}"),
+        bounds: None,
+        source_url: None,
+        source_pid: pid,
+        source_window: Some(foreground.0 as u64),
+    };
+    if !super::browser_target::browser_target_matches(expected, &source.app_id) {
+        return Err(error(
+            "The foreground window does not belong to the registered browser.",
+        ));
+    }
+    validate_source_window(&source)?;
+    if unsafe { GetForegroundWindow() } != foreground
+        || !unsafe { IsWindowVisible(foreground) }.as_bool()
+    {
+        return Err(error(
+            "The foreground browser changed during source resolution.",
+        ));
+    }
+    Ok(source)
+}
 pub fn capabilities() -> Capabilities {
     Capabilities {
         selection: true,

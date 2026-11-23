@@ -12,3 +12,4 @@ xcrun swiftc -parse-as-library -O -target "$fixture_arch-apple-macosx14.0" \
   native/macos/PickleInvocation.swift native/macos/tests/PageFixture.swift \
   -o target/native-tests/PageFixture
 target/native-tests/PageFixture
+bash native/macos/tests/run-browser-target-fixture.sh

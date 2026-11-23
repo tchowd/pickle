@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 pub struct ContextState {
     pub id: uuid::Uuid,
+    pub browser_attempt: Option<uuid::Uuid>,
     pub cancel: CancellationToken,
     pub pending: usize,
     pub action: Option<Pending>,
@@ -20,6 +21,7 @@ impl Default for ContextState {
     fn default() -> Self {
         Self {
             id: uuid::Uuid::new_v4(),
+            browser_attempt: None,
             cancel: CancellationToken::new(),
             pending: 0,
             action: None,
@@ -43,6 +45,7 @@ impl ContextState {
         self.cancel.cancel();
         self.cancel = CancellationToken::new();
         self.id = uuid::Uuid::new_v4();
+        self.browser_attempt = None;
         self.pending = 0;
         self.action = None;
     }
@@ -69,7 +72,7 @@ impl ContextState {
             .map(|p| p.text.clone())
             .unwrap_or_default();
         if !self.audio_text.is_empty() {
-            text.push_str("\nLocally transcribed source-app audio (may contain errors):\n");
+            text.push_str("\nLocally transcribed source-app audio (may contain errors; may include other browser tabs or app audio; no webpage linkage verified):\n");
             text.push_str(&self.audio_text);
         }
         pickle_core::bounded_utf8(&text, pickle_core::limits::PAGE_CONTEXT).to_owned()
@@ -98,6 +101,16 @@ impl AppState {
     }
     pub fn collect_context(&mut self) {
         if !self.context_policy() {
+            return;
+        }
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.method == "Browser extension")
+        {
+            // App/window ownership is sufficient only for explicit app-scoped
+            // audio. It does not pair this native window with the supplied tab.
+            self.context_state.notice = Some(self.browser_capture_notice());
             return;
         }
         let (Some(services), Some(handle), Some(target)) = (
@@ -217,24 +230,34 @@ impl AppState {
         services.runtime.spawn(async move {
             let outcome =
                 tokio::task::spawn_blocking(move || pickle_platform::record_audio(&target, cancel))
-                    .await;
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(pickle_platform::PlatformError(
+                            "Source audio could not be transcribed.".into(),
+                        ))
+                    });
             handle.update(move |s, tx| {
-                if s.context_state.id != id {
-                    return;
-                }
-                match outcome {
-                    Ok(Ok(text)) => s.apply_audio_text(text),
-                    Ok(Err(error)) => s.context_state.notice = Some(error.to_string()),
-                    Err(_) => {
-                        s.context_state.notice =
-                            Some("Source audio could not be transcribed.".into())
-                    }
-                }
-                s.context_state.pending = 0;
-                s.notice = None;
-                s.context_ready(tx);
+                s.complete_audio_capture(id, outcome, tx);
             });
         });
+    }
+    pub(crate) fn complete_audio_capture(
+        &mut self,
+        id: uuid::Uuid,
+        outcome: Result<String, pickle_platform::PlatformError>,
+        tx: &mut rune::Tx,
+    ) -> bool {
+        if self.context_state.id != id || self.context_state.pending == 0 {
+            return false;
+        }
+        match outcome {
+            Ok(text) => self.apply_audio_text(text),
+            Err(error) => self.context_state.notice = Some(error.to_string()),
+        }
+        self.context_state.pending = 0;
+        self.notice = None;
+        self.context_ready(tx);
+        true
     }
     pub fn begin_visual_analysis(&mut self) {
         if self.context_state.pending > 0 {
@@ -332,29 +355,41 @@ impl AppState {
         selection: String,
         app_id: String,
         reference: WebReference,
+        target: Result<CapturedSelection, pickle_platform::PlatformError>,
     ) {
         self.reset();
         let mut snapshot =
             pickle_core::SelectionSnapshot::new(selection, "Browser reference", app_id);
         snapshot.source_url = Some(reference.url.clone());
         snapshot.source_title = Some(reference.title.clone());
+        snapshot.method = "Browser extension".into();
+        self.capture_target = target.ok().filter(|target| {
+            pickle_platform::validate_browser_target_metadata(&snapshot.app_id, target).is_ok()
+        });
         self.source = rune::TextEdit::new(&snapshot.text);
         self.snapshot = Some(snapshot);
         self.context_state.reference = Some(reference);
+        self.context_state.notice = Some(self.browser_capture_notice());
         self.panel = crate::controller::Panel::Choosing;
     }
-    pub fn apply_audio_text(&mut self, text: String) {
-        if let Some(url) = self.snapshot.as_ref().and_then(|s| s.source_url.clone()) {
-            self.context_state.reference = Some(WebReference {
-                url,
-                title: "Locally transcribed source-app audio".into(),
-                kind: "recorded audio".into(),
-                text,
-                timestamp: None,
-            });
-        } else {
-            self.context_state.audio_text = text;
+    fn browser_capture_notice(&self) -> String {
+        let mut notice = "Browser text is ready.".to_owned();
+        if self.settings.screen_context_enabled {
+            notice.push_str(" Screen context is unavailable for this capture. Select text on that page and invoke Pickle's shortcut to try screen capture.");
         }
+        notice.push_str(if self.capture_target.is_some() {
+            " Listen captures this browser app and may include other playing tabs."
+        } else {
+            " Audio is unavailable for this capture; return to the browser and send it again before listening."
+        });
+        notice
+    }
+    pub fn apply_audio_text(&mut self, text: String) {
+        // Unlike Swift's single-reference slot, app-scoped audio is retained
+        // separately. Neither an exposed URL nor an extension reference proves
+        // which tab produced all audio; never assign that URL to a transcript
+        // or replace the loaded article/captions with it.
+        self.context_state.audio_text = text;
     }
 }
 

@@ -182,19 +182,132 @@ fn start_browser(
         };
         loop {
             let request = tokio::select! { _ = cancel.cancelled() => break, request = requests.recv() => match request { Some(r) => r, None => break } };
-            handle.update(move |s, tx| {
-                let payload = request.payload;
-                let denied = if s.paused { Some("Pickle is paused.") }
-                    else if s.settings_pending { Some("Wait for Pickle's settings to finish saving.") }
-                    else if !s.settings.web_context_enabled { Some("Enable browser references in Pickle Settings first.") }
-                    else if payload.is_excluded(&s.settings.exclusions) { Some("This browser is excluded in Pickle Settings.") }
-                    else if payload.validate().is_err() { Some("This browser capture is invalid or expired.") } else { None };
-                if let Some(reason) = denied { let _ = request.reply.send(Err(reason.into())); return; }
-                s.reference_from_browser(payload.selection, payload.browser_id, payload.reference);
-                s.expand(tx, 360.0);
-                if let Some(handle) = &s.handle { handle.open(); }
-                let _ = request.reply.send(Ok(()));
-            });
+            handle.update(move |s, _| prepare_browser_request(s, request));
         }
     });
 }
+
+fn browser_denial(
+    state: &AppState,
+    payload: &pickle_providers::browser::BrowserPayload,
+) -> Option<&'static str> {
+    if state.paused {
+        Some("Pickle is paused.")
+    } else if state.settings_pending {
+        Some("Wait for Pickle's settings to finish saving.")
+    } else if !state.settings.web_context_enabled {
+        Some("Enable browser references in Pickle Settings first.")
+    } else if payload.is_excluded(&state.settings.exclusions) {
+        Some("This browser is excluded in Pickle Settings.")
+    } else if payload.validate().is_err() {
+        Some("This browser capture is invalid or expired.")
+    } else {
+        None
+    }
+}
+
+fn prepare_browser_request(
+    state: &mut AppState,
+    request: pickle_providers::browser::BrowserRequest,
+) {
+    let (Some(services), Some(handle)) = (state.services.clone(), state.handle.clone()) else {
+        let _ = request
+            .reply
+            .send(Err("The reader is not ready. Try again.".into()));
+        return;
+    };
+    let attempt = match stage_browser_intent(state, &request) {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            let _ = request.reply.send(Err(error.into()));
+            return;
+        }
+    };
+    let cancel = services.shutdown.child_token();
+    let expected = request.payload.browser_id.clone();
+    services.runtime.spawn(async move {
+        let target = tokio::select! {
+            _ = cancel.cancelled() => return,
+            target = resolve_browser_target(move || pickle_platform::capture_browser_target(&expected)) => target,
+        };
+        handle.update(move |state, tx| complete_browser_request(state, request, target, attempt, tx));
+    });
+}
+
+#[derive(Clone, Copy)]
+struct BrowserAttempt {
+    revision: u64,
+    id: uuid::Uuid,
+}
+fn stage_browser_intent(
+    state: &mut AppState,
+    request: &pickle_providers::browser::BrowserRequest,
+) -> Result<BrowserAttempt, &'static str> {
+    if let Some(reason) = browser_denial(state, &request.payload) {
+        return Err(reason);
+    }
+    if !request.is_pending() {
+        return Err("This browser capture expired. Send it again from the browser.");
+    }
+    let id = uuid::Uuid::new_v4();
+    state.context_state.browser_attempt = Some(id);
+    Ok(BrowserAttempt {
+        revision: state.revision,
+        id,
+    })
+}
+
+async fn resolve_browser_target(
+    resolver: impl FnOnce()
+        -> Result<pickle_platform::CapturedSelection, pickle_platform::PlatformError>
+    + Send
+    + 'static,
+) -> Result<pickle_platform::CapturedSelection, pickle_platform::PlatformError> {
+    // Blocking native metadata never runs on the UI thread. A timed-out worker
+    // remains tracked by whole-runtime shutdown and retains the platform's
+    // single-flight gate until it actually returns.
+    tokio::time::timeout(std::time::Duration::from_millis(400), tokio::task::spawn_blocking(resolver))
+        .await.ok().and_then(Result::ok).unwrap_or_else(|| Err(pickle_platform::PlatformError("Native browser source resolution timed out. Send the reference again before listening.".into())))
+}
+
+fn complete_browser_request(
+    state: &mut AppState,
+    request: pickle_providers::browser::BrowserRequest,
+    target: Result<pickle_platform::CapturedSelection, pickle_platform::PlatformError>,
+    attempt: BrowserAttempt,
+    tx: &mut rune::Tx,
+) {
+    if state.revision != attempt.revision || state.context_state.browser_attempt != Some(attempt.id)
+    {
+        let _ = request.reply.send(Err(
+            "The reading source changed. Send the browser reference again.".into(),
+        ));
+        return;
+    }
+    if let Some(reason) = browser_denial(state, &request.payload) {
+        let _ = request.reply.send(Err(reason.into()));
+        return;
+    }
+    // This is the atomic, monotonic admission boundary immediately before any
+    // session mutation or focus change, after potentially delayed OS work.
+    if let Err(error) = request.try_admit() {
+        let _ = request.reply.send(Err(error));
+        return;
+    }
+    let payload = request.payload;
+    state.reference_from_browser(
+        payload.selection,
+        payload.browser_id,
+        payload.reference,
+        target,
+    );
+    state.expand(tx, 360.0);
+    if let Some(handle) = &state.handle {
+        handle.open();
+    }
+    let _ = request.reply.send(Ok(()));
+}
+
+#[cfg(test)]
+#[path = "browser_context_tests.rs"]
+mod browser_context_tests;

@@ -980,7 +980,7 @@ fn context_tools(s: &AppState) -> El {
     }
     if !s.context_state.audio_text.is_empty() {
         context = context.child(note(format!(
-            "Local audio transcript: {}",
+            "App audio transcript (may contain errors; may include other tabs or app audio): {}",
             s.context_state.audio_text
         )));
     }

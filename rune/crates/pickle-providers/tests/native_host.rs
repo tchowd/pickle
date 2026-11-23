@@ -64,6 +64,7 @@ async fn native_host_executable_preserves_frames_and_enforces_origin() {
     let received = rx.recv().await.unwrap();
     assert_eq!(received.payload.selection, "日本語 café");
     assert_eq!(received.payload.browser_id, BrowserKind::Chrome.identity());
+    received.try_admit().unwrap();
     received.reply.send(Ok(())).unwrap();
     assert_eq!(task.await.unwrap()["ok"], "true");
 

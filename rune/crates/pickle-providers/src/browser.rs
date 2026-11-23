@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex as AdmissionMutex},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -83,6 +83,74 @@ pub struct BrowserRequest {
     pub payload: BrowserPayload,
     /// Reply after the app validates its current pause, exclusion, context, and session policy.
     pub reply: oneshot::Sender<Result<(), String>>,
+    admission: Arc<BrowserAdmission>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AdmissionState {
+    Pending,
+    Accepted,
+    Cancelled,
+}
+struct BrowserAdmission {
+    deadline: Instant,
+    state: AdmissionMutex<AdmissionState>,
+}
+impl BrowserAdmission {
+    fn cancel_pending(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if *state == AdmissionState::Pending {
+            *state = AdmissionState::Cancelled;
+        }
+    }
+    fn accepted(&self) -> bool {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            == AdmissionState::Accepted
+    }
+}
+struct CancelPendingAdmission(Arc<BrowserAdmission>);
+impl Drop for CancelPendingAdmission {
+    fn drop(&mut self) {
+        self.0.cancel_pending();
+    }
+}
+impl BrowserRequest {
+    /// Read-only preflight. The desktop must still call try_admit immediately
+    /// before applying its result; this does not reserve admission.
+    pub fn is_pending(&self) -> bool {
+        self.admission.state.lock().is_ok_and(|state| {
+            *state == AdmissionState::Pending
+                && Instant::now() < self.admission.deadline
+                && !self.reply.is_closed()
+        })
+    }
+    /// Claim immediately before mutating the session or opening its window,
+    /// after policy checks and any bounded read-only source resolution.
+    /// A dropped/timed-out relay and this claim share one admission boundary.
+    pub fn try_admit(&self) -> Result<(), String> {
+        let mut state = self
+            .admission
+            .state
+            .lock()
+            .map_err(|_| "The browser capture could not be accepted. Try again.".to_owned())?;
+        if *state != AdmissionState::Pending
+            || Instant::now() >= self.admission.deadline
+            || self.reply.is_closed()
+        {
+            if *state == AdmissionState::Pending {
+                *state = AdmissionState::Cancelled;
+            }
+            return Err("This browser capture expired. Send it again from the browser.".into());
+        }
+        *state = AdmissionState::Accepted;
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,6 +169,15 @@ impl BrowserBridge {
         directory: PathBuf,
         receive: UnboundedSender<BrowserRequest>,
         parent_cancel: CancellationToken,
+    ) -> Result<Self, PickleError> {
+        Self::start_with_request_budget(directory, receive, parent_cancel, Duration::from_secs(5))
+            .await
+    }
+    async fn start_with_request_budget(
+        directory: PathBuf,
+        receive: UnboundedSender<BrowserRequest>,
+        parent_cancel: CancellationToken,
+        request_budget: Duration,
     ) -> Result<Self, PickleError> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -142,11 +219,17 @@ impl BrowserBridge {
                 let sender = receive.clone();
                 let seen = seen.clone();
                 let task_cancel = running_cancel.clone();
+                let deadline = Instant::now() + request_budget;
+                let admission = Arc::new(BrowserAdmission {
+                    deadline,
+                    state: AdmissionMutex::new(AdmissionState::Pending),
+                });
                 tokio::spawn(async move {
                     let _slot = slot;
+                    let _cancel_pending = CancelPendingAdmission(admission.clone());
                     tokio::select! {
                         _ = task_cancel.cancelled() => {},
-                        _ = tokio::time::timeout(Duration::from_secs(5), relay(socket, &token, sender, seen)) => {},
+                        _ = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), relay(socket, &token, sender, seen, admission)) => {},
                     }
                 });
             }
@@ -190,6 +273,7 @@ async fn relay(
     token: &str,
     receive: UnboundedSender<BrowserRequest>,
     seen: Arc<Mutex<HashMap<Uuid, Instant>>>,
+    admission: Arc<BrowserAdmission>,
 ) -> Result<(), PickleError> {
     let result = async {
         let mut bytes = Vec::new();
@@ -239,12 +323,22 @@ async fn relay(
         }
         let (reply, acknowledgment) = oneshot::channel();
         receive
-            .send(BrowserRequest { payload, reply })
+            .send(BrowserRequest {
+                payload,
+                reply,
+                admission: admission.clone(),
+            })
             .map_err(|_| error("Open Pickle and enable browser context."))?;
         acknowledgment
             .await
             .map_err(|_| error("Pickle could not accept this browser context."))?
-            .map_err(error)
+            .map_err(error)?;
+        if !admission.accepted() {
+            return Err(error(
+                "The browser capture was not accepted before its deadline.",
+            ));
+        }
+        Ok(())
     }
     .await;
     let response = match result {

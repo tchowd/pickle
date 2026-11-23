@@ -117,6 +117,7 @@ async fn authenticated_bridge_delivers_context_and_rejects_replays() {
     let consumer = tokio::spawn(async move {
         let received = rx.recv().await.unwrap();
         assert_eq!(received.payload.id, id);
+        received.try_admit().unwrap();
         received.reply.send(Ok(())).unwrap();
     });
     let response = send(directory.path(), None, &expected).await;
@@ -181,8 +182,89 @@ async fn native_host_relay_overwrites_page_supplied_browser_identity() {
     let task = tokio::task::spawn_blocking(move || relay_native_message(value, &registration));
     let received = rx.recv().await.unwrap();
     assert_eq!(received.payload.browser_id, BrowserKind::Edge.identity());
+    received.try_admit().unwrap();
     received.reply.send(Ok(())).unwrap();
     assert_eq!(task.await.unwrap().unwrap()["ok"], "true");
+}
+
+#[tokio::test]
+async fn queued_browser_request_expires_with_its_owned_relay_and_fresh_request_still_works() {
+    let directory = tempfile::tempdir().unwrap();
+    let (tx, mut rx) = unbounded_channel();
+    let bridge = BrowserBridge::start_with_request_budget(
+        directory.path().to_path_buf(),
+        tx,
+        CancellationToken::new(),
+        Duration::from_millis(80),
+    )
+    .await
+    .unwrap();
+    let connection: Connection =
+        serde_json::from_slice(&std::fs::read(directory.path().join("connection.json")).unwrap())
+            .unwrap();
+    let mut socket = TcpStream::connect(("127.0.0.1", connection.port))
+        .await
+        .unwrap();
+    socket
+        .write_all(
+            format!(
+                "{}\n",
+                json!({"token":connection.token,"payload":payload()})
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let queued = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!queued.reply.is_closed());
+    let mut bytes = Vec::new();
+    tokio::time::timeout(Duration::from_secs(1), socket.read_to_end(&mut bytes))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(bytes.is_empty());
+    assert!(queued.reply.is_closed());
+    assert!(queued.try_admit().unwrap_err().contains("expired"));
+    assert!(!queued.admission.accepted());
+    let consumer = tokio::spawn(async move {
+        let fresh = rx.recv().await.unwrap();
+        fresh.try_admit().unwrap();
+        fresh.reply.send(Ok(())).unwrap();
+    });
+    assert_eq!(send(directory.path(), None, &payload()).await["ok"], "true");
+    consumer.await.unwrap();
+    bridge.stop();
+}
+
+#[test]
+fn browser_admission_checks_deadline_even_with_live_reply_and_is_claimed_once() {
+    let request = |deadline| {
+        let (reply, receiver) = oneshot::channel();
+        (
+            BrowserRequest {
+                payload: payload(),
+                reply,
+                admission: Arc::new(BrowserAdmission {
+                    deadline,
+                    state: AdmissionMutex::new(AdmissionState::Pending),
+                }),
+            },
+            receiver,
+        )
+    };
+    let (expired, _receiver) = request(Instant::now() - Duration::from_millis(1));
+    assert!(!expired.reply.is_closed());
+    assert!(expired.try_admit().is_err());
+    let (closed, receiver) = request(Instant::now() + Duration::from_secs(1));
+    drop(receiver);
+    assert!(closed.try_admit().is_err());
+    let (live, _receiver) = request(Instant::now() + Duration::from_secs(1));
+    live.try_admit().unwrap();
+    assert!(live.try_admit().is_err());
+    assert!(live.admission.accepted());
 }
 
 #[tokio::test]

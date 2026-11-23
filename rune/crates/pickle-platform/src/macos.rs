@@ -9,6 +9,7 @@ unsafe extern "C" {
     fn pickle_present_reader_failure() -> i32;
     fn pickle_string_free(value: *mut c_char);
     fn pickle_capture_selection(exclusions: *const c_char) -> *mut c_char;
+    fn pickle_browser_target(expected: *const c_char) -> *mut c_char;
     fn pickle_permission_status() -> *mut c_char;
     fn pickle_screen_work_areas() -> *mut c_char;
     fn pickle_window_work_area(window_number: u32, fallback_x: i32, fallback_y: i32)
@@ -54,6 +55,10 @@ pub fn present_reader_failure() -> Result<(), PlatformError> {
 fn cstring(value: &str) -> Result<CString, PlatformError> {
     CString::new(value)
         .map_err(|_| PlatformError("A native setting contains an invalid null character.".into()))
+}
+pub(crate) fn resolve_browser_target(expected: &str) -> Result<CapturedSelection, PlatformError> {
+    let expected = cstring(expected)?;
+    decode(unsafe { pickle_browser_target(expected.as_ptr()) })
 }
 fn decode<T: serde::de::DeserializeOwned>(raw: *mut c_char) -> Result<T, PlatformError> {
     if raw.is_null() {
