@@ -98,6 +98,7 @@ Source-window OCR and browser references are off by default in this rebuild. Ena
 - **Analyze visuals locally** uses a configured downloaded local vision model after capability verification. It never switches to cloud vision.
 - OCR, references, and visual interpretations remain labeled untrusted context and cannot supply deterministic chart quantities/edges.
 - **Listen for 30 seconds** captures only the selected source application's audio scope, not microphone input. Other playing tabs/process descendants in that application may be included. No audio file is written.
+- App audio remains separate from loaded webpage text/captions. A page URL does not prove which tab produced the audio, so transcripts do not replace or claim that page's reference.
 - macOS audio uses an available on-device Speech recognizer and explicit speech authorization.
 - Windows audio requires absolute paths to a trusted `whisper-cli.exe` and downloaded model in Settings. Process-loopback capture stays in memory and passes WAV through the local engine's stdin. OS/runtime/model compatibility still needs actual device validation.
 
@@ -112,6 +113,8 @@ Use the packaged app for the extension workflow:
 3. Copy the extension's ID into Pickle, then choose **Connect Chrome** or **Connect Edge**.
 4. Enable browser references and use the extension's page/video actions.
 
+Browser requests expire after five seconds. A late or superseded request cannot replace the current reading source. Pickle resolves the foreground browser's native app/window identity before opening the reader; a verified target enables explicit app-scoped Listen. Extension tab IDs do not identify native windows, so extension-delivered references do not automatically capture screenshots. To include screen context, select text on the page and invoke Pickle's shortcut. Browser text and captions stay usable when native audio binding is unavailable.
+
 The browser-specific native host is a bundled Rust executable; users do not need Python. It binds the extension ID and browser identity, then sends bounded authenticated messages to a loopback listener. Source content is held in memory. Host installation is explicit. Actual browser installation, update, and removal behavior remains part of the native release matrix.
 
 ## Saved answers and migration
@@ -121,6 +124,7 @@ The browser-specific native host is a bundled Rust executable; users do not need
 - Search and reading saved answers are local and do not replace the working source or submit AI requests.
 - Reference records retain URL/title/type pointers, not full reference bodies, screenshots, OCR, audio, prompts, or credentials.
 - Local files use a versioned schema, atomic replacement, and a cross-process write lock. Malformed or unsupported archives block replacement writes.
+- Each file also has a 32 MB encoded-size limit. A save that would exceed it leaves the existing readable file intact; remove saved answers to make room. Escaped characters count toward this limit.
 - Each library has a separate **Delete all** confirmation. It clears that entire store, including entries outside the current search or page, while retaining the other store and settings. Cancel keeps all entries. Unreadable archives offer **Show archive file** and **Try again**; repair or move the protected file yourself before retrying. Deletion never resets an unreadable archive.
 
 Settings offers **Import original Pickle history** on macOS. It reads the original knowledge-base JSON and explicit bookmark data, preserves chart/reference metadata, deduplicates imports, and leaves source files untouched. It does not import credentials or privacy consent. The new app uses a separate development identity and storage location.
