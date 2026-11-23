@@ -9,7 +9,7 @@ use std::{
 
 use pickle_core::{
     DecisionClient, DecisionQuestion, GenerationPrompt, GenerativeProvider, Pipeline,
-    PipelineEvent, ReadingAction, RequestInput, SelectionSnapshot, WebReference,
+    PipelineEvent, ReadingAction, RequestInput, SelectionSnapshot, Usage, WebReference,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::unbounded_channel;
@@ -392,8 +392,16 @@ async fn chart_requests_use_schema_capable_cloud_model_and_buffer_objects() {
 }
 
 #[tokio::test]
-async fn invalid_cloud_configuration_is_rejected_before_network() {
-    let provider = CloudflareProvider::new("../../bad", "fixture", "@cf/meta/model");
+async fn invalid_cloud_accounts_send_no_writer_or_jev_requests() {
+    // Keep an actual listening fixture alive: an implementation that attempted
+    // either request would be observed, rather than merely failing DNS/connect.
+    let (base, captured) = server(vec![Reply::json(json!({"fixture":"finished"}))]);
+    let provider = CloudflareProvider::new(
+        "../elsewhere",
+        "public-fake-credential",
+        CloudflareProvider::DEFAULT_MODEL,
+    )
+    .with_test_base(base.clone());
     let (tx, _) = unbounded_channel();
     assert!(
         provider
@@ -401,6 +409,128 @@ async fn invalid_cloud_configuration_is_rejected_before_network() {
             .await
             .is_err()
     );
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    let client =
+        JevClient::new("../elsewhere", "public-fake-credential").with_test_base(base.clone());
+    assert!(
+        client
+            .evaluate(
+                BTreeMap::from([("source".into(), "Fixed source".into())]),
+                BTreeMap::from([(
+                    "q".into(),
+                    DecisionQuestion::noul("Does source mention the sky?")
+                )]),
+                CancellationToken::new(),
+            )
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+
+    // Finish the fixture deterministically. The only received HTTP request must
+    // be this explicit sentinel; no detached ten-second listener is left over.
+    let mut socket = std::net::TcpStream::connect(("127.0.0.1", base.port().unwrap())).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    socket
+        .write_all(
+            b"GET /owned-fixture-stop HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
+        )
+        .unwrap();
+    let mut response = Vec::new();
+    socket.take(4096).read_to_end(&mut response).unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 200 Fixture\r\n"));
+    assert_eq!(
+        captured.recv_timeout(Duration::from_secs(2)).unwrap().path,
+        "/owned-fixture-stop"
+    );
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+// Exact fixtures from Tests/PickleCoreTests/ValidationTests.swift. These assert
+// decoded values, not just that the compatibility branches happen to run.
+#[test]
+fn legacy_jev_cloudflare_envelope_and_direct_model_payload() {
+    const PAYLOAD: &str = r#"{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":0.9}},"usage":{"input_tokens":10,"output_tokens":1}}"#;
+    let direct = JevClient::decode(serde_json::from_str(PAYLOAD).unwrap()).unwrap();
+    let envelope = JevClient::decode(
+        serde_json::from_str(&format!(r#"{{"success":true,"result":{PAYLOAD}}}"#)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&direct).unwrap(),
+        serde_json::to_value(&envelope).unwrap()
+    );
+    for result in [&direct, &envelope] {
+        assert_eq!(result.model, "jev-1.13.0");
+        assert_eq!(result.answers.len(), 1);
+        assert_eq!(result.answers["q"].kind, "noul");
+        assert_eq!(result.answers["q"].noul, Some(0.9));
+        let usage = result.usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, Some(10));
+        assert_eq!(usage.output_tokens, Some(1));
+    }
+    assert!(
+        JevClient::decode(serde_json::from_str(r#"{"success":false,"result":null}"#).unwrap())
+            .is_err()
+    );
+}
+
+#[test]
+fn legacy_jev_completed_gateway_job() {
+    const BODY: &str = r#"{"success":true,"result":{"state":"Completed","result":{"model":"jev-1.13.0","answers":{"sample":{"type":"noul","noul":1}},"usage":{"input_tokens":283,"output_tokens":20}},"gatewayMetadata":{"keySource":"Unified"}}}"#;
+    let result = JevClient::decode(serde_json::from_str(BODY).unwrap()).unwrap();
+    result
+        .validate(&BTreeMap::from([(
+            "sample".into(),
+            DecisionQuestion::noul("Does source mention the sky?"),
+        )]))
+        .unwrap();
+    assert_eq!(result.model, "jev-1.13.0");
+    assert_eq!(result.answers.len(), 1);
+    assert_eq!(result.answers["sample"].kind, "noul");
+    assert_eq!(result.answers["sample"].noul, Some(1.0));
+    let usage = result.usage.unwrap();
+    assert_eq!(usage.input_tokens, Some(283));
+    assert_eq!(usage.output_tokens, Some(20));
+}
+
+#[test]
+fn legacy_jev_incomplete_gateway_job_is_not_an_answer() {
+    for body in [
+        r#"{"success":true,"result":{"state":"Running","result":null}}"#,
+        r#"{"success":true,"result":{"state":"Completed","result":null}}"#,
+        r#"{"success":false,"result":{"state":"Completed","result":{"model":"jev","answers":{}}}}"#,
+    ] {
+        assert!(
+            JevClient::decode(serde_json::from_str(body).unwrap()).is_err(),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn legacy_cloudflare_usage_field_aliases() {
+    // The first spelling is the exact original Swift fixture; the second
+    // confirms that accepting aliases preserves the ordinary wire spelling.
+    for body in [
+        r#"{"prompt_tokens":67,"completion_tokens":25}"#,
+        r#"{"input_tokens":67,"output_tokens":25}"#,
+    ] {
+        let usage: Usage = serde_json::from_str(body).unwrap();
+        assert_eq!(usage.input_tokens, Some(67));
+        assert_eq!(usage.output_tokens, Some(25));
+    }
 }
 
 #[tokio::test]
