@@ -115,6 +115,10 @@ impl Trace {
             "focus_snapshot_available",
             "native_snapshot_available",
             "get_object_requests",
+            "all_get_object_requests",
+            "client_get_object_requests",
+            "other_get_object_requests",
+            "aliased_root_get_object_requests",
             "get_focus_entries",
             "get_focus_returns",
             "set_focus_requests",
@@ -315,6 +319,10 @@ fn focus_snapshot(callbacks: Option<usize>, native: Option<usize>) -> serde_json
             "get_focus_entries",
             "get_focus_returns",
             "set_focus_requests",
+            "all_get_object_requests",
+            "client_get_object_requests",
+            "other_get_object_requests",
+            "aliased_root_get_object_requests",
         ]
         .into_iter()
         .enumerate()
@@ -342,11 +350,15 @@ fn focus_snapshot(callbacks: Option<usize>, native: Option<usize>) -> serde_json
 
 #[test]
 fn synthetic_focus_diagnostics_preserve_unknown_and_saturated_callback_counts() {
-    let present = focus_snapshot(Some(0xff030201), Some(0x000f0504));
+    let present = focus_snapshot(Some(0xff060504ff030201), Some(0x000f0504));
     assert_eq!(present["get_object_requests"], 1);
     assert_eq!(present["get_focus_entries"], 2);
     assert_eq!(present["get_focus_returns"], 3);
     assert_eq!(present["set_focus_requests"], 255);
+    assert_eq!(present["all_get_object_requests"], 4);
+    assert_eq!(present["client_get_object_requests"], 5);
+    assert_eq!(present["other_get_object_requests"], 6);
+    assert_eq!(present["aliased_root_get_object_requests"], 255);
     assert_eq!(present["native_focus_requests"], 4);
     assert_eq!(present["focus_property_requests"], 5);
     for key in [

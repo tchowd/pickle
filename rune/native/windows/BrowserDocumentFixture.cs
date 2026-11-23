@@ -22,9 +22,27 @@ public static class DocumentFixtureDiagnosticCounts {
         Func<int,uint> count=value=>(uint)Math.Max(0,Math.Min(255,value));
         return count(first)|(count(second)<<8)|(count(third)<<16)|(count(fourth)<<24);
     }
+    public static ulong WithObjectRequests(uint callbacks,int all,int client,int other,int alias) {
+        // The fixture is compiled /platform:x64. High bytes add fixed request
+        // categories while preserving the original low32 callback fields.
+        return callbacks|((ulong)Pack(all,client,other,alias)<<32);
+    }
+    public static bool IsRootObjectRequest(long value,int rootId) {
+        // Microsoft WM_GETOBJECT requires DWORD comparison: LPARAM can carry
+        // a sign-extended or zero-extended object identifier on x64.
+        return unchecked((uint)value)==unchecked((uint)rootId);
+    }
     public static void SelfTest() {
         if(Pack(1,2,3,4)!=0x04030201U || Pack(-1,256,Int32.MaxValue,0)!=0x00ffff00U)
             throw new Exception("bounded-provider-diagnostic-counts");
+        if(WithObjectRequests(0x04030201U,4,5,6,7)!=0x0706050404030201UL ||
+            WithObjectRequests(0xffffffffU,256,Int32.MaxValue,-1,255)!=0xff00ffffffffffffUL)
+            throw new Exception("bounded-provider-object-request-counts");
+        const int rootId=-25;long zeroExtended=unchecked((uint)rootId);
+        if(!IsRootObjectRequest(rootId,rootId) || !IsRootObjectRequest(zeroExtended,rootId) ||
+            zeroExtended==(long)rootId) throw new Exception("root-object-dword-comparison");
+        foreach(long other in new[]{-4L,(long)unchecked((uint)-4),0L,17L})
+            if(IsRootObjectRequest(other,rootId)) throw new Exception("root-object-wrong-id");
     }
 }
 
@@ -53,6 +71,7 @@ public sealed class DocumentFixtureForm : Form {
     public int DocumentReads, NestedReads, EditReads, LinkReads, ForeignChildNavigations,
         UnanchoredForeignChildNavigations, RootChildNavigations;
     public int ObjectRequests, FocusRequests, FocusReturns, SetFocusRequests, FocusPropertyRequests, NativeFocusRequests;
+    public int AllObjectRequests, ClientObjectRequests, OtherObjectRequests, AliasedRootObjectRequests;
     public bool ShownPublished;
     private int nextId = 100;
     [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr window);
@@ -206,7 +225,18 @@ public sealed class DocumentFixtureForm : Form {
         FocusedNode=Root;
     }
     protected override void WndProc(ref Message message) {
-        if (message.Msg==0x003D && message.LParam.ToInt64()==AutomationInteropProvider.RootObjectId) {
+        if (message.Msg==0x003D) {
+            Interlocked.Increment(ref AllObjectRequests);
+            // Only fixed categories, never the raw object ID. The provider
+            // receives the original LPARAM unchanged after DWORD comparison.
+            if(DocumentFixtureDiagnosticCounts.IsRootObjectRequest(message.LParam.ToInt64(),AutomationInteropProvider.RootObjectId)) {
+                if(message.LParam.ToInt64()!=AutomationInteropProvider.RootObjectId) Interlocked.Increment(ref AliasedRootObjectRequests);
+            } else {
+                if(unchecked((int)message.LParam.ToInt64())==-4) Interlocked.Increment(ref ClientObjectRequests);
+                else Interlocked.Increment(ref OtherObjectRequests);
+            }
+        }
+        if (message.Msg==0x003D && DocumentFixtureDiagnosticCounts.IsRootObjectRequest(message.LParam.ToInt64(),AutomationInteropProvider.RootObjectId)) {
             Interlocked.Increment(ref ObjectRequests);
             message.Result=AutomationInteropProvider.ReturnRawElementProvider(
                 Handle,message.WParam,message.LParam,Root);
@@ -242,8 +272,9 @@ public sealed class DocumentFixtureForm : Form {
                 return;
             }
             if (command==9) {
-                message.Result=new IntPtr((long)DocumentFixtureDiagnosticCounts.Pack(
-                    ObjectRequests,FocusRequests,FocusReturns,SetFocusRequests));
+                uint callbacks=DocumentFixtureDiagnosticCounts.Pack(ObjectRequests,FocusRequests,FocusReturns,SetFocusRequests);
+                message.Result=new IntPtr(unchecked((long)DocumentFixtureDiagnosticCounts.WithObjectRequests(
+                    callbacks,AllObjectRequests,ClientObjectRequests,OtherObjectRequests,AliasedRootObjectRequests)));
                 return;
             }
             if (command==10) {
