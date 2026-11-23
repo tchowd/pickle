@@ -110,17 +110,46 @@ function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
   }
   if ($Report.extension_id -isnot [string] -or $Report.extension_id -cnotmatch '^[a-p]{32}$' -or $Report.extension_version -cne '0.1.0') { throw 'The native extension card did not attest an exact ID and version.' }
 }
+function ConvertTo-PickleExtensionDeveloperObservation($Observation) {
+  $counters=@('nodes','property_errors','document_count','extensions_label_exact_count','value_pattern_count','internal_uri_exact_count','internal_uri_without_slash_count','candidate_count')
+  $keys=$counters+@('candidates_truncated','legacy_observed','candidates')
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'The bounded Developer mode observation had unknown fields.' }
+  $clean=[ordered]@{}
+  foreach ($key in $counters) {
+    $value=$Observation.$key
+    if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 2048) { throw 'The owned observation counter exceeded its bound.' }
+    $clean[$key]=$value
+  }
+  if ($clean.nodes -gt 1024 -or $Observation.candidates_truncated -isnot [bool] -or $Observation.candidates_truncated -ne ($clean.candidate_count -gt 16)) { throw 'The owned observation exceeded its node/candidate bound.' }
+  $clean.candidates_truncated=$Observation.candidates_truncated
+  if ($Observation.legacy_observed -isnot [bool] -or $Observation.legacy_observed) { throw 'The managed-only observation must not claim native Legacy support evidence.' };$clean.legacy_observed=$false
+  $records=@($Observation.candidates)
+  if ($records.Count -gt 16 -or $records.Count -gt $clean.candidate_count) { throw 'Too many Developer mode candidates were retained.' }
+  $booleans=@('label_exact','label_casefold','label_trim_casefold','label_known_substring','enabled','offscreen','toggle_supported','invoke_supported')
+  $numbers=@('control_type_id','toggle_state')
+  $recordsClean=@(foreach ($record in $records) {
+    if (@($record.PSObject.Properties).Count -ne $booleans.Count+$numbers.Count -or @($record.PSObject.Properties.Name | Where-Object { $_ -cnotin ($booleans+$numbers) }).Count) { throw 'The observed candidate had unknown fields.' }
+    $item=[ordered]@{}
+    foreach ($key in $booleans) { if ($record.$key -isnot [bool]) { throw 'An observed candidate flag had the wrong type.' };$item[$key]=$record.$key }
+    foreach ($key in $numbers) { if (($record.$key -isnot [int] -and $record.$key -isnot [long]) -or $record.$key -lt -1 -or $record.$key -gt 4294967295L) { throw 'An observed candidate scalar had the wrong type or range.' };$item[$key]=$record.$key }
+    if (!$item.label_known_substring -or $item.control_type_id -lt 50000 -or $item.control_type_id -gt 59999 -or ($item.toggle_supported -and $item.toggle_state -notin @(0,1,2)) -or (!$item.toggle_supported -and $item.toggle_state -ne -1)) { throw 'The observed candidate label/type/toggle scalars were inconsistent.' }
+    [pscustomobject]$item
+  })
+  $clean.candidates=$recordsClean
+  return [pscustomobject]$clean
+}
 function ConvertTo-PickleExtensionStageReport($Report) {
   # Whitelist scalar diagnostic keys. The native helper never writes arbitrary
   # UI names/values or exception messages; no private paths enter artifacts.
-  $booleans=@('passed','full_delivery_verified','native_host_registered','native_host_executed','authenticated_bridge_verified','app_launched','devtools_or_cdp_used','extension_code_modified','browser_job_drained','atomic_job_membership_verified','owned_window_verified','developer_toggle_found','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_name_found','extension_version_found','extension_card_identity_verified','extension_loaded')
+  $booleans=@('passed','full_delivery_verified','native_host_registered','native_host_executed','authenticated_bridge_verified','app_launched','devtools_or_cdp_used','extension_code_modified','browser_job_drained','atomic_job_membership_verified','owned_window_verified','developer_toggle_found','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_name_found','extension_version_found','extension_card_identity_verified','extension_loaded','developer_observation_unavailable')
   $numbers=@('schema','error_hresult','folder_field_candidates','extension_id_candidates','target_card_candidates','last_owned_uia_nodes','refused_uia_pid','last_owned_picker_windows','last_owned_browser_windows')
   $fixed=@{test=@('windows-stable-bundled-extension-load');scope=@('bundled-extension-load-only');browser=@('chrome','edge');stage=@('arguments','launch-contained-browser','owned-browser-window','developer-mode','load-unpacked','owned-folder-picker','folder-picker-path','loaded-extension-card','browser-cleanup');error_kind=@('com','access-denied','io','argument','other')}
   $failures=@('requires-hosted-windows-ci','invalid-arguments','unsupported-browser','invalid-proxy-port','profile-not-empty','wrong-browser-executable','not-installed-stable-brand','invalid-bundled-manifest','unexpected-bundled-extension','stage-deadline','owned-browser-window-unavailable','developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','load-unpacked-unavailable','owned-folder-picker-unavailable','ambiguous-folder-field','folder-field-unavailable','folder-value-pattern-unavailable','folder-path-value-mismatch','select-folder-unavailable','folder-picker-did-not-close','ambiguous-target-card','ambiguous-extension-id','loaded-extension-id-unavailable','native-operation-failed','invalid-owned-directory','directory-reparse-point','invalid-regular-file','invalid-json-size','invalid-json-object','evidence-too-large','uia-element-not-owned','uia-window-not-owned','uia-node-bound','uia-label-bound','ambiguous-owned-control','control-not-actionable','invoke-pattern-unavailable','job-create-failed','job-limits-failed','attribute-size-failed','attribute-initialize-failed','job-list-failed','browser-create-failed','browser-job-membership-failed','invalid-browser-argument','ambiguous-owned-window')
   $clean=[ordered]@{}
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
-    if ($key -cin $booleans -and $value -is [bool]) { $clean[$key]=$value }
+    if ($key -ceq 'developer_observation') { $clean[$key]=ConvertTo-PickleExtensionDeveloperObservation $value }
+    elseif ($key -cin $booleans -and $value -is [bool]) { $clean[$key]=$value }
     elseif ($key -cin $numbers -and ($value -is [int] -or $value -is [long])) { $clean[$key]=$value }
     elseif ($fixed.ContainsKey($key) -and $value -cin $fixed[$key]) { $clean[$key]=$value }
     elseif ($key -ceq 'failure' -and $value -cin $failures) { $clean[$key]=$value }

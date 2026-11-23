@@ -26,6 +26,19 @@ public static class BrowserExtensionPredicates {
     public static bool ToggleCandidate(string actualName,string expectedName,bool visible,bool enabled,bool supportsToggle) {
         return actualName==expectedName && visible && enabled && supportsToggle;
     }
+    public static int DeveloperLabelFlags(string value) {
+        if(value==null || value.Length>4096) return 0;
+        const string expected="Developer mode";
+        return (value==expected ? 1 : 0) |
+            (String.Equals(value,expected,StringComparison.OrdinalIgnoreCase) ? 2 : 0) |
+            (String.Equals(value.Trim(),expected,StringComparison.OrdinalIgnoreCase) ? 4 : 0) |
+            (value.IndexOf(expected,StringComparison.OrdinalIgnoreCase)>=0 ? 8 : 0);
+    }
+    public static int InternalUriForm(string value,string browser) {
+        if(!Browser(browser)) return 0;
+        string expected=browser+"://extensions/";
+        return value==expected ? 1 : value==expected.Substring(0,expected.Length-1) ? 2 : 0;
+    }
     public static string CardId(string containerName,string expectedName,string expectedVersion,IEnumerable<string> labels) {
         if(containerName!=expectedName || labels==null) return null;
         var values=labels.ToArray();if(!values.Contains(expectedVersion)) return null;
@@ -45,6 +58,12 @@ public static class BrowserExtensionPredicates {
             ToggleCandidate("Developer mode","Developer mode",false,true,true) ||
             ToggleCandidate("Developer mode","Developer mode",true,false,true) ||
             ToggleCandidate("Developer mode","Developer mode",true,true,false)) throw new Exception("toggle-contract");
+        if(DeveloperLabelFlags("Developer mode")!=15 || DeveloperLabelFlags("DEVELOPER MODE")!=14 ||
+            DeveloperLabelFlags(" developer MODE ")!=12 || DeveloperLabelFlags("Turn on Developer mode")!=8 ||
+            DeveloperLabelFlags("private unrelated text")!=0 || DeveloperLabelFlags(null)!=0 || DeveloperLabelFlags(new string('x',4097))!=0) throw new Exception("diagnostic-label-classification");
+        if(InternalUriForm("chrome://extensions/","chrome")!=1 || InternalUriForm("edge://extensions","edge")!=2 ||
+            InternalUriForm("edge://extensions/","chrome")!=0 || InternalUriForm("https://private.invalid/chrome://extensions/","chrome")!=0 ||
+            InternalUriForm("chrome://extensions/?private","chrome")!=0 || InternalUriForm(" chrome://extensions/","chrome")!=0) throw new Exception("diagnostic-exact-uri");
         if(CardId("Pickle","Pickle","0.1.0",new[]{"0.1.0","ID: "+id})!=id) throw new Exception("card-positive");
         // A second card's valid ID must never fill a missing target ID.
         if(CardId("Pickle","Pickle","0.1.0",new[]{"0.1.0"})!=null ||
@@ -111,7 +130,14 @@ public static class BrowserExtensionFixtureProgram {
             Report["owned_window_verified"]=true;
             stage="developer-mode";
             AutomationElement developer=null;
-            Wait(()=> { developer=NamedToggle(window,"Developer mode"); return developer!=null; },20,"developer-toggle-unavailable");
+            try { Wait(()=> { developer=NamedToggle(window,"Developer mode"); return developer!=null; },20,"developer-toggle-unavailable"); }
+            catch(ExtensionStageFailure) {
+                // Failure-only observation. Never change the original action,
+                // failure code or deadline; do not emit arbitrary UI strings.
+                try { ObserveDeveloper(window,kind); }
+                catch { Report["developer_observation_unavailable"]=true; }
+                throw;
+            }
             Report["developer_toggle_found"]=true;
             object pattern;
             if (!developer.TryGetCurrentPattern(TogglePattern.Pattern,out pattern)) Fail("developer-toggle-pattern-unavailable");
@@ -237,6 +263,42 @@ public static class BrowserExtensionFixtureProgram {
             return BrowserExtensionPredicates.ToggleCandidate(n.Current.Name,name,!n.Current.IsOffscreen,n.Current.IsEnabled,supported);
         }).ToArray();
         if(matches.Length>1) Fail("ambiguous-owned-control");return matches.SingleOrDefault();
+    }
+    static void ObserveDeveloper(IntPtr window,string kind) {
+        var nodes=Tree(window);var candidates=new List<Dictionary<string,object>>();
+        int matched=0,errors=0,documents=0,headings=0,exact=0,withoutSlash=0,valuePatterns=0;
+        foreach(var node in nodes) {
+            Check();Owned(node);
+            try {
+                var current=node.Current;int flags=BrowserExtensionPredicates.DeveloperLabelFlags(current.Name);
+                if(current.Name=="Extensions") headings++;
+                if(current.ControlType==ControlType.Document) documents++;
+                object pattern;
+                bool valueNode=current.ControlType==ControlType.Edit || current.ControlType==ControlType.Document;
+                if(valueNode) {
+                    if(node.TryGetCurrentPattern(ValuePattern.Pattern,out pattern)) {
+                        valuePatterns++;int form=BrowserExtensionPredicates.InternalUriForm(((ValuePattern)pattern).Current.Value,kind);
+                        if(form==1) exact++;else if(form==2) withoutSlash++;
+                    }
+                }
+                if(flags==0) continue;matched++;
+                if(candidates.Count>=16) continue;
+                bool toggle=node.TryGetCurrentPattern(TogglePattern.Pattern,out pattern);
+                int toggleState=toggle ? (int)((TogglePattern)pattern).Current.ToggleState : -1;
+                bool invoke=node.TryGetCurrentPattern(InvokePattern.Pattern,out pattern);
+                candidates.Add(new Dictionary<string,object> {
+                    {"label_exact",(flags&1)!=0},{"label_casefold",(flags&2)!=0},{"label_trim_casefold",(flags&4)!=0},{"label_known_substring",(flags&8)!=0},
+                    {"control_type_id",current.ControlType.Id},{"enabled",current.IsEnabled},{"offscreen",current.IsOffscreen},
+                    {"toggle_supported",toggle},{"toggle_state",toggleState},{"invoke_supported",invoke}});
+            } catch(ElementNotAvailableException) { errors++; }
+            catch(COMException) { errors++; }
+        }
+        Report["developer_observation"]=new Dictionary<string,object> {
+            {"nodes",nodes.Count},{"property_errors",errors},{"document_count",documents},{"extensions_label_exact_count",headings},
+            {"value_pattern_count",valuePatterns},{"internal_uri_exact_count",exact},{"internal_uri_without_slash_count",withoutSlash},
+            // net48 managed UIA omits LegacyIAccessiblePattern. This means
+            // not observed, never a claim that the native control lacks it.
+            {"candidate_count",matched},{"candidates_truncated",matched>16},{"legacy_observed",false},{"candidates",candidates}};
     }
     static void Invoke(AutomationElement element) {
         Owned(element);if(!element.Current.IsEnabled || element.Current.IsOffscreen) Fail("control-not-actionable");

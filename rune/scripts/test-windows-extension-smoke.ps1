@@ -66,6 +66,28 @@ Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $unexpected }
 $failure=[pscustomobject]@{schema=1;test='windows-stable-bundled-extension-load';scope='bundled-extension-load-only';browser='edge';passed=$false;stage='owned-folder-picker';failure='owned-folder-picker-unavailable';last_owned_picker_windows=0;browser_job_drained=$true}
 $null=ConvertTo-PickleExtensionStageReport $failure
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $failure 'edge' }
+$candidate=[ordered]@{label_exact=$true;label_casefold=$true;label_trim_casefold=$true;label_known_substring=$true;control_type_id=50000;enabled=$true;offscreen=$false;toggle_supported=$false;toggle_state=-1;invoke_supported=$true}
+$observation=[ordered]@{nodes=294;property_errors=0;document_count=1;extensions_label_exact_count=1;value_pattern_count=1;internal_uri_exact_count=1;internal_uri_without_slash_count=1;candidate_count=1;candidates_truncated=$false;legacy_observed=$false;candidates=@($candidate)}
+$observed=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$clean=ConvertTo-PickleExtensionDeveloperObservation $observed
+if ($clean.candidates.Count -ne 1 -or !$clean.candidates[0].invoke_supported -or $clean.candidates[0].toggle_supported -or $clean.legacy_observed) { throw 'Observed metadata was changed by sanitization.' }
+$withObservation=$failure | ConvertTo-Json | ConvertFrom-Json
+$withObservation | Add-Member -NotePropertyName developer_observation -NotePropertyValue $observed
+$null=ConvertTo-PickleExtensionStageReport $withObservation
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $withObservation 'edge' }
+foreach ($change in @(@('nodes',1025),@('candidate_count',17),@('legacy_observed','true'),@('legacy_observed',$true))) {
+  $bad=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionDeveloperObservation $bad }
+}
+$bad=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$bad.candidates[0] | Add-Member -NotePropertyName name -NotePropertyValue 'must-not-be-published'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionDeveloperObservation $bad }
+$bad=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$bad | Add-Member -NotePropertyName url -NotePropertyValue 'https://private.invalid/'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionDeveloperObservation $bad }
+$bad=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$bad.candidates=@(1..17 | ForEach-Object { $observed.candidates[0] });$bad.candidate_count=17;$bad.candidates_truncated=$true
+Assert-ExtensionRefused { ConvertTo-PickleExtensionDeveloperObservation $bad }
 $state=[pscustomobject]@{total_requests=3;pages_served=1;rejected_requests=2;forwarded_requests=0}
 $null=ConvertTo-PickleExtensionProxyState $state
 foreach ($change in @(@('forwarded_requests',1),@('total_requests',4),@('pages_served',1.0),@('rejected_requests',-1))) {
