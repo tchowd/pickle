@@ -396,6 +396,111 @@ async fn cloudflare_stream_uses_real_http_and_delivers_cumulative_drafts() {
 }
 
 #[tokio::test]
+async fn legacy_cloudflare_sse_pipeline_preserves_exact_unicode_drafts_and_stream_contract() {
+    // Original StreamingTests.testStreamingProviderAndPipeline event payloads,
+    // framed as SSE over actual owned HTTP, including keepalive and terminal.
+    const MODEL: &str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    let (base, captured) = server(vec![Reply::stream(concat!(
+        ": keepalive\n\n",
+        "data: {\"response\":\"Hello \"}\n\n",
+        "data: {\"response\":\"world 🌍\",\"usage\":{\"completion_tokens\":3}}\n\n",
+        "data: [DONE]\n\n",
+    ))]);
+    let account = "a".repeat(32);
+    let writer = CloudflareProvider::new(&account, "test-token", MODEL).with_test_base(base);
+    let input = RequestInput::new(
+        SelectionSnapshot::new("Hello world", "Test", "test"),
+        ReadingAction::Simplify,
+    );
+    let (events, mut received) = unbounded_channel();
+    let outcome = Pipeline::new(Arc::new(writer), None, false)
+        .run(input, events, CancellationToken::new())
+        .await
+        .unwrap();
+    let PipelineOutcome::Result(result) = outcome else {
+        panic!("Expected the original SSE prose result")
+    };
+    assert_eq!(result.text, "Hello world 🌍");
+    assert_eq!(result.model, MODEL);
+    assert!(result.chart.is_none());
+    assert_eq!(result.repairs, 0);
+    let mut drafts = vec![];
+    while let Ok(event) = received.try_recv() {
+        if let PipelineEvent::Draft(text) = event {
+            drafts.push(text);
+        }
+    }
+    assert_eq!(drafts, ["Hello ", "Hello world 🌍"]);
+    let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_native_json_post(&request, &format!("/accounts/{account}/ai/run/{MODEL}"));
+    assert_eq!(
+        captured_header(&request, "Accept"),
+        Some("text/event-stream")
+    );
+    assert_eq!(request.body["stream"], true);
+    assert!(request.body.get("response_format").is_none());
+    let user: Value =
+        serde_json::from_str(request.body["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(user["source"], "Hello world");
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+#[tokio::test]
+async fn legacy_cloudflare_sse_pipeline_refuses_incomplete_malformed_and_empty_done() {
+    // Original testIncompleteAndInvalidStreamsFail, now across actual HTTP and
+    // the real Pipeline: a valid partial event is not a completed answer; a
+    // malformed event and an empty-but-terminated stream cannot become results.
+    const MODEL: &str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    for (body, expected_drafts, reason) in [
+        (
+            "data: {\"response\":\"Partial\"}\n\n",
+            vec!["Partial"],
+            "before the answer finished",
+        ),
+        ("data: not-json\n\n", vec![], "invalid event"),
+        ("data: [DONE]\n\n", vec![], "empty or oversized"),
+    ] {
+        let (base, captured) = server(vec![Reply::stream(body)]);
+        let account = "a".repeat(32);
+        let writer = CloudflareProvider::new(&account, "test-token", MODEL).with_test_base(base);
+        let input = RequestInput::new(
+            SelectionSnapshot::new("Hello world", "Test", "test"),
+            ReadingAction::Simplify,
+        );
+        let (events, mut received) = unbounded_channel();
+        let error = Pipeline::new(Arc::new(writer), None, false)
+            .run(input, events, CancellationToken::new())
+            .await
+            .expect_err("A partial, malformed, or empty stream must not complete a reading");
+        assert!(
+            error.to_string().contains(reason),
+            "Expected decoder refusal: {reason}"
+        );
+        let mut drafts = vec![];
+        while let Ok(event) = received.try_recv() {
+            if let PipelineEvent::Draft(text) = event {
+                drafts.push(text);
+            }
+        }
+        assert_eq!(drafts, expected_drafts);
+        let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_native_json_post(&request, &format!("/accounts/{account}/ai/run/{MODEL}"));
+        assert_eq!(
+            captured_header(&request, "Accept"),
+            Some("text/event-stream")
+        );
+        assert_eq!(request.body["stream"], true);
+        assert!(matches!(
+            captured.recv_timeout(Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn chart_requests_use_schema_capable_cloud_model_and_buffer_objects() {
     let (base, captured) = server(vec![Reply::json(
         json!({"success":true,"result":{"response":{"bars":[]},"model":"json-resolved"}}),
