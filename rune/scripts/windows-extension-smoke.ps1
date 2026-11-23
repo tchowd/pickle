@@ -101,7 +101,7 @@ function Build-PickleExtensionFixture([string]$Directory) {
   return $output
 }
 function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
-  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure_observation','window_capture') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
+  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure_observation','window_capture','edge_policy_observation') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
   if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-bundled-extension-load' -or $Report.scope -cne 'bundled-extension-load-only' -or $Report.browser -cne $Browser) { throw 'The native setup stage report had the wrong scope.' }
   foreach ($key in @('passed','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_card_identity_verified','extension_loaded','browser_job_drained')) {
     if ($Report.$key -isnot [bool] -or !$Report.$key) { throw 'The native bundled-extension loading stage did not pass completely.' }
@@ -226,6 +226,23 @@ function Copy-PickleExtensionWindowCapture($Observation,[string]$Work,[string]$E
   try { $outputFile.Write($bytes,0,$bytes.Length) } finally { $outputFile.Dispose() }
   return $true
 }
+function ConvertTo-PickleExtensionEdgePolicies($Observation) {
+  $keys=@('effective_policy_claimed','incomplete','records')
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'Edge policy observations had unknown fields.' }
+  if ($Observation.effective_policy_claimed -isnot [bool] -or $Observation.effective_policy_claimed -or $Observation.incomplete -isnot [bool]) { throw 'Registry presence cannot attest effective Edge policy.' }
+  $records=@($Observation.records)
+  if ($records.Count -ne 8) { throw 'The exact bounded Edge policy locations were not observed.' }
+  $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $clean=@(foreach ($record in $records) {
+    $recordKeys=@('hive','view','policy','state')
+    if (@($record.PSObject.Properties).Count -ne $recordKeys.Count -or @($record.PSObject.Properties.Name | Where-Object { $_ -cnotin $recordKeys }).Count) { throw 'An Edge policy record contained unknown fields.' }
+    if ($record.hive -isnot [string] -or $record.hive -cnotin @('HKCU','HKLM') -or ($record.view -isnot [int] -and $record.view -isnot [long]) -or $record.view -notin @(32,64) -or $record.policy -isnot [string] -or $record.policy -cnotin @('ExtensionDeveloperModeSettings','DeveloperToolsAvailability')) { throw 'An Edge policy location was outside the fixed scope.' }
+    if ($record.state -isnot [string] -or $record.state -cnotin @('absent','known-0','known-1','known-2','unexpected-type','unexpected-value','unavailable') -or ($record.policy -ceq 'ExtensionDeveloperModeSettings' -and $record.state -ceq 'known-2')) { throw 'An Edge policy presence category was invalid.' }
+    if (!$seen.Add(($record.hive+'|'+$record.view+'|'+$record.policy))) { throw 'An Edge policy location was repeated.' }
+    [pscustomobject][ordered]@{hive=$record.hive;view=$record.view;policy=$record.policy;state=$record.state}
+  })
+  return [pscustomobject][ordered]@{effective_policy_claimed=$false;incomplete=$Observation.incomplete;records=$clean}
+}
 function ConvertTo-PickleExtensionStageReport($Report) {
   # Whitelist scalar diagnostic keys. The native helper never writes arbitrary
   # UI names/values or exception messages; no private paths enter artifacts.
@@ -236,7 +253,11 @@ function ConvertTo-PickleExtensionStageReport($Report) {
   $clean=[ordered]@{}
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
-    if ($key -cin @('failure_observation','window_capture')) {
+    if ($key -ceq 'edge_policy_observation') {
+      if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.browser -cne 'edge' -or $Report.stage -cnotin @('developer-mode','loaded-extension-card') -or $Report.failure -isnot [string]) { throw 'Edge policy presence is only a failed Edge stage diagnostic.' }
+      $clean[$key]=ConvertTo-PickleExtensionEdgePolicies $value
+    }
+    elseif ($key -cin @('failure_observation','window_capture')) {
       if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.stage -cnotin @('developer-mode','loaded-extension-card') -or $Report.failure -isnot [string]) { throw 'Failure diagnostics cannot attest success or another stage.' }
       $clean[$key]=if ($key -ceq 'window_capture') { ConvertTo-PickleExtensionWindowCapture $value } else { ConvertTo-PickleExtensionFailureObservation $value }
     }

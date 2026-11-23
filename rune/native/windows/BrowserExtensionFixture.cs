@@ -136,6 +136,15 @@ public static class BrowserExtensionPredicates {
         if(value=="card") return 2;if(value=="name") return 4;if(value=="version") return 8;if(value=="extension-id") return 16;
         return ExtensionId(value) ? 32 : 64;
     }
+    public static string PolicyState(string policy,int result,uint type,uint bytes,uint value) {
+        if(policy!="ExtensionDeveloperModeSettings" && policy!="DeveloperToolsAvailability") return "unavailable";
+        if(result==2 || result==3) return "absent";
+        if(result==1630 || ((result==0 || result==234) && type!=4)) return "unexpected-type";
+        if(result==234) return "unexpected-value";
+        if(result!=0) return "unavailable";
+        if(bytes!=4 || value>(policy=="ExtensionDeveloperModeSettings" ? 1U : 2U)) return "unexpected-value";
+        return value==0 ? "known-0" : value==1 ? "known-1" : "known-2";
+    }
     public const int MaxPngBytes=4*1024*1024;
     public static bool CaptureSize(long width,long height) { return width>0 && height>0 && width<=4096 && height<=2160 && width*height<=8388608; }
     public static int CaptureBudget(double remaining) { return remaining>=300 ? (int)Math.Min(2000,remaining) : 0; }
@@ -162,6 +171,15 @@ public static class BrowserExtensionPredicates {
     public static bool CommittedPage(bool entered,bool document,bool bound,int uriForm) { return entered && document && bound && (uriForm==1 || uriForm==2); }
     public static bool Scope(bool loaded,bool drained,bool fullDelivery) { return loaded && drained && !fullDelivery; }
     public static void SelfTest() {
+        foreach(string policy in new[]{"ExtensionDeveloperModeSettings","DeveloperToolsAvailability"}) {
+            if(PolicyState(policy,2,0,0,0)!="absent" || PolicyState(policy,3,0,0,0)!="absent" ||
+                PolicyState(policy,5,0,0,0)!="unavailable" || PolicyState(policy,1630,1,0,0)!="unexpected-type" ||
+                PolicyState(policy,0,1,4,1)!="unexpected-type" || PolicyState(policy,234,4,8,0)!="unexpected-value" ||
+                PolicyState(policy,0,4,3,0)!="unexpected-value" || PolicyState(policy,0,4,4,99)!="unexpected-value" ||
+                PolicyState(policy,0,4,4,0)!="known-0" || PolicyState(policy,0,4,4,1)!="known-1") throw new Exception("policy-classification");
+        }
+        if(PolicyState("ExtensionDeveloperModeSettings",0,4,4,2)!="unexpected-value" || PolicyState("DeveloperToolsAvailability",0,4,4,2)!="known-2" ||
+            PolicyState("unreviewed-policy",0,4,4,0)!="unavailable") throw new Exception("closed-policy-scope");
         string[] aids={"","card","name","version","extension-id","abcdefghijklmnopabcdefghijklmnop","private unrelated text"};
         for(int i=0;i<aids.Length;i++) if(AutomationIdFlags(aids[i])!=(1<<i)) throw new Exception("closed-author-id-observations");
         foreach(string other in new[]{"Card","card ","id: abcdefghijklmnopabcdefghijklmnop","qbcdefghijklmnopabcdefghijklmnop",new string('x',4097)})
@@ -392,6 +410,7 @@ public static class BrowserExtensionFixtureProgram {
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;
             if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card")) {
+                if(Report.ContainsKey("browser") && (string)Report["browser"]=="edge") { try { ObserveEdgePolicies(); } catch { } }
                 try { ObserveFailure(window); } catch { Report["failure_observation_unavailable"]=true; }
                 ObserveWindowCapture(window);
             }
@@ -738,6 +757,29 @@ public static class BrowserExtensionFixtureProgram {
         Native.Rect rect;if(!Native.GetWindowRect(window,out rect)) return 0;var bounds=current.BoundingRectangle;
         return BrowserExtensionPredicates.BoundsFlags(bounds.X,bounds.Y,bounds.Width,bounds.Height,rect.Left,rect.Top,rect.Right,rect.Bottom);
     }
+    static void ObserveEdgePolicies() {
+        // These are local registry PRESENCE observations, not effective policy.
+        // Precedence, cloud policy and browser refresh are deliberately unknown.
+        // No enumeration, writes, environment changes or policy bypass.
+        var records=new List<Dictionary<string,object>>();
+        foreach(string hive in new[]{"HKCU","HKLM"}) foreach(int view in new[]{32,64}) foreach(string policy in new[]{"ExtensionDeveloperModeSettings","DeveloperToolsAvailability"})
+            records.Add(new Dictionary<string,object> {{"hive",hive},{"view",view},{"policy",policy},{"state","unavailable"}});
+        var observation=new Dictionary<string,object> {{"effective_policy_claimed",false},{"incomplete",true},{"records",records}};
+        Report["edge_policy_observation"]=observation;
+        foreach(var record in records) {
+            if(DateTime.UtcNow>=deadline) return;
+            try {
+                var hive=new IntPtr(unchecked((int)((string)record["hive"]=="HKCU" ? 0x80000001U : 0x80000002U)));
+                // REG_DWORD only, fixed four-byte destination; wrong types are
+                // rejected without allocating/reading arbitrary policy data.
+                uint type,value,bytes=4,flags=0x20000010U | ((int)record["view"]==32 ? 0x00020000U : 0x00010000U);
+                int result=Native.RegGetValueW(hive,@"SOFTWARE\Policies\Microsoft\Edge",(string)record["policy"],flags,out type,out value,ref bytes);
+                record["state"]=BrowserExtensionPredicates.PolicyState((string)record["policy"],result,type,bytes,value);
+            } catch { record["state"]="unavailable"; }
+            if(DateTime.UtcNow>=deadline) return;
+        }
+        observation["incomplete"]=false;
+    }
     static void ObserveFailure(IntPtr window) {
         // Failure-only observations cannot select controls or authorize actions.
         // Names, help, IDs and exception messages are never serialized. Keep
@@ -905,6 +947,7 @@ public static class BrowserExtensionFixtureProgram {
         public void Dispose() { if(job!=IntPtr.Zero) { Native.TerminateJobObject(job,1);Native.CloseHandle(job);job=IntPtr.Zero; }if(process!=IntPtr.Zero) { Native.CloseHandle(process);process=IntPtr.Zero; } }
     }
     static class Native {
+        [DllImport("advapi32.dll",CharSet=CharSet.Unicode)] public static extern int RegGetValueW(IntPtr key,string subkey,string value,uint flags,out uint type,out uint data,ref uint bytes);
         [StructLayout(LayoutKind.Sequential)] public struct FileTime { public uint Low,High; }
         [DllImport("kernel32.dll")] public static extern bool GetProcessTimes(IntPtr process,out FileTime created,out FileTime exited,out FileTime kernel,out FileTime user);
         [DllImport("kernel32.dll")] public static extern uint GetProcessId(IntPtr process);

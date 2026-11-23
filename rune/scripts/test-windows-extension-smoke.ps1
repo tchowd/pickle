@@ -107,6 +107,43 @@ $diagnosed.stage='developer-mode';$diagnosed.failure='developer-toggle-unavailab
 $diagnosed | Add-Member -NotePropertyName failure_observation -NotePropertyValue $failureObserved
 $null=ConvertTo-PickleExtensionStageReport $diagnosed
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $diagnosed 'edge' }
+$policyRecords=@(foreach ($hive in @('HKCU','HKLM')) { foreach ($view in @(32,64)) { foreach ($policy in @('ExtensionDeveloperModeSettings','DeveloperToolsAvailability')) { [ordered]@{hive=$hive;view=$view;policy=$policy;state='absent'} } } })
+$policies=[ordered]@{effective_policy_claimed=$false;incomplete=$false;records=$policyRecords} | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$policyClean=ConvertTo-PickleExtensionEdgePolicies $policies
+if ($policyClean.records.Count -ne 8 -or $policyClean.effective_policy_claimed) { throw 'Closed registry presence was changed or interpreted as effective policy.' }
+foreach ($state in @('absent','known-0','known-1','known-2','unexpected-type','unexpected-value','unavailable')) {
+  $mapped=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$mapped.records[1].state=$state
+  if ((ConvertTo-PickleExtensionEdgePolicies $mapped).records[1].state -cne $state) { throw 'A closed Edge policy category was lost.' }
+}
+foreach ($change in @(@('effective_policy_claimed',$true),@('effective_policy_claimed','false'),@('incomplete',1),@('records',@()),@('records',@($policies.records[0])))) {
+  $bad=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionEdgePolicies $bad }
+}
+foreach ($change in @(@('hive','HKCR'),@('view',128),@('view','32'),@('view',32.0),@('policy','UnreviewedPolicy'),@('state','enabled'),@('state',0),@('state','known-2'))) {
+  $bad=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.records[0].($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionEdgePolicies $bad }
+}
+$bad=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.records[7]=$bad.records[0]
+Assert-ExtensionRefused { ConvertTo-PickleExtensionEdgePolicies $bad }
+$bad=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.records=@($bad.records)+@($bad.records[0])
+Assert-ExtensionRefused { ConvertTo-PickleExtensionEdgePolicies $bad }
+$bad=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.records[0] | Add-Member -NotePropertyName raw_value -NotePropertyValue 'not-retained'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionEdgePolicies $bad }
+$bad=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad | Add-Member -NotePropertyName registry_path -NotePropertyValue 'not-retained'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionEdgePolicies $bad }
+$partialPolicies=$policies | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$partialPolicies.incomplete=$true
+foreach ($record in $partialPolicies.records) { $record.state='unavailable' }
+$null=ConvertTo-PickleExtensionEdgePolicies $partialPolicies
+$policyFailure=$diagnosed | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$policyFailure | Add-Member -NotePropertyName edge_policy_observation -NotePropertyValue $partialPolicies
+$cleanPolicyFailure=ConvertTo-PickleExtensionStageReport $policyFailure
+if ($cleanPolicyFailure.failure -cne $diagnosed.failure -or !$cleanPolicyFailure.edge_policy_observation.incomplete) { throw 'Optional Edge presence observations replaced the primary failure.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $policyFailure 'edge' }
+foreach ($change in @(@('passed',$true),@('browser','chrome'),@('stage','ordinary-navigation'))) {
+  $bad=$policyFailure | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+  if ($change[0] -ceq 'passed') { Assert-ExtensionRefused { Assert-PickleExtensionStageReport $bad 'edge' } }
+}
 $partialReport=$diagnosed | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$partialReport.failure_observation=$partial
 $null=ConvertTo-PickleExtensionStageReport $partialReport
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $partialReport 'edge' }
