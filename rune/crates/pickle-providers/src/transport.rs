@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
 use pickle_core::PickleError;
-use reqwest::{Client, Response};
+use reqwest::{Client, ClientBuilder, Response};
 use serde_json::Value;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -21,6 +21,22 @@ pub(crate) fn check_cancel(cancel: &CancellationToken) -> Result<(), PickleError
     }
 }
 
+pub(crate) fn secure_client_builder(timeout: Duration) -> ClientBuilder {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(timeout)
+        .no_proxy()
+}
+
+pub(crate) struct RequestContext<'a> {
+    pub token: &'a str,
+    pub timeout: Duration,
+    pub local: bool,
+    pub sse: bool,
+    pub cancel: &'a CancellationToken,
+}
+
 /// No redirects, shared cookie jar, response cache, retries, or raw server errors.
 /// Timeout covers the response body as well as connection establishment.
 pub(crate) async fn open(
@@ -33,18 +49,58 @@ pub(crate) async fn open(
     cancel: &CancellationToken,
 ) -> Result<Response, PickleError> {
     check_cancel(cancel)?;
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(timeout)
-        .no_proxy()
+    let client = secure_client_builder(timeout)
         .build()
         .map_err(|_| error("Could not initialize the secure provider connection."))?;
+    send(
+        client,
+        url,
+        body,
+        RequestContext {
+            token,
+            timeout,
+            local,
+            sse,
+            cancel,
+        },
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn open_with_test_client(
+    client: Client,
+    url: Url,
+    body: Option<Value>,
+    context: RequestContext<'_>,
+) -> Result<Response, PickleError> {
+    send(client, url, body, context).await
+}
+
+// Production and the private test-client seam share ALL actual request/header,
+// cancellation, response-status and MIME handling. No test transport emulator.
+async fn send(
+    client: Client,
+    url: Url,
+    body: Option<Value>,
+    context: RequestContext<'_>,
+) -> Result<Response, PickleError> {
+    let RequestContext {
+        token,
+        timeout,
+        local,
+        sse,
+        cancel,
+    } = context;
+    check_cancel(cancel)?;
     let mut request = if let Some(body) = body {
         client.post(url).json(&body)
     } else {
         client.get(url)
     };
+    // Equal to the production Client deadline; also mandatory for a test-only
+    // injected client so metadata/chat body deadlines cannot silently diverge.
+    request = request.timeout(timeout);
     if !token.is_empty() {
         request = request.bearer_auth(token);
     }

@@ -20,4 +20,6 @@ pub use sample::SampleProvider;
 pub use vision::VisualContextClient;
 
 #[cfg(test)]
+mod legacy_local_https_tests;
+#[cfg(test)]
 mod tests;

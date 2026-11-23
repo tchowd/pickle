@@ -16,17 +16,62 @@ use crate::{
 pub struct OllamaProvider {
     pub configuration: LocalAIConfiguration,
     streaming: bool,
+    #[cfg(test)]
+    test_client: Option<reqwest::Client>,
 }
 impl OllamaProvider {
     pub fn new(configuration: LocalAIConfiguration) -> Self {
         Self {
             configuration,
             streaming: true,
+            #[cfg(test)]
+            test_client: None,
         }
     }
     pub fn with_streaming(mut self, enabled: bool) -> Self {
         self.streaming = enabled;
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_client(mut self, client: reqwest::Client) -> Self {
+        self.test_client = Some(client);
+        self
+    }
+
+    async fn open_local(
+        &self,
+        url: url::Url,
+        body: Option<Value>,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<reqwest::Response, PickleError> {
+        #[cfg(test)]
+        if let Some(client) = &self.test_client {
+            return crate::transport::open_with_test_client(
+                client.clone(),
+                url,
+                body,
+                crate::transport::RequestContext {
+                    token: &self.configuration.token,
+                    timeout,
+                    local: true,
+                    sse: false,
+                    cancel,
+                },
+            )
+            .await;
+        }
+        open(
+            url,
+            body,
+            &self.configuration.token,
+            timeout,
+            true,
+            false,
+            cancel,
+        )
+        .await
     }
 
     async fn metadata(
@@ -41,16 +86,9 @@ impl OllamaProvider {
             .base_url()?
             .join(path)
             .map_err(|_| error("Invalid Local server address."))?;
-        let response = open(
-            url,
-            body,
-            &self.configuration.token,
-            Duration::from_secs(8),
-            true,
-            false,
-            cancel,
-        )
-        .await?;
+        let response = self
+            .open_local(url, body, Duration::from_secs(8), cancel)
+            .await?;
         json_body(response, cancel).await
     }
 
@@ -125,16 +163,9 @@ impl OllamaProvider {
             .join("api/chat")
             .map_err(|_| error("Invalid Local server address."))?;
         let request_started = Instant::now();
-        let response = open(
-            url,
-            Some(body),
-            &self.configuration.token,
-            Duration::from_secs(90),
-            true,
-            false,
-            &cancel,
-        )
-        .await?;
+        let response = self
+            .open_local(url, Some(body), Duration::from_secs(90), &cancel)
+            .await?;
         let result = json_body(response, &cancel).await?;
         let mut accumulator = Ndjson::new(request_started, false);
         accumulator.line(&result.to_string())?;
@@ -183,16 +214,9 @@ impl GenerativeProvider for OllamaProvider {
             .join("api/chat")
             .map_err(|_| error("Invalid Local server address."))?;
         let request_started = Instant::now();
-        let response = open(
-            url,
-            Some(body),
-            &self.configuration.token,
-            Duration::from_secs(90),
-            true,
-            false,
-            &cancel,
-        )
-        .await?;
+        let response = self
+            .open_local(url, Some(body), Duration::from_secs(90), &cancel)
+            .await?;
         let mut accumulator = Ndjson::new(request_started, stream);
         if stream {
             read_lines(response, &cancel, |line| {
