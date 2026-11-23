@@ -344,10 +344,11 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     if (!$driver.WaitForExit(90000) -or $driver.ExitCode -ne 0) { throw 'Owned reading driver failed or exceeded 90 seconds.' }
     $evidence.driver=Read-PickleReadingJson $driverEvidence
     if ($evidence.driver.passed -ne $true) { throw 'Owned reading driver did not attest its checks.' }
-    foreach ($attestation in @('initial_compose_ready','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','completed_answer_verified','ordinary_quit_verified')) {
+    foreach ($attestation in @('initial_compose_ready','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','completed_answer_verified','source_retained_verified','ordinary_quit_verified')) {
       if ($evidence.driver.$attestation -ne $true) { throw 'Owned reading driver omitted a required attestation.' }
     }
     if ($evidence.driver.application_pid -ne $applicationProcess.Id -or $evidence.driver.fixture_pid -ne $fixture.Id -or $evidence.driver.app_exit_code -ne 0 -or $evidence.driver.shortcut_events_inserted -ne 6) { throw 'Owned driver process identity, shortcut delivery or ordinary exit evidence differed.' }
+    if ($evidence.driver.source_recheck_method -cne 'owned-button-focus-home' -or $evidence.driver.source_recheck_home_events_inserted -ne 2) { throw 'The owned source recheck did not attest ordinary keyboard scrolling.' }
     if (!$applicationProcess.WaitForExit(10000) -or $applicationProcess.ExitCode -ne 0) { throw 'The installed app did not exit normally after the driver quit.' }
     $evidence.ordinary_exit=$true
     if ((Invoke-PickleReadingLease $Application) -ne 0) { throw 'The installed reading process left its lease active.' }

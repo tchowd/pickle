@@ -257,6 +257,7 @@ public static class ReadingFixtureProgram {
         if (found[0].Current.ProcessId!=pid) Fail("uia-element-not-owned"); return found[0];
     }
     static string[] Texts(AutomationElement container,int pid) {
+        if (container==null) Fail("uia-text-container-unavailable");
         var texts=new List<string>();
         var leaves=container.FindAll(TreeScope.Descendants,
             new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Text));
@@ -334,6 +335,40 @@ public static class ReadingFixtureProgram {
             return document;
         },5,"source-focus-readiness-timeout");
     }
+    static void RecheckSource(Contract contract,IntPtr app,int appPid,Process application) {
+        stage="source-recheck";
+        AutomationElement root=Root(app,appPid), copy=null;
+        Wait(()=> { root=Root(app,appPid); return Find(root,"reader-scroll",appPid)!=null; },5,"post-answer-reader-scroll-unavailable");
+        Wait(()=> {
+            root=Root(app,appPid); copy=Find(root,"copy-answer",appPid);
+            return copy!=null && copy.Current.IsEnabled && copy.Current.IsKeyboardFocusable && !copy.Current.IsOffscreen;
+        },5,"post-answer-focus-control-unavailable");
+        // The pinned Windows adapter exposes ScrollItem but not ScrollPattern.
+        // Focus (never Invoke) this ordinary reader button, then use Rune's
+        // documented Home key route to its nearest scrolling ancestor.
+        Focus(app,appPid); copy.SetFocus();
+        Wait(()=> {
+            if (application.HasExited) Fail("application-exited-before-source-recheck");
+            var focused=AutomationElement.FocusedElement;
+            return Owned(app,appPid) && Native.GetForegroundWindow()==app && focused!=null &&
+                focused.Current.ProcessId==appPid && focused.Current.AutomationId=="copy-answer";
+        },5,"post-answer-control-focus-unavailable");
+        Native.Home(app,appPid);
+        evidence["source_recheck_method"]="owned-button-focus-home";
+        evidence["source_recheck_home_events_inserted"]=2;
+        AutomationElement preview=null;
+        Wait(()=> {
+            if (application.HasExited) Fail("application-exited-during-source-recheck");
+            root=Root(app,appPid); preview=Find(root,"source-preview",appPid);
+            return preview!=null && !preview.Current.IsOffscreen;
+        },5,"post-answer-source-unavailable");
+        Wait(()=> {
+            root=Root(app,appPid); preview=Find(root,"source-preview",appPid);
+            return preview!=null && !preview.Current.IsOffscreen &&
+                ReadingFixturePredicates.Source(Texts(preview,appPid),contract.Selected,contract.Before,contract.After);
+        },5,"post-answer-source-mismatch");
+        evidence["source_retained_verified"]=true;
+    }
     static void Drive(Contract contract,Dictionary<string,string> options) {
         int appPid=Pid(options["--application-pid"]), fixturePid=Pid(options["--fixture-pid"]);
         if (appPid==fixturePid || appPid==Process.GetCurrentProcess().Id || fixturePid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
@@ -386,7 +421,7 @@ public static class ReadingFixtureProgram {
                     Find(root,"copy-answer",appPid)!=null && Find(root,"save-answer",appPid)!=null;
             },20,"completed-answer-unavailable");
             Server(options["--server-state"],true); evidence["provider_source_verified"]=true; evidence["completed_answer_verified"]=true;
-            if (!ReadingFixturePredicates.Source(Texts(Find(root,"source-preview",appPid),appPid),contract.Selected,contract.Before,contract.After)) Fail("source-changed-after-reading");
+            RecheckSource(contract,app,appPid,application);
             stage="ordinary-quit";
             Focus(app,appPid); Native.Chord(app,appPid,0x51,false);
             Wait(()=>application.HasExited,10,"application-did-not-quit");
@@ -425,6 +460,17 @@ public static class ReadingFixtureProgram {
             focus=available ? info.Focus : IntPtr.Zero; return available;
         }
         static Input Key(ushort key,bool up) { return new Input { Type=1,Data=new Union { Keyboard=new Keyboard { Key=key,Flags=up ? 2U : 0U } } }; }
+        public static void Home(IntPtr hwnd,int pid) {
+            if (!Owned(hwnd,pid) || GetForegroundWindow()!=hwnd) Fail("input-target-not-owned");
+            foreach (int key in new[]{0x11,0x12,0x10,0x5b,0x5c,0x24})
+                if ((GetAsyncKeyState(key)&0x8000)!=0) Fail("input-key-already-held");
+            Input down=Key(0x24,false), up=Key(0x24,true);
+            down.Data.Keyboard.Flags=1; up.Data.Keyboard.Flags=3; // EXTENDEDKEY, plus KEYUP.
+            Input[] inputs={down,up};
+            if (SendInput(2,inputs,Marshal.SizeOf(typeof(Input)))!=2) {
+                SendInput(1,new[]{up},Marshal.SizeOf(typeof(Input))); Fail("input-insertion-incomplete");
+            }
+        }
         public static void Chord(IntPtr hwnd,int pid,ushort key,bool alt) {
             if (!Owned(hwnd,pid) || GetForegroundWindow()!=hwnd) Fail("input-target-not-owned");
             if ((GetAsyncKeyState(0x11)&0x8000)!=0 || (GetAsyncKeyState(0x12)&0x8000)!=0 || (GetAsyncKeyState(key)&0x8000)!=0) Fail("input-key-already-held");
