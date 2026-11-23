@@ -19,6 +19,18 @@ using System.Windows.Forms;
 #endif
 
 public static class ReadingFixturePredicates {
+    public static string ErrorKind(Exception error) {
+        if (error is TypeInitializationException) return "type-initialization";
+        if (error is System.DllNotFoundException) return "native-library-unavailable";
+        if (error is System.ComponentModel.Win32Exception) return "win32";
+        if (error is System.Runtime.InteropServices.COMException) return "com";
+        if (error is UnauthorizedAccessException) return "access-denied";
+        if (error is System.Security.SecurityException) return "security";
+        if (error is System.IO.IOException) return "io";
+        if (error is ArgumentException) return "argument";
+        if (error is InvalidOperationException) return "invalid-operation";
+        return "other";
+    }
     public static bool Contract(string before, string selected, string after, string answer) {
         Func<string,int,bool> line = (value, max) => value != null && value.Trim().Length > 0 &&
             value.Length <= max && value.IndexOfAny(new char[] {'\r','\n','\0'}) < 0 &&
@@ -49,6 +61,8 @@ public static class ReadingFixturePredicates {
             if (Source(bad,chosen,"BEFORE","AFTER")) throw new Exception("source-negative");
         if (NormalizeDocument("BEFORE\r\n"+chosen+"\rAFTER\r") != "BEFORE\n"+chosen+"\nAFTER")
             throw new Exception("document");
+        if (ErrorKind(new InvalidOperationException("synthetic text must not become a diagnostic")) != "invalid-operation")
+            throw new Exception("error-kind");
     }
 }
 
@@ -72,35 +86,56 @@ public static class ReadingFixtureProgram {
 
     [MTAThread]
     public static int Main(string[] args) {
+        bool fixtureMode=false;
         try {
             if (args.Length==1 && args[0]=="--self-test") {
                 ReadingFixturePredicates.SelfTest(); Console.WriteLine("Reading fixture predicates passed; no UI."); return 0;
             }
             if (args.Length<1) Fail("invalid-arguments");
             bool fixture=args[0]=="fixture", drive=args[0]=="drive";
+            fixtureMode=fixture;
             if (!fixture && !drive) Fail("invalid-mode");
             string[] names=fixture ? new[]{"--contract","--ready"} :
                 new[]{"--contract","--application-pid","--fixture-pid","--fixture-hwnd","--server-state","--evidence"};
             Dictionary<string,string> options=Options(args,names);
+            evidencePath=fixture ? options["--ready"]+".failure.json" : options["--evidence"];
+            evidence=new Dictionary<string,object> {{"schema",1},{"test",fixture ? "windows-owned-selection-source" : "windows-server-installed-selection-reading"},
+                {"passed",false},{"pid",Process.GetCurrentProcess().Id}};
+            stage="contract-read";
             Contract contract=ReadContract(options["--contract"]);
-            if (fixture) return Fixture(contract,options["--ready"]);
-            evidencePath=options["--evidence"];
-            evidence=new Dictionary<string,object> {{"schema",1},{"test","windows-server-installed-selection-reading"},
-                {"passed",false},{"source_length",contract.Selected.Length},{"source_sha256",Hash(contract.Selected)}};
+            if (fixture) {
+                int result=Fixture(contract,options["--ready"]); evidence["passed"]=result==0; return result;
+            }
+            evidence["source_length"]=contract.Selected.Length; evidence["source_sha256"]=Hash(contract.Selected);
             overall=DateTime.UtcNow.AddSeconds(75);
             Drive(contract,options);
             evidence["passed"]=true; evidence["stage"]="complete"; return 0;
         } catch (ReadingFixtureFailure error) {
-            if (evidence!=null) { evidence["stage"]=stage; evidence["failure"]=error.Code; }
+            RecordError(error,error.Code);
             Console.Error.WriteLine("Controlled reading fixture failed: "+error.Code); return 1;
-        } catch {
-            if (evidence!=null) { evidence["stage"]=stage; evidence["failure"]="unexpected-driver-error"; }
-            Console.Error.WriteLine("Controlled reading fixture failed: unexpected-driver-error"); return 1;
+        } catch (Exception error) {
+            string code=fixtureMode ? "unexpected-fixture-error" : "unexpected-driver-error";
+            RecordError(error,code);
+            Console.Error.WriteLine("Controlled reading fixture failed: "+code); return 1;
         } finally {
-            if (evidence!=null && evidencePath!=null) {
+            if (evidence!=null && evidencePath!=null && (!fixtureMode || !(bool)evidence["passed"])) {
                 try { AtomicJson(evidencePath,evidence); }
                 catch { Console.Error.WriteLine("Controlled reading evidence could not be written."); }
             }
+        }
+    }
+    static void RecordError(Exception error,string code) {
+        if (evidence==null) return;
+        evidence["stage"]=stage; evidence["failure"]=code;
+        evidence["error_kind"]=ReadingFixturePredicates.ErrorKind(error);
+        evidence["error_hresult"]=error.HResult;
+        var native=error as System.ComponentModel.Win32Exception;
+        if (native!=null) evidence["native_error_code"]=native.NativeErrorCode;
+        // At most one inner exception, and only fixed classification/numeric
+        // metadata. Never Message, StackTrace, ToString, paths or source text.
+        if (error.InnerException!=null) {
+            evidence["inner_error_kind"]=ReadingFixturePredicates.ErrorKind(error.InnerException);
+            evidence["inner_error_hresult"]=error.InnerException.HResult;
         }
     }
     static void Fail(string code) { throw new ReadingFixtureFailure(code); }
@@ -151,29 +186,38 @@ public static class ReadingFixtureProgram {
     static string Hex(IntPtr handle) { return "0x"+handle.ToInt64().ToString("x",CultureInfo.InvariantCulture); }
     static int Fixture(Contract contract,string ready) {
         Exception failure=null;
+        stage="fixture-sta-thread";
         var thread=new Thread(delegate() {
             try {
+                stage="fixture-exception-mode";
                 Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+                stage="fixture-visual-styles";
                 Application.EnableVisualStyles();
+                stage="fixture-controls";
                 using (var form=new Form()) using (var edit=new RichTextBox()) {
+                    stage="fixture-content";
                     form.Text="Pickle controlled selection fixture"; form.Width=720; form.Height=360;
                     form.StartPosition=FormStartPosition.CenterScreen;
                     edit.Dock=DockStyle.Fill; edit.Text=contract.Document; edit.HideSelection=false; edit.ReadOnly=true;
                     edit.AccessibleName="Controlled selected passage"; form.Controls.Add(edit);
                     form.Shown+=delegate {
+                        stage="fixture-shown";
                         form.Activate(); edit.Focus();
+                        stage="fixture-selection";
                         int start=edit.Text.IndexOf(contract.Selected,StringComparison.Ordinal);
                         if (start<0) Fail("fixture-selection-unavailable");
                         edit.Select(start,contract.Selected.Length);
+                        stage="fixture-ready-write";
                         AtomicJson(ready,new Dictionary<string,object> {
                             {"pid",Process.GetCurrentProcess().Id},{"hwnd",Hex(form.Handle)},{"edit_hwnd",Hex(edit.Handle)}});
+                        stage="fixture-message-loop";
                     };
                     Application.Run(form);
                 }
             } catch (Exception error) { failure=error; }
         });
         thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
-        if (failure!=null) Fail("fixture-window-failed"); return 0;
+        if (failure!=null) throw failure; return 0;
     }
     static int Pid(string value) { int pid; if (!Int32.TryParse(value,out pid) || pid<=0) { Fail("invalid-pid"); } return pid; }
     static IntPtr Handle(string value) {

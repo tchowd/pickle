@@ -13,6 +13,27 @@ $root=Join-Path ([IO.Path]::GetTempPath()) ('pickle-reading-tests-'+[guid]::NewG
 if ($root.StartsWith('/var/') -and (Test-Path -LiteralPath '/private/var')) { $root='/private'+$root }
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
+  $primary='Original controlled startup failure.'
+  $cleanup=[ordered]@{cleanup_categories=@()}
+  Add-PickleReadingCleanupFailure $cleanup ([ref]$primary) 'fixture-forced-stop'
+  Add-PickleReadingCleanupFailure $cleanup ([ref]$primary) 'fixture-exit-nonzero'
+  if ($primary -cne 'Original controlled startup failure.' -or $cleanup.cleanup_categories.Count -ne 2) { throw 'Cleanup diagnostics overwrote the primary reading failure.' }
+  try { Throw-PickleReadingFailure 'ready-pid-mismatch' } catch { if ((Get-PickleReadingFailureCategory $_) -cne 'ready-pid-mismatch') { throw 'Fixed readiness category was lost.' } }
+  try { throw 'unexpected-sensitive-source' } catch { if ((Get-PickleReadingFailureCategory $_) -cne 'harness-operation-failed') { throw 'Unexpected exception content entered a failure category.' } }
+  $owned=Start-PickleReadingChild $python.Source @('-c','import sys; sys.exit(23)')
+  try {
+    if (!$owned.WaitForExit(5000)) { throw 'Owned non-UI exit fixture timed out.' }
+    $state=[ordered]@{owned_processes=[ordered]@{}}
+    Save-PickleReadingProcessState $state 'fixture' $owned $python.Source -BeforeCleanup
+    if ($state.owned_processes.fixture.exit_code -ne 23 -or !$state.owned_processes.fixture.exited_before_cleanup -or $state.owned_processes.fixture.forced_cleanup) { throw 'Owned helper exit evidence was not preserved.' }
+    try { Assert-PickleReadingChild $owned $python.Source;throw 'An exited helper passed readiness.' } catch { if ((Get-PickleReadingFailureCategory $_) -cne 'owned-child-exited') { throw 'An exited helper did not retain its fixed category.' } }
+  } finally { if (!$owned.HasExited) { $owned.Kill();$owned.WaitForExit(5000) | Out-Null };$owned.Dispose() }
+  $diagnostic=[pscustomobject]@{schema=1;test='windows-owned-selection-source';passed=$false;pid=17;stage='fixture-controls';failure='unexpected-fixture-error';error_kind='type-initialization';error_hresult=-2146233036;inner_error_kind='native-library-unavailable';inner_error_hresult=-2146233052}
+  $clean=ConvertTo-PickleReadingFixtureFailure $diagnostic 17
+  if ($clean.pid -ne 17 -or $clean.error_kind -cne 'type-initialization') { throw 'Whitelisted fixture diagnostic was not preserved.' }
+  Assert-ReadingRefused { ConvertTo-PickleReadingFixtureFailure $diagnostic 18 }
+  $diagnostic | Add-Member -NotePropertyName message -NotePropertyValue 'unexpected-sensitive-source'
+  Assert-ReadingRefused { ConvertTo-PickleReadingFixtureFailure $diagnostic 17 }
   if ((ConvertTo-PickleReadingRelative ('BrowserBridge'+[char]92+'connection.json')) -cne 'BrowserBridge/connection.json') { throw 'Windows profile separators must normalize before control exclusions.' }
   $data=Join-Path $root 'data';$backup=Join-Path $root 'backup'
   New-Item -ItemType Directory -Path (Join-Path $data 'BrowserBridge') -Force | Out-Null
@@ -51,6 +72,11 @@ try {
   finally { Remove-Item -LiteralPath $many -Recurse }
   if ($IsWindows) {
     $executable=Build-PickleReadingFixture $root
+    $canonical=Get-PickleReadingCanonicalExecutable $executable
+    $alias=Join-Path (Join-Path $root 'unused-parent') '../ReadingFixture.exe'
+    if ((Get-PickleReadingCanonicalExecutable $alias) -cne $canonical) { throw 'Owned executable path aliases did not resolve to the same file.' }
+    $other=Join-Path $root 'OtherFixture.exe';[IO.File]::Copy($executable,$other)
+    if ((Get-PickleReadingCanonicalExecutable $other) -ceq $canonical) { throw 'Different installed executable paths shared identity.' }
     $selfTest=Start-PickleReadingChild $executable @('--self-test')
     try { if (!$selfTest.WaitForExit(10000) -or $selfTest.ExitCode -ne 0) { throw 'Owned native fixture non-UI predicates failed.' } }
     finally { if (!$selfTest.HasExited) { $selfTest.Kill();$selfTest.WaitForExit(10000) | Out-Null };$selfTest.Dispose() }
