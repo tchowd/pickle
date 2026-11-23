@@ -579,6 +579,17 @@ fn probability_and_choice_validation_is_strict() {
             .is_err()
         );
     }
+    // Exact legacy absence predicate belongs to response validation, before
+    // policy's separate missing-answer -> Uncertain fallback can run.
+    assert!(
+        DecisionResponse {
+            model: "test".into(),
+            answers: BTreeMap::new(),
+            usage: None,
+        }
+        .validate(&questions)
+        .is_err()
+    );
     let choice = BTreeMap::from([(
         "q".into(),
         DecisionQuestion::choice(

@@ -63,6 +63,7 @@ struct Checker {
     uncertain: bool,
     repair_succeeds: bool,
     chart_yes: bool,
+    specialist: bool,
 }
 impl Checker {
     fn new() -> Self {
@@ -75,6 +76,7 @@ impl Checker {
             uncertain: false,
             repair_succeeds: false,
             chart_yes: false,
+            specialist: false,
         }
     }
 }
@@ -101,12 +103,19 @@ impl DecisionClient for Checker {
                     DecisionAnswer {
                         kind: "choice".into(),
                         noul: None,
-                        choice: Some("everyday".into()),
+                        choice: Some(
+                            if self.specialist {
+                                "specialist"
+                            } else {
+                                "everyday"
+                            }
+                            .into(),
+                        ),
                         confidence: Some(0.9),
                         probabilities: Some(BTreeMap::from([
-                            ("everyday".into(), 0.9),
+                            ("everyday".into(), if self.specialist { 0.0 } else { 0.9 }),
                             ("professional".into(), 0.1),
-                            ("specialist".into(), 0.0),
+                            ("specialist".into(), if self.specialist { 0.9 } else { 0.0 }),
                             ("dense".into(), 0.0),
                         ])),
                     }
@@ -177,9 +186,10 @@ async fn simplify_checks_context_difficulty_and_fidelity_only() {
     assert_eq!(result.quality, QualityStatus::Checked);
     let calls = checker.calls.lock().unwrap();
     assert_eq!(calls.len(), 2);
-    assert!(calls[0].1.contains_key("difficulty"));
-    assert!(calls[1].1.contains_key("lost_uncertainty"));
-    assert!(!calls[1].1.contains_key("invented_specifics"));
+    let mut preflight = DecisionEvaluators::context();
+    preflight.extend(DecisionEvaluators::difficulty());
+    assert!(calls[0].1.keys().eq(preflight.keys()));
+    assert!(calls[1].1.keys().eq(DecisionEvaluators::fidelity().keys()));
 }
 #[tokio::test]
 async fn expansion_and_followup_check_support_against_the_fixed_source() {
@@ -189,9 +199,17 @@ async fn expansion_and_followup_check_support_against_the_fixed_source() {
         let mut request = input(action);
         if action == ReadingAction::FollowUp {
             request.question = "Why?".into();
+            request.conversation.push(ConversationTurn {
+                question: "What?".into(),
+                answer: "Earlier response".into(),
+                quality: QualityStatus::Uncertain,
+                label: None,
+            });
         }
         request.previous_result = "An older answer, not evidence".into();
-        let fixed_source = request.reading_source();
+        // The fixture has no supplemental context: derive the oracle from
+        // the immutable snapshot, never the production source-combining helper.
+        let fixed_source = request.snapshot.text.clone();
         let PipelineOutcome::Result(result) =
             run(writer.clone(), Some(checker.clone()), request).await
         else {
@@ -204,10 +222,29 @@ async fn expansion_and_followup_check_support_against_the_fixed_source() {
             calls[0].1.contains_key("difficulty"),
             action == ReadingAction::Expand
         );
-        assert!(calls[1].1.contains_key("invented_specifics"));
-        assert!(!calls[1].1.contains_key("lost_uncertainty"));
+        let mut preflight = DecisionEvaluators::context();
+        if action == ReadingAction::Expand {
+            preflight.extend(DecisionEvaluators::difficulty());
+        }
+        assert!(calls[0].1.keys().eq(preflight.keys()));
+        assert!(calls[1].1.keys().eq(DecisionEvaluators::support().keys()));
+        assert!(!calls[1].0.contains_key("prior_explanation"));
+        assert!(
+            !calls[1]
+                .0
+                .values()
+                .any(|value| value.contains("Earlier response"))
+        );
+        if action == ReadingAction::FollowUp {
+            assert_eq!(calls[0].0["follow_up_question"], "Why?");
+        }
         for (state, _) in calls.iter() {
             assert_eq!(state["source"], fixed_source);
+            assert!(
+                !state
+                    .values()
+                    .any(|value| value.contains("An older answer, not evidence"))
+            );
         }
         let prompts = writer.prompts.lock().unwrap();
         let body: serde_json::Value = serde_json::from_str(&prompts[0].user).unwrap();
@@ -221,27 +258,34 @@ async fn missing_context_stops_before_generation_unless_explicitly_limited() {
     let mut c = Checker::new();
     c.missing = true;
     let checker = Arc::new(c);
-    assert!(matches!(
-        run(
-            writer.clone(),
-            Some(checker.clone()),
-            input(ReadingAction::Simplify)
-        )
-        .await,
-        PipelineOutcome::NeedsContext(_)
-    ));
+    let outcome = run(
+        writer.clone(),
+        Some(checker.clone()),
+        input(ReadingAction::Simplify),
+    )
+    .await;
+    let PipelineOutcome::NeedsContext(flags) = outcome else {
+        panic!("Missing context must stop before generation")
+    };
+    assert_eq!(flags, vec!["missing_referent"]);
     assert_eq!(writer.calls.load(Ordering::SeqCst), 0);
     let mut request = input(ReadingAction::Simplify);
     request.limited = true;
-    assert!(matches!(
-        run(writer.clone(), Some(checker), request).await,
-        PipelineOutcome::Result(_)
-    ));
+    let original_source = request.snapshot.text.clone();
+    let PipelineOutcome::Result(result) = run(writer.clone(), Some(checker), request).await else {
+        panic!("Explicit limited mode must resume generation")
+    };
     assert!(
-        writer.prompts.lock().unwrap()[0]
-            .system
-            .contains("Context may be missing")
+        result
+            .notes
+            .iter()
+            .any(|note| note.contains("Limited explanation"))
     );
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
+    let prompts = writer.prompts.lock().unwrap();
+    assert!(prompts[0].system.contains("Context may be missing"));
+    let body: serde_json::Value = serde_json::from_str(&prompts[0].user).unwrap();
+    assert_eq!(body["source"], original_source);
 }
 #[tokio::test]
 async fn concern_repairs_once_rechecks_and_keeps_remaining_concerns() {
@@ -283,11 +327,19 @@ async fn evaluator_outage_still_generates_with_honest_status() {
     let writer = Arc::new(Writer::new(&["Answer"]));
     let mut c = Checker::new();
     c.outage = true;
-    let PipelineOutcome::Result(result) =
-        run(writer, Some(Arc::new(c)), input(ReadingAction::Simplify)).await
+    let checker = Arc::new(c);
+    let PipelineOutcome::Result(result) = run(
+        writer.clone(),
+        Some(checker.clone()),
+        input(ReadingAction::Simplify),
+    )
+    .await
     else {
         panic!()
     };
+    assert_eq!(result.text, "Answer");
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(checker.calls.lock().unwrap().len(), 1);
     assert_eq!(
         result.quality,
         QualityStatus::NotChecked("Jev unavailable".into())
@@ -316,9 +368,10 @@ async fn offline_blocks_remote_before_any_generation() {
     let mut w = Writer::new(&["Remote answer"]);
     w.remote = true;
     let writer = Arc::new(w);
+    let checker = Arc::new(Checker::new());
     let (events, _) = unbounded_channel();
     assert!(
-        Pipeline::new(writer.clone(), None, true)
+        Pipeline::new(writer.clone(), Some(checker.clone()), true)
             .run(
                 input(ReadingAction::Simplify),
                 events,
@@ -328,6 +381,26 @@ async fn offline_blocks_remote_before_any_generation() {
             .is_err()
     );
     assert_eq!(writer.calls.load(Ordering::SeqCst), 0);
+    assert!(checker.calls.lock().unwrap().is_empty());
+    let local_writer = Arc::new(Writer::new(&["Local answer"]));
+    let (events, _) = unbounded_channel();
+    let outcome = Pipeline::new(local_writer.clone(), Some(checker.clone()), true)
+        .run(
+            input(ReadingAction::Simplify),
+            events,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let PipelineOutcome::Result(result) = outcome else {
+        panic!("Local offline writer must generate")
+    };
+    assert_eq!(
+        result.quality,
+        QualityStatus::NotChecked(QualityStatus::OFFLINE.into())
+    );
+    assert_eq!(local_writer.calls.load(Ordering::SeqCst), 1);
+    assert!(checker.calls.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn cancellation_drops_noncooperative_provider_future() {
@@ -349,15 +422,18 @@ async fn cancellation_drops_noncooperative_provider_future() {
 #[tokio::test]
 async fn oversize_input_and_unsupported_bars_never_reach_provider() {
     let writer = Arc::new(Writer::new(&["Answer"]));
+    let checker = Arc::new(Checker::new());
     let (events, _) = unbounded_channel();
     let mut request = input(ReadingAction::Simplify);
     request.snapshot.text = "a".repeat(12001);
     assert!(
-        Pipeline::new(writer.clone(), None, false)
+        Pipeline::new(writer.clone(), Some(checker.clone()), false)
             .run(request, events, CancellationToken::new())
             .await
             .is_err()
     );
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 0);
+    assert!(checker.calls.lock().unwrap().is_empty());
     let mut chart = input(ReadingAction::Chart);
     chart.chart_choice = Some(ChartKind::Bar);
     let (events, _) = unbounded_channel();
@@ -387,7 +463,7 @@ async fn successful_repair_rechecks_entire_bank_and_restores_checked_status() {
     checker.repair_succeeds = true;
     let checker = Arc::new(checker);
     let PipelineOutcome::Result(result) = run(
-        writer,
+        writer.clone(),
         Some(checker.clone()),
         input(ReadingAction::Simplify),
     )
@@ -398,10 +474,16 @@ async fn successful_repair_rechecks_entire_bank_and_restores_checked_status() {
     assert_eq!(result.quality, QualityStatus::Checked);
     assert_eq!(result.text, "second");
     assert_eq!(result.repairs, 1);
-    assert_eq!(
-        checker.calls.lock().unwrap()[2].1.len(),
-        DecisionEvaluators::fidelity().len()
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        writer.prompts.lock().unwrap()[1]
+            .system
+            .contains("Restore all uncertainty")
     );
+    let calls = checker.calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[1].1.keys().eq(DecisionEvaluators::fidelity().keys()));
+    assert!(calls[2].1.keys().eq(DecisionEvaluators::fidelity().keys()));
 }
 #[tokio::test]
 async fn uncertain_checks_do_not_trigger_repairs() {
@@ -440,18 +522,28 @@ async fn failed_postcheck_never_becomes_a_pass() {
 }
 #[tokio::test]
 async fn evaluator_can_refuse_an_unsupported_chart_before_generation() {
-    let writer = Arc::new(Writer::new(&["unused"]));
-    let mut request = input(ReadingAction::Chart);
-    request.chart_choice = Some(ChartKind::Flow);
-    let PipelineOutcome::Result(result) =
-        run(writer.clone(), Some(Arc::new(Checker::new())), request).await
-    else {
-        panic!()
-    };
-    assert!(result.chart.is_none());
-    assert_eq!(result.model, "No generation requested");
-    assert_eq!(writer.calls.load(Ordering::SeqCst), 0);
+    // Automatic routing is the original Swift fixture. A manual format also
+    // cannot override an evaluator's explicit no-visual decision.
+    for choice in [None, Some(ChartKind::Flow)] {
+        let writer = Arc::new(Writer::new(&["unused"]));
+        let checker = Arc::new(Checker::new());
+        let mut request = input(ReadingAction::Chart);
+        request.chart_choice = choice;
+        let PipelineOutcome::Result(result) =
+            run(writer.clone(), Some(checker.clone()), request).await
+        else {
+            panic!("Expected the explanatory refusal")
+        };
+        assert!(result.chart.is_none());
+        assert!(result.text.contains("does not clearly support"));
+        assert_eq!(result.model, "No generation requested");
+        assert_eq!(writer.calls.load(Ordering::SeqCst), 0);
+        let calls = checker.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].1.keys().eq(DecisionEvaluators::chart().keys()));
+    }
 }
+
 #[tokio::test]
 async fn evaluator_chart_routing_still_requires_deterministic_validation() {
     let source = "Revenue was $10 and $20.";
@@ -578,4 +670,40 @@ async fn long_version_flow_can_generate_from_only_schema_permitted_literal_quote
             .text
             .contains("Source: The service migrates from v1.2 to v2.0.")
     );
+}
+
+// Exact original no-evaluator predicate, separately from Local/offline policy.
+#[tokio::test]
+async fn disabled_jev_records_the_exact_quiet_reason_without_an_evaluator() {
+    let writer = Arc::new(Writer::new(&["A faithful explanation."]));
+    let PipelineOutcome::Result(result) =
+        run(writer.clone(), None, input(ReadingAction::Simplify)).await
+    else {
+        panic!("Expected the answer without semantic checks")
+    };
+    assert_eq!(
+        result.quality,
+        QualityStatus::NotChecked("Jev disabled".into())
+    );
+    assert!(result.quality.visible_label().is_none());
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn explicit_plain_preference_overrides_automatic_specialist_difficulty() {
+    let writer = Arc::new(Writer::new(&["A faithful explanation."]));
+    let mut evaluator = Checker::new();
+    evaluator.specialist = true;
+    let checker = Arc::new(evaluator);
+    let mut request = input(ReadingAction::Simplify);
+    request.level = ReadingLevel::Plain;
+    run(writer.clone(), Some(checker.clone()), request).await;
+    assert_eq!(checker.calls.lock().unwrap().len(), 2);
+    let prompts = writer.prompts.lock().unwrap();
+    assert!(
+        prompts[0]
+            .system
+            .contains("overrides automatic difficulty: Plain language")
+    );
+    assert!(!prompts[0].system.contains("Source language category"));
 }
