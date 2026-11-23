@@ -89,7 +89,7 @@ $null=ConvertTo-PickleExtensionStageReport $navigationFailure
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $navigationFailure 'edge' }
 $failureObserved=[ordered]@{
   incomplete=$false;nodes=20;property_errors=0;title_candidate_count=1;title_records_truncated=$false
-  title_records=@([ordered]@{flags=3;control_type_id=50020;offscreen=$false;ancestor_role_ids=@(50020,50026,50032)})
+  title_records=@([ordered]@{flags=3;known_error_flags=0;bounds_nonempty=$false;bounds_intersect_window=$false;bounds_clipped=$false;control_type_id=50020;offscreen=$false;ancestor_role_ids=@(50020,50026,50032)})
   developer_candidate_count=1;developer_records_truncated=$false;toggle_count=1;checkbox_count=0;button_count=0
   developer_records=@([ordered]@{name_flags=0;help_flags=0;labeled_by_flags=15;labeled_by_bound=$true;control_type_id=50002;enabled=$true;offscreen=$false;toggle_supported=$true;toggle_state=1;invoke_supported=$false})
   owned_window_count=1;window_records_truncated=$false
@@ -126,10 +126,36 @@ foreach ($group in @('title','developer','window')) {
   $bad.($group+'_records')=@(1..9 | ForEach-Object { $failureObserved.($group+'_records')[0] })
   Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
 }
-foreach ($change in @(@('flags',0),@('control_type_id',49999),@('offscreen','false'),@('ancestor_role_ids',@(50020,50026,50032,50032,50032,50032,50032,50032,50032)))) {
+foreach ($change in @(@('flags',0),@('known_error_flags',32),@('known_error_flags',1),@('bounds_nonempty',$true),@('bounds_clipped',$true),@('bounds_intersect_window','true'),@('control_type_id',49999),@('offscreen','false'),@('ancestor_role_ids',@(50020,50026,50032,50032,50032,50032,50032,50032,50032)))) {
   $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.title_records[0].($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
 }
+$knownError=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
+$knownError.title_records[0].flags=16;$knownError.title_records[0].known_error_flags=16
+$knownError.title_records[0].bounds_nonempty=$true;$knownError.title_records[0].bounds_intersect_window=$true;$knownError.title_records[0].bounds_clipped=$true
+$knownClean=ConvertTo-PickleExtensionFailureObservation $knownError
+if ($knownClean.title_records[0].known_error_flags -ne 16 -or !$knownClean.title_records[0].bounds_intersect_window -or !$knownClean.title_records[0].bounds_clipped) { throw 'Exact known error and bounded rectangle flags were lost.' }
+$capture=[pscustomobject]@{status='captured';owned_before=$true;owned_after=$true;child_started=$true;child_stopped=$true;width=2;height=3;png_bytes=24}
+$null=ConvertTo-PickleExtensionWindowCapture $capture
+foreach ($change in @(@('status','private text'),@('owned_before',$false),@('owned_after',$false),@('child_started',$false),@('child_stopped',$false),@('width',4097),@('height',2161),@('png_bytes',4194305),@('png_bytes',23),@('height',3.0),@('owned_after',1))) {
+  $bad=$capture | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionWindowCapture $bad }
+}
+foreach ($status in @('unavailable','timed-out','helper-failed','ownership-rejected','cleanup-failed')) {
+  $bad=$capture | ConvertTo-Json | ConvertFrom-Json;$bad.status=$status
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionWindowCapture $bad }
+  $bad.width=0;$bad.height=0;$bad.png_bytes=0;$bad.child_stopped=($status -cne 'cleanup-failed')
+  $null=ConvertTo-PickleExtensionWindowCapture $bad
+}
+$bad=$capture | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member -NotePropertyName raw_title -NotePropertyValue 'must-not-persist'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionWindowCapture $bad }
+$withCapture=$diagnosed | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$withCapture | Add-Member -NotePropertyName window_capture -NotePropertyValue $capture
+$null=ConvertTo-PickleExtensionStageReport $withCapture
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $withCapture 'edge' }
+$withCapture.passed=$true
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $withCapture }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $withCapture 'edge' }
 foreach ($change in @(@('name_flags',1),@('labeled_by_bound',$false),@('toggle_state',-1),@('toggle_supported',$false),@('enabled',1))) {
   $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.developer_records[0].($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
@@ -175,6 +201,14 @@ Assert-ExtensionRefused { Assert-PickleExtensionCleanupReport $cleanFailure 'chr
 $cleanFailure.driver.native_host_executed=$false
 $cleanFailure.driver.browser_job_drained=$false
 Assert-ExtensionRefused { Assert-PickleExtensionCleanupReport $cleanFailure 'chrome' }
+$cleanFailure.driver.browser_job_drained=$true
+$unreaped=[pscustomobject]@{status='cleanup-failed';owned_before=$true;owned_after=$false;child_started=$true;child_stopped=$false;width=0;height=0;png_bytes=0}
+$cleanFailure.driver | Add-Member -NotePropertyName stage -NotePropertyValue 'developer-mode'
+$cleanFailure.driver | Add-Member -NotePropertyName failure -NotePropertyValue 'developer-toggle-unavailable'
+$cleanFailure.driver | Add-Member -NotePropertyName window_capture -NotePropertyValue $unreaped
+Assert-ExtensionRefused { Assert-PickleExtensionCleanupReport $cleanFailure 'chrome' }
+$cleanFailure.driver.window_capture.status='timed-out';$cleanFailure.driver.window_capture.child_stopped=$true
+Assert-PickleExtensionCleanupReport $cleanFailure 'chrome'
 $start=New-PickleExtensionCoreStart 'C:\Program Files\PowerShell\7\pwsh.exe' 'C:\owned script\entry.ps1' 'C:\owned package\' 'edge' 'C:\owned evidence\report.json'
 $expected=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','C:\owned script\entry.ps1','-PackageDirectory','C:\owned package\','-Browser','edge','-EvidencePath','C:\owned evidence\report.json')
 if ($start.UseShellExecute -or $start.FileName -cne 'C:\Program Files\PowerShell\7\pwsh.exe' -or ($start.ArgumentList -join [char]0) -cne ($expected -join [char]0)) { throw 'The dedicated child lost its exact executable or structured argument boundaries.' }
@@ -197,6 +231,25 @@ $root=Join-Path ([IO.Path]::GetTempPath()) ('pickle-extension-tests-'+[guid]::Ne
 if ($root.StartsWith('/var/') -and (Test-Path -LiteralPath '/private/var')) { $root='/private'+$root }
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
+  # Owned synthetic PNG header exercises the actual bounded copier; it is never
+  # treated as native capture evidence, decoded or displayed on this host.
+  $captureWork=Join-Path $root 'capture';New-Item -ItemType Directory -Path $captureWork | Out-Null
+  $png=Join-Path $captureWork 'owned-window.png';$captureEvidence=Join-Path $root 'diagnostic.json'
+  $header=[byte[]]@(137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,2,0,0,0,3)
+  [IO.File]::WriteAllBytes($png,$header)
+  if (!(Copy-PickleExtensionWindowCapture $capture $captureWork $captureEvidence) -or [Convert]::ToBase64String([IO.File]::ReadAllBytes([IO.Path]::ChangeExtension($captureEvidence,'.png'))) -cne [Convert]::ToBase64String($header)) { throw 'The bounded fixed-name diagnostic copy lost its bytes.' }
+  Assert-ExtensionRefused { Copy-PickleExtensionWindowCapture $capture $captureWork $captureEvidence }
+  $freshEvidence=Join-Path $root 'refused.json'
+  $header[19]=4;[IO.File]::WriteAllBytes($png,$header)
+  Assert-ExtensionRefused { Copy-PickleExtensionWindowCapture $capture $captureWork $freshEvidence }
+  if (Test-Path -LiteralPath ([IO.Path]::ChangeExtension($freshEvidence,'.png'))) { throw 'A dimension mismatch produced an artifact.' }
+  $header[19]=2;$header[0]=0;[IO.File]::WriteAllBytes($png,$header)
+  Assert-ExtensionRefused { Copy-PickleExtensionWindowCapture $capture $captureWork $freshEvidence }
+  $header[0]=137;[IO.File]::WriteAllBytes($png,($header+[byte]0))
+  Assert-ExtensionRefused { Copy-PickleExtensionWindowCapture $capture $captureWork $freshEvidence }
+  $unavailable=$capture | ConvertTo-Json | ConvertFrom-Json;$unavailable.status='unavailable';$unavailable.width=0;$unavailable.height=0;$unavailable.png_bytes=0
+  if (Copy-PickleExtensionWindowCapture $unavailable $captureWork $freshEvidence) { throw 'Unavailable capture fabricated an artifact.' }
+  if (Test-Path -LiteralPath ([IO.Path]::ChangeExtension($freshEvidence,'.png'))) { throw 'A refused capture produced an artifact.' }
   $package=Join-Path $root 'package';New-Item -ItemType Directory -Path $package | Out-Null
   foreach ($name in @('PickleRune.exe','pickle-browser-host.exe')) { [IO.File]::WriteAllText((Join-Path $package $name),'owned-not-executable') }
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../../browser-extension') -Destination (Join-Path $package 'browser-extension') -Recurse

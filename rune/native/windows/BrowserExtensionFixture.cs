@@ -6,6 +6,8 @@ using System.Linq;
 using System.Text.RegularExpressions;
 #if !PICKLE_PREDICATES
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -48,6 +50,16 @@ public static class BrowserExtensionPredicates {
             (value=="0.1.0" ? 4 : 0) | (IdFromLabel(value)!=null ? 8 : 0) | (KnownErrorFlags(value)!=0 ? 16 : 0);
     }
     public static int WindowClassKind(string value) { return value=="Chrome_WidgetWin_1" ? 1 : value=="#32770" ? 2 : 0; }
+    public const int MaxPngBytes=4*1024*1024;
+    public static bool CaptureSize(long width,long height) { return width>0 && height>0 && width<=4096 && height<=2160 && width*height<=8388608; }
+    public static int CaptureBudget(double remaining) { return remaining>=300 ? (int)Math.Min(2000,remaining) : 0; }
+    public static bool SameProcessBirth(ulong expected,ulong observed) { return expected!=0 && expected==observed; }
+    public static int BoundsFlags(double x,double y,double width,double height,double left,double top,double right,double bottom) {
+        double[] values={x,y,width,height,left,top,right,bottom,x+width,y+height};
+        if(values.Any(v=>Double.IsNaN(v) || Double.IsInfinity(v)) || width<=0 || height<=0 || right<=left || bottom<=top) return 0;
+        bool intersects=x<right && x+width>left && y<bottom && y+height>top;
+        return 1 | (intersects ? 2 : 0) | (x<left || y<top || x+width>right || y+height>bottom ? 4 : 0);
+    }
     public static void RecordCandidate<T>(List<T> records,ref int count,Func<T> create) {
         // Failed property reads must not leave a count without its record.
         if(records.Count<8) records.Add(create());
@@ -70,6 +82,12 @@ public static class BrowserExtensionPredicates {
     }
     public static bool Scope(bool loaded,bool drained,bool fullDelivery) { return loaded && drained && !fullDelivery; }
     public static void SelfTest() {
+        if(!CaptureSize(1920,1080) || CaptureSize(0,1080) || CaptureSize(4097,1) || CaptureSize(4096,2160) || CaptureSize(Int64.MaxValue,2) ||
+            CaptureBudget(299)!=0 || CaptureBudget(350)!=350 || CaptureBudget(10000)!=2000 ||
+            !SameProcessBirth(123,123) || SameProcessBirth(123,124) || SameProcessBirth(0,0) || SameProcessBirth(123,0) ||
+            BoundsFlags(10,10,20,20,0,0,100,100)!=3 || BoundsFlags(-10,10,20,20,0,0,100,100)!=7 ||
+            BoundsFlags(150,10,20,20,0,0,100,100)!=5 || BoundsFlags(Double.NaN,0,1,1,0,0,100,100)!=0 ||
+            BoundsFlags(0,0,0,1,0,0,100,100)!=0) throw new Exception("bounded-window-diagnostic-policy");
         const string id="abcdefghijklmnopabcdefghijklmnop";
         if (!ExtensionId(id) || IdFromLabel("ID: "+id)!=id || IdFromLabel(id)!=id) throw new Exception("id-positive");
         foreach (string bad in new[]{"",id+"a",id.Substring(1),id.ToUpperInvariant(),"q"+id.Substring(1),"path "+id,"ID: "+id+" unrelated"})
@@ -137,6 +155,7 @@ public static class BrowserExtensionFixtureProgram {
     }
     [MTAThread] public static int Main(string[] args) {
         if (args.Length==1 && args[0]=="--self-test") { BrowserExtensionPredicates.SelfTest(); return 0; }
+        if(args.Length>0 && args[0]=="--capture-owned-window") return CaptureChild(args);
         bool loaded=false,drained=false;IntPtr window=IntPtr.Zero;
         try {
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted") Fail("requires-hosted-windows-ci");
@@ -246,6 +265,7 @@ public static class BrowserExtensionFixtureProgram {
             Report["failure"]=error.Code;
             if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card")) {
                 try { ObserveFailure(window); } catch { Report["failure_observation_unavailable"]=true; }
+                ObserveWindowCapture(window);
             }
         }
         catch (Exception error) { Report["failure"]="native-operation-failed";Report["error_kind"]=ErrorKind(error);Report["error_hresult"]=error.HResult; }
@@ -441,6 +461,119 @@ public static class BrowserExtensionFixtureProgram {
         }
         return result.ToArray();
     }
+    sealed class PngBuffer : MemoryStream {
+        public override void Write(byte[] bytes,int offset,int count) { if(count<0 || Position>BrowserExtensionPredicates.MaxPngBytes-count) throw new IOException();base.Write(bytes,offset,count); }
+        public override void WriteByte(byte value) { if(Position>=BrowserExtensionPredicates.MaxPngBytes) throw new IOException();base.WriteByte(value); }
+        public override void SetLength(long value) { if(value<0 || value>BrowserExtensionPredicates.MaxPngBytes) throw new IOException();base.SetLength(value); }
+    }
+    static bool ProcessBirth(IntPtr process,out ulong birth) {
+        Native.FileTime created,exited,kernel,user;
+        bool success=Native.GetProcessTimes(process,out created,out exited,out kernel,out user);
+        birth=((ulong)created.High<<32)|created.Low;return success && birth!=0;
+    }
+    static bool CaptureTarget(IntPtr window,int pid,string executable,IntPtr process,ulong expectedBirth) {
+        uint owner;var path=new StringBuilder(32768);int length=path.Capacity;
+        ulong birth;
+        return Native.GetProcessId(process)==(uint)pid && ProcessBirth(process,out birth) && BrowserExtensionPredicates.SameProcessBirth(expectedBirth,birth) &&
+            Native.WaitForSingleObject(process,0)==258 && Native.IsWindow(window) && Native.IsWindowVisible(window) && !Native.IsIconic(window) &&
+            Native.GetAncestor(window,2)==window && Native.GetWindowThreadProcessId(window,out owner)!=0 && owner==(uint)pid &&
+            Native.QueryFullProcessImageNameW(process,0,path,ref length) && String.Equals(Path.GetFullPath(path.ToString()),executable,StringComparison.OrdinalIgnoreCase);
+    }
+    static int CaptureChild(string[] args) {
+        // PrintWindow is synchronous and may block. Only this disposable child
+        // calls it; the caller retains/kills/reaps this exact process. Its outer
+        // hosted-owner job is inherited without any breakaway flag.
+        IntPtr process=IntPtr.Zero;
+        try {
+            if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" || args.Length!=6) return 1;
+            long value;int pid;ulong expectedBirth;
+            if(!Int64.TryParse(args[1],NumberStyles.AllowHexSpecifier,CultureInfo.InvariantCulture,out value) || value<=0 || !Int32.TryParse(args[2],out pid) || pid<=0 ||
+                !UInt64.TryParse(args[5],NumberStyles.AllowHexSpecifier,CultureInfo.InvariantCulture,out expectedBirth) || expectedBirth==0) return 1;
+            var window=new IntPtr(value);string exe=RegularPath(args[3]),output=Path.GetFullPath(args[4]);
+            string self=RegularPath(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            if(Path.GetFileName(output)!="owned-window.png" || !String.Equals(Path.GetDirectoryName(output),Path.GetDirectoryName(self),StringComparison.OrdinalIgnoreCase) || File.Exists(output) || Directory.Exists(output)) return 1;
+            string basename=Path.GetFileName(exe);var version=FileVersionInfo.GetVersionInfo(exe);
+            if(!(String.Equals(basename,"chrome.exe",StringComparison.OrdinalIgnoreCase) && version.ProductName=="Google Chrome") &&
+                !(String.Equals(basename,"msedge.exe",StringComparison.OrdinalIgnoreCase) && version.ProductName=="Microsoft Edge")) return 1;
+            using(var current=Process.GetCurrentProcess()) { bool contained;if(!Native.IsProcessInJob(current.Handle,IntPtr.Zero,out contained) || !contained) return 1; }
+            process=Native.OpenProcess(0x101000,false,(uint)pid);if(process==IntPtr.Zero || !CaptureTarget(window,pid,exe,process,expectedBirth)) return 1;
+            Native.Rect rect;if(!Native.GetClientRect(window,out rect)) return 1;
+            int width=rect.Right-rect.Left,height=rect.Bottom-rect.Top;if(!BrowserExtensionPredicates.CaptureSize(width,height)) return 1;
+            using(var bitmap=new Bitmap(width,height,PixelFormat.Format32bppArgb)) {
+                using(var graphics=Graphics.FromImage(bitmap)) {
+                    IntPtr dc=graphics.GetHdc();bool printed;
+                    try { printed=Native.PrintWindow(window,dc,1); } finally { graphics.ReleaseHdc(dc); }
+                    if(!printed) return 1;
+                }
+                Native.Rect after;
+                if(!CaptureTarget(window,pid,exe,process,expectedBirth) || !Native.GetClientRect(window,out after) || after.Right-after.Left!=width || after.Bottom-after.Top!=height) return 1;
+                using(var png=new PngBuffer()) {
+                    bitmap.Save(png,ImageFormat.Png);if(png.Length<=0) return 1;
+                    if(!CaptureTarget(window,pid,exe,process,expectedBirth)) return 1;
+                    using(var file=new FileStream(output,FileMode.CreateNew,FileAccess.Write,FileShare.None)) { png.Position=0;png.CopyTo(file); }
+                }
+            }
+            return 0;
+        } catch { return 1; }
+        finally { if(process!=IntPtr.Zero) Native.CloseHandle(process); }
+    }
+    static void ObserveWindowCapture(IntPtr window) {
+        var observation=new Dictionary<string,object> {
+            {"status","unavailable"},{"owned_before",false},{"owned_after",false},{"child_started",false},{"child_stopped",true},
+            {"width",0},{"height",0},{"png_bytes",0}};
+        Report["window_capture"]=observation;
+        Process child=null;string output=null;IntPtr ownerProcess=IntPtr.Zero;
+        DateTime end=DateTime.UtcNow;
+        try {
+            output=Path.Combine(Path.GetDirectoryName(evidence),"owned-window.png");
+            int budget=BrowserExtensionPredicates.CaptureBudget((deadline-DateTime.UtcNow).TotalMilliseconds);if(budget==0) return;
+            end=DateTime.UtcNow.AddMilliseconds(budget);if(end>deadline) end=deadline;
+            if(!browser.OwnsWindow(window) || Native.GetAncestor(window,2)!=window) { observation["status"]="ownership-rejected";return; }
+            uint pid;if(Native.GetWindowThreadProcessId(window,out pid)==0) return;
+            ownerProcess=Native.OpenProcess(0x101000,false,pid);ulong birth;
+            // Pin this exact HWND owner (which can be a browser child process),
+            // not merely the browser launch process. The retained handle plus
+            // birth identity is held until the capture helper has stopped.
+            if(ownerProcess==IntPtr.Zero || !ProcessBirth(ownerProcess,out birth) || !browser.OwnsLiveProcess(ownerProcess) ||
+                !CaptureTarget(window,(int)pid,browser.Executable,ownerProcess,birth)) { observation["status"]="ownership-rejected";return; }
+            observation["owned_before"]=true;
+            if(File.Exists(output) || Directory.Exists(output)) return;
+            string self=RegularPath(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            var start=new ProcessStartInfo(self,String.Join(" ",new[]{"--capture-owned-window",window.ToInt64().ToString("x",CultureInfo.InvariantCulture),pid.ToString(CultureInfo.InvariantCulture),browser.Executable,output,birth.ToString("x",CultureInfo.InvariantCulture)}.Select(BrowserJob.Quote))) {
+                UseShellExecute=false,CreateNoWindow=true};
+            child=Process.Start(start);if(child==null) return;
+            observation["child_started"]=true;observation["child_stopped"]=false;var handle=child.Handle;
+            int wait=Math.Max(0,(int)(end-DateTime.UtcNow).TotalMilliseconds-250);
+            if(!child.WaitForExit(wait)) { observation["status"]="timed-out";return; }
+            observation["child_stopped"]=true;
+            if(child.ExitCode!=0) { observation["status"]="helper-failed";return; }
+            bool owned=browser.OwnsLiveProcess(ownerProcess) && CaptureTarget(window,(int)pid,browser.Executable,ownerProcess,birth);
+            observation["owned_after"]=owned;if(!owned) { observation["status"]="ownership-rejected";return; }
+            Check();string regular=RegularPath(output);var info=new FileInfo(regular);
+            if(info.Length<24 || info.Length>BrowserExtensionPredicates.MaxPngBytes) return;
+            byte[] header=new byte[24];using(var file=File.OpenRead(regular)) { if(file.Read(header,0,header.Length)!=header.Length) return; }
+            byte[] signature={137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82};if(!header.Take(16).SequenceEqual(signature)) return;
+            long width=0,height=0;for(int i=16;i<20;i++) width=(width<<8)|header[i];for(int i=20;i<24;i++) height=(height<<8)|header[i];
+            if(!BrowserExtensionPredicates.CaptureSize(width,height) || DateTime.UtcNow>=end) return;
+            observation["width"]=(int)width;observation["height"]=(int)height;observation["png_bytes"]=(int)info.Length;observation["status"]="captured";
+        } catch { observation["status"]="unavailable"; }
+        finally {
+            if(child!=null) {
+                try {
+                    if(!child.HasExited) { child.Kill();child.WaitForExit(Math.Max(0,(int)(end-DateTime.UtcNow).TotalMilliseconds)); }
+                    observation["child_stopped"]=child.HasExited;
+                    if(!child.HasExited) observation["status"]="cleanup-failed";
+                } catch { observation["child_stopped"]=false;observation["status"]="cleanup-failed"; }
+                finally { child.Dispose(); }
+            }
+            if((string)observation["status"]!="captured") { try { if(output!=null && File.Exists(output)) File.Delete(output); } catch { } }
+            if(ownerProcess!=IntPtr.Zero) Native.CloseHandle(ownerProcess);
+        }
+    }
+    static int ErrorBounds(AutomationElement.AutomationElementInformation current,IntPtr window) {
+        Native.Rect rect;if(!Native.GetWindowRect(window,out rect)) return 0;var bounds=current.BoundingRectangle;
+        return BrowserExtensionPredicates.BoundsFlags(bounds.X,bounds.Y,bounds.Width,bounds.Height,rect.Left,rect.Top,rect.Right,rect.Bottom);
+    }
     static void ObserveFailure(IntPtr window) {
         // Failure-only observations cannot select controls or authorize actions.
         // Names, help, IDs and exception messages are never serialized. Keep
@@ -460,9 +593,11 @@ public static class BrowserExtensionFixtureProgram {
             try {
                 if(!DiagnosticBound(node,window)) { errors++;continue; }
                 var current=node.Current;int title=BrowserExtensionPredicates.LibraryLabelFlags(current.Name);
+                int errorFlags=BrowserExtensionPredicates.KnownErrorFlags(current.Name),bounds=errorFlags!=0 ? ErrorBounds(current,window) : 0;
                 if(title!=0) {
                     BrowserExtensionPredicates.RecordCandidate(titles,ref titleCount,()=>new Dictionary<string,object> {
                         {"flags",title},{"control_type_id",current.ControlType.Id},{"offscreen",current.IsOffscreen},
+                        {"known_error_flags",errorFlags},{"bounds_nonempty",(bounds&1)!=0},{"bounds_intersect_window",(bounds&2)!=0},{"bounds_clipped",(bounds&4)!=0},
                         {"ancestor_role_ids",DiagnosticAncestorRoles(node,window)}});
                 }
                 object pattern;bool toggle=node.TryGetCurrentPattern(TogglePattern.Pattern,out pattern);
@@ -537,6 +672,7 @@ public static class BrowserExtensionFixtureProgram {
     }
     sealed class BrowserJob : IDisposable {
         IntPtr job,process;readonly string executable;bool closed;
+        public string Executable { get { return executable; } }
         public BrowserJob(string exe,string profile,string url,int port) {
             executable=Path.GetFullPath(exe);job=Native.CreateJobObjectW(IntPtr.Zero,null);
             if(job==IntPtr.Zero) Fail("job-create-failed");
@@ -560,7 +696,7 @@ public static class BrowserExtensionFixtureProgram {
                 } finally { if(initialized) Native.DeleteProcThreadAttributeList(attributes);Marshal.FreeHGlobal(jobs);Marshal.FreeHGlobal(attributes); }
             } catch { Dispose();throw; }
         }
-        static string Quote(string value) {
+        public static string Quote(string value) {
             if(value.IndexOf('\0')>=0 || value.Length>32700) Fail("invalid-browser-argument");
             var result=new StringBuilder("\"");int slashes=0;
             foreach(char c in value) { if(c=='\\') { slashes++;continue; }result.Append('\\',c=='"' ? slashes*2+1 : slashes);result.Append(c);slashes=0; }
@@ -573,6 +709,12 @@ public static class BrowserExtensionFixtureProgram {
                 var path=new StringBuilder(32768);int length=path.Capacity;
                 return Native.QueryFullProcessImageNameW(candidate,0,path,ref length) && String.Equals(Path.GetFullPath(path.ToString()),executable,StringComparison.OrdinalIgnoreCase);
             } finally { Native.CloseHandle(candidate); }
+        }
+        public bool OwnsLiveProcess(IntPtr candidate) {
+            if(candidate==IntPtr.Zero || job==IntPtr.Zero || Native.WaitForSingleObject(candidate,0)!=258) return false;
+            bool inside;if(!Native.IsProcessInJob(candidate,job,out inside) || !inside) return false;
+            var path=new StringBuilder(32768);int length=path.Capacity;
+            return Native.QueryFullProcessImageNameW(candidate,0,path,ref length) && String.Equals(Path.GetFullPath(path.ToString()),executable,StringComparison.OrdinalIgnoreCase);
         }
         public bool OwnsWindow(IntPtr window) { uint pid;return window!=IntPtr.Zero && Native.IsWindow(window) && Native.GetWindowThreadProcessId(window,out pid)!=0 && Owns((int)pid); }
         public IntPtr Window(bool picker,IntPtr owner) {
@@ -596,6 +738,14 @@ public static class BrowserExtensionFixtureProgram {
         public void Dispose() { if(job!=IntPtr.Zero) { Native.TerminateJobObject(job,1);Native.CloseHandle(job);job=IntPtr.Zero; }if(process!=IntPtr.Zero) { Native.CloseHandle(process);process=IntPtr.Zero; } }
     }
     static class Native {
+        [StructLayout(LayoutKind.Sequential)] public struct FileTime { public uint Low,High; }
+        [DllImport("kernel32.dll")] public static extern bool GetProcessTimes(IntPtr process,out FileTime created,out FileTime exited,out FileTime kernel,out FileTime user);
+        [DllImport("kernel32.dll")] public static extern uint GetProcessId(IntPtr process);
+        [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left,Top,Right,Bottom; }
+        [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window,out Rect rect);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
+        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+        [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window,IntPtr dc,uint flags);
         [StructLayout(LayoutKind.Sequential)] struct Keyboard { public ushort Key,Scan;public uint Flags,Time;public UIntPtr Extra; }
         [StructLayout(LayoutKind.Sequential)] struct Mouse { public int X,Y;public uint Data,Flags,Time;public UIntPtr Extra; }
         [StructLayout(LayoutKind.Explicit)] struct Union { [FieldOffset(0)] public Keyboard Keyboard;[FieldOffset(0)] public Mouse Mouse; }

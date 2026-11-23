@@ -92,7 +92,7 @@ function Build-PickleExtensionFixture([string]$Directory) {
   $compiler=Join-Path $framework 'csc.exe'
   if (!(Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'The inbox Framework compiler was unavailable.' }
   $output=Join-Path $Directory 'BrowserExtensionFixture.exe'
-  $references=@('System.dll','System.Core.dll','System.Web.Extensions.dll','WPF/WindowsBase.dll','WPF/UIAutomationClient.dll','WPF/UIAutomationTypes.dll') | ForEach-Object { Join-Path $framework $_ }
+  $references=@('System.dll','System.Core.dll','System.Drawing.dll','System.Web.Extensions.dll','WPF/WindowsBase.dll','WPF/UIAutomationClient.dll','WPF/UIAutomationTypes.dll') | ForEach-Object { Join-Path $framework $_ }
   foreach ($reference in $references) { if (!(Test-Path -LiteralPath $reference -PathType Leaf)) { throw 'A required inbox UI Automation reference was unavailable.' } }
   $arguments=@('/nologo','/langversion:5','/target:exe',"/out:$output")+@($references | ForEach-Object { "/reference:$_" })+@((Join-Path $PSScriptRoot '../native/windows/BrowserExtensionFixture.cs'))
   $compile=Start-PickleReadingChild $compiler $arguments
@@ -101,7 +101,7 @@ function Build-PickleExtensionFixture([string]$Directory) {
   return $output
 }
 function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
-  if (@($Report.PSObject.Properties.Name) -ccontains 'failure_observation') { throw 'Failure observations cannot attest a successful loading stage.' }
+  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure_observation','window_capture') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
   if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-bundled-extension-load' -or $Report.scope -cne 'bundled-extension-load-only' -or $Report.browser -cne $Browser) { throw 'The native setup stage report had the wrong scope.' }
   foreach ($key in @('passed','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_card_identity_verified','extension_loaded','browser_job_drained')) {
     if ($Report.$key -isnot [bool] -or !$Report.$key) { throw 'The native bundled-extension loading stage did not pass completely.' }
@@ -163,7 +163,7 @@ function ConvertTo-PickleExtensionFailureObservation($Observation) {
     $clean[($group+'_records_truncated')]=$truncated
     $clean[($group+'_records')]=@(foreach ($record in $records) {
       $bools=@();$ranges=@{};$extra=@()
-      if ($group -eq 'title') { $bools=@('offscreen');$ranges=@{flags=@(1,31);control_type_id=@(50000,59999)};$extra=@('ancestor_role_ids') }
+      if ($group -eq 'title') { $bools=@('offscreen','bounds_nonempty','bounds_intersect_window','bounds_clipped');$ranges=@{flags=@(1,31);known_error_flags=@(0,31);control_type_id=@(50000,59999)};$extra=@('ancestor_role_ids') }
       elseif ($group -eq 'developer') { $bools=@('labeled_by_bound','enabled','offscreen','toggle_supported','invoke_supported');$ranges=@{name_flags=@(0,15);help_flags=@(0,15);labeled_by_flags=@(0,15);control_type_id=@(50000,59999);toggle_state=@(-1,2)} }
       else { $bools=@('original_window','owner_is_original','root_is_original','foreground','scan_truncated','scan_unavailable');$ranges=@{class_kind=@(0,2);known_error_count=@(0,128);scan_nodes=@(0,128)} }
       $recordKeys=@($bools)+@($ranges.Keys)+$extra
@@ -178,6 +178,9 @@ function ConvertTo-PickleExtensionFailureObservation($Observation) {
         $roles=@($record.ancestor_role_ids)
         if (!$roles.Count -or $roles.Count -gt 8 -or $roles[0] -ne $item.control_type_id -or (($item.flags -band 1) -and !($item.flags -band 2))) { throw 'Title ancestry or flags were inconsistent.' }
         foreach ($role in $roles) { if (($role -isnot [int] -and $role -isnot [long]) -or $role -lt 50000 -or $role -gt 59999) { throw 'An ancestor role was invalid.' } };$item.ancestor_role_ids=$roles
+        if ((($item.flags -band 16) -ne 0) -ne ($item.known_error_flags -ne 0) -or
+            (!$item.bounds_nonempty -and ($item.bounds_intersect_window -or $item.bounds_clipped)) -or
+            ($item.known_error_flags -eq 0 -and ($item.bounds_nonempty -or $item.bounds_intersect_window -or $item.bounds_clipped))) { throw 'Known-error bounds or classifications were inconsistent.' }
       } elseif ($group -eq 'developer') {
         foreach ($key in @('name_flags','help_flags','labeled_by_flags')) { if ($item[$key] -notin @(0,8,12,14,15)) { throw 'A Developer label classification was invalid.' } }
         if ((!$item.labeled_by_bound -and $item.labeled_by_flags -ne 0) -or ($item.toggle_supported -and $item.toggle_state -notin @(0,1,2)) -or (!$item.toggle_supported -and $item.toggle_state -ne -1)) { throw 'Developer label ownership or pattern flags were inconsistent.' }
@@ -186,6 +189,39 @@ function ConvertTo-PickleExtensionFailureObservation($Observation) {
     })
   }
   return [pscustomobject]$clean
+}
+function ConvertTo-PickleExtensionWindowCapture($Observation) {
+  $bools=@('owned_before','owned_after','child_started','child_stopped');$numbers=@('width','height','png_bytes');$keys=@('status')+$bools+$numbers
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'Window capture diagnostics had unknown fields.' }
+  if ($Observation.status -isnot [string] -or $Observation.status -cnotin @('unavailable','captured','timed-out','helper-failed','ownership-rejected','cleanup-failed')) { throw 'Window capture diagnostics had an invalid status.' }
+  $clean=[ordered]@{status=$Observation.status}
+  foreach ($key in $bools) { if ($Observation.$key -isnot [bool]) { throw 'A window capture flag had the wrong type.' };$clean[$key]=$Observation.$key }
+  foreach ($key in $numbers) { $value=$Observation.$key;if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 4194304) { throw 'A window capture size was invalid.' };$clean[$key]=$value }
+  if ((!$clean.child_started -and !$clean.child_stopped) -or (!$clean.child_stopped -and $clean.status -cne 'cleanup-failed') -or ($clean.status -ceq 'cleanup-failed' -and (!$clean.child_started -or $clean.child_stopped))) { throw 'Window capture cleanup flags were inconsistent.' }
+  if ($clean.status -ceq 'captured') {
+    if (!$clean.owned_before -or !$clean.owned_after -or !$clean.child_started -or !$clean.child_stopped -or $clean.width -lt 1 -or $clean.width -gt 4096 -or $clean.height -lt 1 -or $clean.height -gt 2160 -or [long]$clean.width*$clean.height -gt 8388608 -or $clean.png_bytes -lt 24) { throw 'Window capture lacked bounded ownership evidence.' }
+  } elseif ($clean.width -ne 0 -or $clean.height -ne 0 -or $clean.png_bytes -ne 0) { throw 'Unavailable window capture cannot retain image metadata.' }
+  return [pscustomobject]$clean
+}
+function Copy-PickleExtensionWindowCapture($Observation,[string]$Work,[string]$EvidencePath) {
+  $capture=ConvertTo-PickleExtensionWindowCapture $Observation
+  if ($capture.status -cne 'captured') { return $false }
+  $source=Join-Path $Work 'owned-window.png';$target=[IO.Path]::ChangeExtension([IO.Path]::GetFullPath($EvidencePath),'.png')
+  Assert-PickleReadingDirectory $Work | Out-Null
+  $info=Get-Item -LiteralPath $source -Force
+  if ($info -isnot [IO.FileInfo] -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $info.Length -ne $capture.png_bytes -or $info.Length -gt 4194304 -or (Test-Path -LiteralPath $target)) { throw 'The bounded window capture file was unavailable.' }
+  $bytes=[byte[]]::new([int]$info.Length);$inputFile=[IO.File]::Open($source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  try {
+    $offset=0;while ($offset -lt $bytes.Length) { $read=$inputFile.Read($bytes,$offset,$bytes.Length-$offset);if (!$read) { throw 'Window capture ended early.' };$offset+=$read }
+    if ($inputFile.ReadByte() -ne -1) { throw 'Window capture exceeded its declared bound.' }
+  } finally { $inputFile.Dispose() }
+  $signature=@(137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82)
+  for ($index=0;$index -lt 16;$index++) { if ($bytes[$index] -ne $signature[$index]) { throw 'Window capture was not a bounded PNG.' } }
+  $width=0L;$height=0L;for ($index=16;$index -lt 20;$index++) { $width=($width -shl 8) -bor $bytes[$index] };for ($index=20;$index -lt 24;$index++) { $height=($height -shl 8) -bor $bytes[$index] }
+  if ($width -ne $capture.width -or $height -ne $capture.height) { throw 'Window capture dimensions disagreed with owned evidence.' }
+  $outputFile=[IO.File]::Open($target,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+  try { $outputFile.Write($bytes,0,$bytes.Length) } finally { $outputFile.Dispose() }
+  return $true
 }
 function ConvertTo-PickleExtensionStageReport($Report) {
   # Whitelist scalar diagnostic keys. The native helper never writes arbitrary
@@ -197,9 +233,9 @@ function ConvertTo-PickleExtensionStageReport($Report) {
   $clean=[ordered]@{}
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
-    if ($key -ceq 'failure_observation') {
+    if ($key -cin @('failure_observation','window_capture')) {
       if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.stage -cnotin @('developer-mode','loaded-extension-card') -or $Report.failure -isnot [string]) { throw 'Failure diagnostics cannot attest success or another stage.' }
-      $clean[$key]=ConvertTo-PickleExtensionFailureObservation $value
+      $clean[$key]=if ($key -ceq 'window_capture') { ConvertTo-PickleExtensionWindowCapture $value } else { ConvertTo-PickleExtensionFailureObservation $value }
     }
     elseif ($key -cin @('developer_observation','page_observation_before_navigation','navigation_failure_observation')) { $clean[$key]=ConvertTo-PickleExtensionDeveloperObservation $value }
     elseif ($key -cin $booleans -and $value -is [bool]) { $clean[$key]=$value }
@@ -256,6 +292,7 @@ function Assert-PickleExtensionCleanupReport($Report,[string]$Browser) {
   if ($Report.manifest_sha256 -isnot [string] -or $Report.manifest_sha256 -cnotmatch '^[A-Fa-f0-9]{64}$') { throw 'The bundled manifest receipt was missing.' }
   $driver=ConvertTo-PickleExtensionStageReport $Report.driver
   if ($driver.schema -ne 1 -or $driver.test -cne 'windows-stable-bundled-extension-load' -or $driver.scope -cne 'bundled-extension-load-only' -or $driver.browser -cne $Browser -or $driver.browser_job_drained -isnot [bool] -or !$driver.browser_job_drained) { throw 'The owned browser job did not prove termination.' }
+  if (@($driver.PSObject.Properties.Name) -ccontains 'window_capture' -and !$driver.window_capture.child_stopped) { throw 'The retained diagnostic child did not prove termination.' }
   foreach ($key in @('full_delivery_verified','native_host_registered','native_host_executed','authenticated_bridge_verified','app_launched','devtools_or_cdp_used','extension_code_modified')) {
     if ($driver.$key -isnot [bool] -or $driver.$key) { throw 'The native setup diagnostic contradicted its isolated setup scope.' }
   }
@@ -332,6 +369,16 @@ function Invoke-PickleExtensionSetupStage([string]$PackageDirectory,[ValidateSet
       if ($null -ne $server -and $server.ExitCode -ne 0) { throw 'Owned proxy exited unsuccessfully.' }
       if ($null -ne $server -and (Test-Path -LiteralPath (Join-Path $work 'proxy-state.json'))) { $report.server=ConvertTo-PickleExtensionProxyState (Read-PickleReadingJson (Join-Path $work 'proxy-state.json')) }
       $report.owned_processes_stopped=($null -ne $driver -and $driver.HasExited -and $null -ne $report.driver -and $report.driver.browser_job_drained -eq $true -and $null -ne $server -and $server.HasExited)
+      if ($null -ne $report.driver -and @($report.driver.PSObject.Properties.Name) -ccontains 'window_capture') {
+        if (!$report.driver.window_capture.child_stopped) { $report.owned_processes_stopped=$false }
+        # Optional diagnostics never replace the original setup failure. Copy
+        # only a bounded fixed-name PNG after every owned process has stopped.
+        $report.window_capture_retained=$false
+        if ($report.owned_processes_stopped) {
+          try { $report.window_capture_retained=Copy-PickleExtensionWindowCapture $report.driver.window_capture $work $EvidencePath }
+          catch { $report.window_capture_copy_unavailable=$true }
+        }
+      }
       Assert-PickleExtensionRegistryAbsent;Assert-PickleExtensionHostFilesAbsent $support
       Assert-PickleExtensionFingerprint $profileBefore (Get-PickleExtensionFingerprint $support);$report.app_profile_unchanged=$true
       Assert-PickleExtensionFingerprint $bundle.Inventory (Get-PickleExtensionFingerprint $bundle.Directory);$report.bundled_extension_unchanged=$true
