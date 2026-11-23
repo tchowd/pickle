@@ -800,6 +800,22 @@ fn installed_chrome_and_edge_document_urls() {
                     assert!(value.captures <= 1);
                     if accepted {
                         assert_eq!(value.captures, 1);
+                        assert_eq!(value.observations.len(), 3);
+                        assert!(value.observations.iter().all(|observation| {
+                            observation["accepted"] == true
+                                && observation["url_matches_expected"] == true
+                                && observation["documents"] == 1
+                                && observation["filtered_discovery"] == true
+                                && observation["raw_ancestry_checks"]
+                                    .as_u64()
+                                    .is_some_and(|count| count >= 2)
+                        }));
+                    }
+                    if value.observations.first().is_some_and(|observation| {
+                        observation["accepted"] == true
+                            && observation["url_matches_expected"] == false
+                    }) {
+                        assert_eq!(value.captures, 0);
                     }
                     record
                 }
