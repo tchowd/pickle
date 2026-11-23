@@ -231,17 +231,40 @@ function Assert-PickleReadingChild([Diagnostics.Process]$Process,[string]$Execut
     $actual=Get-PickleReadingCanonicalExecutable $Process.MainModule.FileName
     $expected=Get-PickleReadingCanonicalExecutable $Executable
   }
-  catch { Throw-PickleReadingFailure 'owned-child-executable-unreadable' }
+  catch {
+    $Process.Refresh()
+    if ($Process.HasExited) { Throw-PickleReadingFailure 'owned-child-exited' }
+    Throw-PickleReadingFailure 'owned-child-executable-unreadable'
+  }
   if (![string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)) { Throw-PickleReadingFailure 'owned-child-executable-mismatch' }
 }
 function Read-PickleReadingJson([string]$Path) {
   $bytes=Read-PickleReadingBytes $Path 65536
   return ([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xfeff) | ConvertFrom-Json)
 }
+function Invoke-PickleReadingIdentityBarrier([scriptblock]$Inspect,[DateTime]$Deadline) {
+  $lastUnreadable=$null
+  while ([DateTime]::UtcNow -lt $Deadline) {
+    try {
+      $null=& $Inspect
+      if ([DateTime]::UtcNow -ge $Deadline) { Throw-PickleReadingFailure 'ready-timeout' }
+      return
+    } catch {
+      # MainModule/native file metadata can be temporarily unavailable before
+      # a newly created process finishes loading. No other failure is retried.
+      if ((Get-PickleReadingFailureCategory $_) -cne 'owned-child-executable-unreadable') { throw }
+      $lastUnreadable=$_
+    }
+    $remaining=($Deadline-[DateTime]::UtcNow).TotalMilliseconds
+    if ($remaining -gt 0) { Start-Sleep -Milliseconds ([int][Math]::Min(100,[Math]::Ceiling($remaining))) }
+  }
+  if ($lastUnreadable) { throw $lastUnreadable }
+  Throw-PickleReadingFailure 'ready-timeout'
+}
 function Wait-PickleReadingReady([Diagnostics.Process]$Process,[string]$Executable,[string]$Ready) {
   $deadline=[DateTime]::UtcNow.AddSeconds(15)
   while ([DateTime]::UtcNow -lt $deadline) {
-    Assert-PickleReadingChild $Process $Executable
+    Invoke-PickleReadingIdentityBarrier { Assert-PickleReadingChild $Process $Executable } $deadline
     if (Test-Path -LiteralPath $Ready -PathType Leaf) {
       try { $value=Read-PickleReadingJson $Ready }
       catch { Throw-PickleReadingFailure 'ready-file-invalid' }
@@ -316,7 +339,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $stage='drive-installed-reader'
     $applicationProcess=Start-PickleReadingChild $Application @()
     $evidence.application_pid=$applicationProcess.Id
-    Assert-PickleReadingChild $applicationProcess $Application
+    Invoke-PickleReadingIdentityBarrier { Assert-PickleReadingChild $applicationProcess $Application } ([DateTime]::UtcNow.AddSeconds(10))
     $driver=Start-PickleReadingChild $fixtureExe @('drive','--contract',$contractPath,'--application-pid',([string]$applicationProcess.Id),'--fixture-pid',([string]$fixture.Id),'--fixture-hwnd',([string]$fixtureInfo.hwnd),'--server-state',$serverState,'--evidence',$driverEvidence)
     if (!$driver.WaitForExit(90000) -or $driver.ExitCode -ne 0) { throw 'Owned reading driver failed or exceeded 90 seconds.' }
     $evidence.driver=Read-PickleReadingJson $driverEvidence

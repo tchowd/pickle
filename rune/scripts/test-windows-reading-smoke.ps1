@@ -20,6 +20,27 @@ try {
   if ($primary -cne 'Original controlled startup failure.' -or $cleanup.cleanup_categories.Count -ne 2) { throw 'Cleanup diagnostics overwrote the primary reading failure.' }
   try { Throw-PickleReadingFailure 'ready-pid-mismatch' } catch { if ((Get-PickleReadingFailureCategory $_) -cne 'ready-pid-mismatch') { throw 'Fixed readiness category was lost.' } }
   try { throw 'unexpected-sensitive-source' } catch { if ((Get-PickleReadingFailureCategory $_) -cne 'harness-operation-failed') { throw 'Unexpected exception content entered a failure category.' } }
+  $attempts=[pscustomobject]@{count=0}
+  Invoke-PickleReadingIdentityBarrier { $attempts.count++;if ($attempts.count -lt 3) { Throw-PickleReadingFailure 'owned-child-executable-unreadable' } } ([DateTime]::UtcNow.AddSeconds(2))
+  if ($attempts.count -ne 3) { throw 'Only transient unreadable metadata should be retried before identity succeeds.' }
+  foreach ($category in @('owned-child-exited','owned-child-executable-mismatch','harness-operation-failed')) {
+    $attempts.count=0
+    try {
+      Invoke-PickleReadingIdentityBarrier { $attempts.count++;if ($category -eq 'harness-operation-failed') { throw 'unexpected-sensitive-source' };Throw-PickleReadingFailure $category } ([DateTime]::UtcNow.AddSeconds(2))
+      throw 'Nontransient identity failure was accepted.'
+    } catch {
+      if ($attempts.count -ne 1 -or (Get-PickleReadingFailureCategory $_) -cne $category) { throw 'Exited, mismatched or unknown failures must not be retried.' }
+    }
+  }
+  $attempts.count=0
+  try {
+    Invoke-PickleReadingIdentityBarrier { $attempts.count++;Throw-PickleReadingFailure 'owned-child-executable-unreadable' } ([DateTime]::UtcNow.AddMilliseconds(500))
+    throw 'Unreadable metadata was accepted after its deadline.'
+  } catch { if ($attempts.count -lt 1 -or (Get-PickleReadingFailureCategory $_) -cne 'owned-child-executable-unreadable') { throw 'Unreadable metadata deadline lost its fixed failure category.' } }
+  try {
+    Invoke-PickleReadingIdentityBarrier { Start-Sleep -Milliseconds 40 } ([DateTime]::UtcNow.AddMilliseconds(10))
+    throw 'Identity success after the original deadline was accepted.'
+  } catch { if ((Get-PickleReadingFailureCategory $_) -cne 'ready-timeout') { throw 'Late identity inspection did not enforce the original deadline.' } }
   $owned=Start-PickleReadingChild $python.Source @('-c','import sys; sys.exit(23)')
   try {
     if (!$owned.WaitForExit(5000)) { throw 'Owned non-UI exit fixture timed out.' }
