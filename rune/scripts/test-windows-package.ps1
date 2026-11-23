@@ -85,7 +85,7 @@ $uninstaller = Join-Path $testDirectory 'Uninstall.exe'
 . (Join-Path $PSScriptRoot 'windows-native-smoke.ps1')
 . (Join-Path $PSScriptRoot 'windows-startup-smoke.ps1')
 $supportRoot = Join-Path $env:LOCALAPPDATA 'Pickle\PickleRune\data'
-Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-startup-failure.json") $Configuration
+Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-startup-failure.json") $Configuration
 $background = $null
 try {
   $stdout = Join-Path $PWD "artifacts/$variant-$Configuration-native-stdout.log"

@@ -52,6 +52,15 @@ try {
       @(12,12,$true,'pickle could not open the reader','#32770'),
       @(12,12,$true,'Pickle could not open the reader','Window')
     )) { if ([PickleStartupDialogProbe]::Eligible($case[0],$case[1],$case[2],$case[3],$case[4])) { throw 'A non-owned, hidden or incorrect native window passed the startup dialog predicate.' } }
+    if (![PickleStartupDialogProbe]::EligibleButton(12,12,$true,$true,1,'Button',$true)) { throw 'The exact owned enabled IDOK button must be accepted.' }
+    foreach ($case in @(
+      @(13,12,$true,$true,1,'Button',$true),
+      @(12,12,$false,$true,1,'Button',$true),
+      @(12,12,$true,$false,1,'Button',$true),
+      @(12,12,$true,$true,2,'Button',$true),
+      @(12,12,$true,$true,1,'Static',$true),
+      @(12,12,$true,$true,1,'Button',$false)
+    )) { if ([PickleStartupDialogProbe]::EligibleButton($case[0],$case[1],$case[2],$case[3],$case[4],$case[5],$case[6])) { throw 'A wrong-process, hidden, disabled or incorrect native control passed the IDOK predicate.' } }
   }
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }
 Write-Host 'Startup smoke fixtures passed: retained-data changes/links/size/count refused, transient descriptors excluded, child environment isolated; no app launched.'
