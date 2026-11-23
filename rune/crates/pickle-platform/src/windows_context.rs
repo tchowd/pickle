@@ -340,6 +340,16 @@ pub(super) fn recognize_with_engine(
     engine: &OcrEngine,
     timeout: Duration,
 ) -> windows::core::Result<String> {
+    let bitmap = ocr_software_bitmap(image, BitmapAlphaMode::Ignore)?;
+    let result = recognize_software_bitmap(&bitmap, cancel, engine, timeout);
+    let _ = bitmap.Close();
+    result
+}
+
+pub(super) fn ocr_software_bitmap(
+    image: &image::RgbaImage,
+    alpha: BitmapAlphaMode,
+) -> windows::core::Result<SoftwareBitmap> {
     let mut pixels = image.as_raw().clone();
     for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2)
@@ -351,9 +361,20 @@ pub(super) fn recognize_with_engine(
         BitmapPixelFormat::Bgra8,
         image.width() as i32,
         image.height() as i32,
-        BitmapAlphaMode::Ignore,
+        alpha,
     )?;
-    let operation = engine.RecognizeAsync(&bitmap)?;
+    // CreateCopyWithAlphaFromBuffer is a deep copy; the writer does not own the bitmap pixels.
+    let _ = writer.Close();
+    Ok(bitmap)
+}
+
+pub(super) fn recognize_software_bitmap(
+    bitmap: &SoftwareBitmap,
+    cancel: &tokio_util::sync::CancellationToken,
+    engine: &OcrEngine,
+    timeout: Duration,
+) -> windows::core::Result<String> {
+    let operation = engine.RecognizeAsync(bitmap)?;
     let deadline = Instant::now() + timeout;
     // WinRT AsyncStatus::Started has value zero; bindings expose it from windows-future.
     while operation.Status()?.0 == 0 {
@@ -365,7 +386,5 @@ pub(super) fn recognize_with_engine(
     }
     let result = operation.GetResults()?;
     let text = result.Text()?.to_string_lossy();
-    let _ = bitmap.Close();
-    let _ = writer.Close();
     Ok(text)
 }

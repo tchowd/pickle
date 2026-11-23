@@ -7,7 +7,11 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 use windows::{
+    Graphics::Imaging::{
+        BitmapAlphaMode, BitmapBufferAccessMode, BitmapPixelFormat, SoftwareBitmap,
+    },
     Media::Ocr::OcrEngine,
+    Storage::Streams::{Buffer, DataReader},
     Win32::{
         Foundation::{COLORREF, RECT},
         Graphics::Gdi::*,
@@ -49,7 +53,9 @@ pub(super) fn verify_ocr_runtime() -> Result<(), PlatformError> {
         ACTIVE.store(false, Ordering::Release);
         return Err(error("The local OCR verification worker could not start."));
     }
-    match receiver.recv_timeout(Duration::from_secs(8)) {
+    // The normal recognition is bounded to five seconds. Failed fixed-fixture probes may
+    // additionally collect four two-second comparisons; none can turn that failure green.
+    match receiver.recv_timeout(Duration::from_secs(16)) {
         Ok(result) => result,
         Err(_) => {
             cancel.cancel();
@@ -73,8 +79,11 @@ fn verify_on_mta(cancel: &CancellationToken) -> Result<(), PlatformError> {
     let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|_| error(
         "The Windows OCR recognizer is unavailable. An installed OCR language matching the current user's language preferences is required; this probe does not install languages."))?;
     let fixture = fixture_image()?;
-    let text = super::windows_context::recognize_with_engine(
-        &fixture,
+    write_owned_fixture_artifact(&fixture, 96);
+    let bitmap = super::windows_context::ocr_software_bitmap(&fixture, BitmapAlphaMode::Ignore)
+        .map_err(|_| error("The fixed OCR SoftwareBitmap could not be constructed."))?;
+    let text = super::windows_context::recognize_software_bitmap(
+        &bitmap,
         cancel,
         &engine,
         Duration::from_secs(5),
@@ -103,15 +112,204 @@ fn verify_on_mta(cancel: &CancellationToken) -> Result<(), PlatformError> {
             dark_pixels
         )
     );
+    emit_bitmap_diagnostic("production-bgra-ignore", &bitmap, &fixture, 96, Some(&text));
     if !super::windows_capabilities::ocr_fixture_matches(&text) {
+        compare_owned_fixture(&bitmap, &fixture, &engine, cancel);
+        let _ = bitmap.Close();
         return Err(error(
             "Windows OCR did not recognize the expected controlled fixture word.",
         ));
     }
+    let _ = bitmap.Close();
     Ok(())
 }
 
+fn write_owned_fixture_artifact(fixture: &image::RgbaImage, font_height: i32) {
+    // Only an explicit verifier invocation reaches this function, and only its generated word
+    // is written. Production screen/source OCR never reads this environment variable.
+    let Some(path) = std::env::var_os("PICKLE_OCR_FIXTURE_PNG") else {
+        return;
+    };
+    let mut path = std::path::PathBuf::from(path);
+    if font_height != 96 {
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            return;
+        };
+        path.set_file_name(format!("{stem}-font{font_height}.png"));
+    }
+    let result = (|| {
+        if !path.is_absolute() || path.extension().is_none_or(|extension| extension != "png") {
+            return Err(());
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|_| ())?;
+        image::DynamicImage::ImageRgba8(fixture.clone())
+            .write_to(&mut file, image::ImageFormat::Png)
+            .map_err(|_| ())?;
+        Ok(())
+    })();
+    eprintln!(
+        "{}",
+        serde_json::json!({"schema":1,"test":"windows-ocr-owned-fixture-artifact","written":result.is_ok(),"width":fixture.width(),"height":fixture.height(),"font_height":font_height})
+    );
+}
+
+fn emit_bitmap_diagnostic(
+    label: &str,
+    bitmap: &SoftwareBitmap,
+    fixture: &image::RgbaImage,
+    font_height: i32,
+    text: Option<&str>,
+) {
+    let detail = (|| -> windows::core::Result<serde_json::Value> {
+        let format = bitmap.BitmapPixelFormat()?;
+        let channels = if format == BitmapPixelFormat::Gray8 {
+            1
+        } else {
+            4
+        };
+        let capacity = fixture.width() * fixture.height() * channels;
+        let buffer = Buffer::Create(capacity)?;
+        bitmap.CopyToBuffer(&buffer)?;
+        let mut pixels = vec![0; buffer.Length()? as usize];
+        let reader = DataReader::FromBuffer(&buffer)?;
+        reader.ReadBytes(&mut pixels)?;
+        let _ = reader.Close();
+        let dark_pixels = if channels == 1 {
+            pixels.iter().filter(|value| **value < 32).count()
+        } else {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[0] < 32 && pixel[1] < 32 && pixel[2] < 32)
+                .count()
+        };
+        let expected: Vec<u8> = if channels == 1 {
+            fixture.pixels().map(|pixel| pixel[0]).collect()
+        } else {
+            fixture
+                .pixels()
+                .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+                .collect()
+        };
+        let locked = bitmap.LockBuffer(BitmapBufferAccessMode::Read)?;
+        let plane = locked.GetPlaneDescription(0)?;
+        let _ = locked.Close();
+        Ok(
+            serde_json::json!({"format":format.0,"alpha_mode":bitmap.BitmapAlphaMode()?.0,"dpi_x":bitmap.DpiX()?,"dpi_y":bitmap.DpiY()?,"width":bitmap.PixelWidth()?,"height":bitmap.PixelHeight()?,"buffer_length":pixels.len(),"round_trip_matches_cpu":pixels==expected,"dark_pixels":dark_pixels,"stride":plane.Stride,"start_index":plane.StartIndex,"plane_width":plane.Width,"plane_height":plane.Height}),
+        )
+    })();
+    let mut evidence = serde_json::json!({"schema":1,"test":"windows-ocr-fixed-bitmap-comparison","variant":label,"font":"Segoe UI","font_height":font_height});
+    match detail {
+        Ok(detail) => evidence["bitmap"] = detail,
+        Err(error) => {
+            evidence["bitmap_error_hresult"] =
+                serde_json::json!(format!("0x{:08x}", error.code().0 as u32))
+        }
+    }
+    if let Some(text) = text {
+        evidence["recognized_text"] = serde_json::json!(text.chars().take(128).collect::<String>());
+        evidence["recognized_truncated"] = serde_json::json!(text.chars().count() > 128);
+        evidence["matched"] =
+            serde_json::json!(super::windows_capabilities::ocr_fixture_matches(text));
+    }
+    eprintln!("{evidence}");
+}
+
+fn compare_owned_fixture(
+    original: &SoftwareBitmap,
+    fixture: &image::RgbaImage,
+    engine: &OcrEngine,
+    cancel: &CancellationToken,
+) {
+    // Microsoft sample: https://github.com/microsoft/Windows-universal-samples/blob/main/Samples/OCR/cs/OcrFileImage.xaml.cs
+    // Compare the same pixels, not alternate fonts/text; success here is diagnostic only.
+    for (label, format, alpha) in [
+        (
+            "bgra-premultiplied",
+            BitmapPixelFormat::Bgra8,
+            BitmapAlphaMode::Premultiplied,
+        ),
+        (
+            "gray8-ignore",
+            BitmapPixelFormat::Gray8,
+            BitmapAlphaMode::Ignore,
+        ),
+        (
+            "bgra-ignore-dpi96",
+            BitmapPixelFormat::Bgra8,
+            BitmapAlphaMode::Ignore,
+        ),
+    ] {
+        if cancel.is_cancelled() {
+            break;
+        }
+        let result = (|| -> windows::core::Result<()> {
+            let bitmap = SoftwareBitmap::ConvertWithAlpha(original, format, alpha)?;
+            if label == "bgra-ignore-dpi96" {
+                bitmap.SetDpiX(96.0)?;
+                bitmap.SetDpiY(96.0)?;
+            }
+            let result = super::windows_context::recognize_software_bitmap(
+                &bitmap,
+                cancel,
+                engine,
+                Duration::from_secs(2),
+            );
+            emit_bitmap_diagnostic(label, &bitmap, fixture, 96, result.as_deref().ok());
+            let _ = bitmap.Close();
+            result.map(|_| ())
+        })();
+        if let Err(error) = result {
+            eprintln!(
+                "{}",
+                serde_json::json!({"schema":1,"test":"windows-ocr-fixed-comparison-error","variant":label,"hresult":format!("0x{:08x}",error.code().0 as u32)})
+            );
+        }
+    }
+    if !cancel.is_cancelled() {
+        let result = (|| -> Result<(), PlatformError> {
+            let fixture = fixture_image_with_font(48)?;
+            write_owned_fixture_artifact(&fixture, 48);
+            let bitmap =
+                super::windows_context::ocr_software_bitmap(&fixture, BitmapAlphaMode::Ignore)
+                    .map_err(|_| error("The font48 comparison bitmap could not be constructed."))?;
+            let result = super::windows_context::recognize_software_bitmap(
+                &bitmap,
+                cancel,
+                engine,
+                Duration::from_secs(2),
+            );
+            emit_bitmap_diagnostic(
+                "bgra-ignore-font48",
+                &bitmap,
+                &fixture,
+                48,
+                result.as_deref().ok(),
+            );
+            let _ = bitmap.Close();
+            result
+                .map(|_| ())
+                .map_err(|_| error("The font48 comparison did not complete."))
+        })();
+        if result.is_err() {
+            eprintln!(
+                "{}",
+                serde_json::json!({"schema":1,"test":"windows-ocr-fixed-comparison-error","variant":"bgra-ignore-font48"})
+            );
+        }
+    }
+}
+
 fn fixture_image() -> Result<image::RgbaImage, PlatformError> {
+    fixture_image_with_font(96)
+}
+
+fn fixture_image_with_font(font_height: i32) -> Result<image::RgbaImage, PlatformError> {
     const WIDTH: u32 = 768;
     const HEIGHT: u32 = 180;
     let failed = || error("The controlled in-memory OCR fixture could not be rendered.");
@@ -178,7 +376,7 @@ fn fixture_image() -> Result<image::RgbaImage, PlatformError> {
             return Err(failed());
         }
         canvas.font = CreateFontW(
-            -96,
+            -font_height,
             0,
             0,
             0,
@@ -233,6 +431,15 @@ fn fixture_image() -> Result<image::RgbaImage, PlatformError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn smaller_font_comparison_keeps_the_same_owned_canvas_and_text() {
+        let original = fixture_image().unwrap();
+        let smaller = fixture_image_with_font(48).unwrap();
+        assert_eq!(original.dimensions(), smaller.dimensions());
+        let dark = |image: &image::RgbaImage| image.pixels().filter(|pixel| pixel[0] < 32).count();
+        assert!(dark(&smaller) > 0);
+        assert!(dark(&smaller) < dark(&original));
+    }
     #[test]
     fn probe_fixture_is_an_owned_bounded_black_and_white_canvas() {
         let image = fixture_image().unwrap();

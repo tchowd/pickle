@@ -134,6 +134,7 @@ pub struct AppState {
     pub context_state: crate::context::ContextState,
     pub native_enabled: bool,
     pub native_shell: Option<pickle_platform::NativeShell>,
+    pub invocation_registration: crate::invocation_ui::InvocationRegistration,
     pub extension_id: TextEdit,
     pub update_state: crate::update_ui::UpdateState,
     pub update_attempt: uuid::Uuid,
@@ -195,6 +196,7 @@ impl Default for AppState {
             context_state: crate::context::ContextState::default(),
             native_enabled: false,
             native_shell: None,
+            invocation_registration: crate::invocation_ui::InvocationRegistration::Unavailable,
             extension_id: TextEdit::new(""),
             update_state: crate::update_ui::UpdateState::Idle,
             update_attempt: uuid::Uuid::new_v4(),
@@ -708,11 +710,18 @@ impl AppState {
     }
     pub fn toggle_pause(&mut self) {
         let next = !self.paused;
-        if let Some(shell) = &self.native_shell
-            && let Err(error) = shell.set_paused(next)
-        {
-            self.notice = Some(error.to_string());
-            return;
+        if let Some(shell) = &self.native_shell {
+            if let Err(error) = shell.set_paused(next) {
+                if !next {
+                    self.invocation_registration =
+                        crate::invocation_ui::InvocationRegistration::NeedsRetry;
+                }
+                self.notice = Some(error.to_string());
+                return;
+            }
+            if !next {
+                self.invocation_registration = crate::invocation_ui::InvocationRegistration::Ready;
+            }
         }
         self.cancel();
         self.paused = next;

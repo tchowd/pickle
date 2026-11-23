@@ -4,6 +4,14 @@ use pickle_core::{SelectionBounds, SelectionSnapshot};
 use pickle_platform::{CapturedSelection, InvocationConfig};
 use std::sync::atomic::Ordering;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InvocationRegistration {
+    #[default]
+    Unavailable,
+    NeedsRetry,
+    Ready,
+}
+
 pub struct AutoPreview {
     pub capture: CapturedSelection,
     pub snapshot: SelectionSnapshot,
@@ -139,11 +147,38 @@ impl AppState {
             )),
             None => Ok(()),
         });
+        self.record_invocation_result(result)
+    }
+
+    fn record_invocation_result(
+        &mut self,
+        result: Result<(), pickle_platform::PlatformError>,
+    ) -> bool {
         if let Err(error) = result {
             self.notice = Some(error.to_string());
             return false;
         }
+        // Configuring while paused validates a dormant binding; registration
+        // happens on resume, so it cannot clear an initial registration failure.
+        if self.native_enabled && !self.paused {
+            self.invocation_registration = InvocationRegistration::Ready;
+        }
         true
+    }
+
+    pub fn invocation_retry_visible(&self) -> bool {
+        self.native_enabled && self.invocation_registration == InvocationRegistration::NeedsRetry
+    }
+
+    pub fn retry_invocation(&mut self) {
+        if !self.invocation_retry_visible() || self.paused || self.settings_pending {
+            return;
+        }
+        // Retry the saved configuration, not an unsaved shortcut field. No
+        // settings persistence or provider work is part of this action.
+        if self.apply_invocation(self.settings.invocation_config()) {
+            self.notice = Some("Shortcut registration completed.".into());
+        }
     }
 
     pub fn set_automatic_menu(&mut self, enabled: bool) {
@@ -177,6 +212,67 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn registration_retry_tracks_actual_success_and_preserves_a_healthy_binding() {
+        let mut state = AppState {
+            native_enabled: true,
+            invocation_registration: InvocationRegistration::NeedsRetry,
+            ..AppState::default()
+        };
+        let failure = || {
+            Err(pickle_platform::PlatformError(
+                "Fixed observer failure.".into(),
+            ))
+        };
+        assert!(!state.record_invocation_result(failure()));
+        assert!(state.invocation_retry_visible());
+        state.paused = true;
+        assert!(state.record_invocation_result(Ok(())));
+        assert!(state.invocation_retry_visible());
+        state.paused = false;
+        assert!(state.record_invocation_result(Ok(())));
+        assert!(!state.invocation_retry_visible());
+        assert!(!state.record_invocation_result(failure()));
+        assert_eq!(state.invocation_registration, InvocationRegistration::Ready);
+        assert!(!state.invocation_retry_visible());
+    }
+
+    #[test]
+    fn retry_uses_saved_configuration_without_persisting_unsaved_drafts() {
+        let mut state = AppState {
+            native_enabled: true,
+            invocation_registration: InvocationRegistration::NeedsRetry,
+            shortcut: rune::TextEdit::new("invalid unsaved draft"),
+            ..AppState::default()
+        };
+        let saved = state.settings.clone();
+        let services = std::sync::Arc::new(crate::controller::Services::new(None, &saved));
+        state.services = Some(services.clone());
+        state.retry_invocation();
+        // A saved-valid configuration reaches the missing-shell guard; using
+        // the invalid draft instead would fail shortcut validation first.
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("native invocation service")
+        );
+        assert_eq!(state.settings, saved);
+        assert!(state.invocation_retry_visible());
+        assert!(!state.settings_pending);
+        assert_eq!(services.settings_revision.load(Ordering::Acquire), 0);
+        let attempted = services.invocation_revision.load(Ordering::Acquire);
+        for blocked in [true, false] {
+            state.paused = blocked;
+            state.settings_pending = !blocked;
+            state.retry_invocation();
+        }
+        assert_eq!(
+            services.invocation_revision.load(Ordering::Acquire),
+            attempted
+        );
+    }
     #[test]
     fn desktop_without_native_shell_rejects_invocation_changes() {
         let mut state = AppState {

@@ -613,6 +613,20 @@ fn chart_view(chart: &ValidatedChart) -> El {
         }
     }
 }
+fn invocation_recovery(s: &AppState) -> El {
+    if !s.invocation_retry_visible() {
+        return el();
+    }
+    col()
+        .w_full()
+        .gap(8.0)
+        .child(note("Shortcut registration did not complete. After resolving the system error, retry the saved shortcut. Pasting remains available."))
+        .child(
+            action(s, "retry-invocation", "Retry shortcut", false, |s, _| s.retry_invocation())
+                .disabled(s.paused || s.settings_pending),
+        )
+}
+
 fn settings(s: &AppState) -> El {
     if s.settings_pending {
         return col()
@@ -698,6 +712,7 @@ fn settings(s: &AppState) -> El {
         .child(section("Invocation")
             .child(input("invocation-shortcut", "Global shortcut (for example ctrl+alt+p)", &s.shortcut, |s| &mut s.shortcut, false))
             .child(note("Save settings to register a new shortcut. On macOS, turn off the modifier gesture to use it. A conflicting shortcut leaves the previous registration active."))
+            .child(invocation_recovery(s))
             .child(toggle(s, "modifier-gesture", "Control + Option press and release on macOS", s.settings.modifier_gesture, |s, _| s.set_modifier_gesture(!s.settings.modifier_gesture)).disabled(!cfg!(target_os = "macos")))
             .child(toggle(s, "automatic-menu", "Show the chooser after selecting text", s.settings.automatic_menu, |s, _| s.set_automatic_menu(!s.settings.automatic_menu)))
             .child(note("Automatic previews do not replace your answer until you choose an action. Pin the reader to suppress them.")))
@@ -846,7 +861,7 @@ fn context_tools(s: &AppState) -> El {
             );
         }
         context = context.child(note(if page.truncated { "Source-window OCR excerpt (truncated)" } else { "Source-window OCR (may contain errors)" }))
-            .child(text(if s.context_state.preview_full { page.text.clone() } else { page.text.chars().take(500).collect::<String>() }).font(type_::BODY).color(MUTED).selectable(true))
+            .child(text(if s.context_state.preview_full { page.text.clone() } else { page.text.chars().take(500).collect::<String>() }).wrap().shrink().font(type_::BODY).color(MUTED).selectable(true))
             .child(note(if s.settings.mode == "Online" { "Analyze visuals explicitly sends this session's screenshot and selected text to Cloudflare. Charges may apply.".to_owned() } else { format!("Analyze visuals explicitly sends this session's screenshot and selected text to your Local vision model at {}.", s.settings.local_address) }))
             .child(action(s, "analyze-visuals", if s.settings.mode == "Online" { "Analyze visuals with Cloudflare" } else { "Analyze visuals locally" }, false, |s, _| s.begin_visual_analysis()).disabled(s.context_state.pending > 0));
     }
@@ -859,6 +874,8 @@ fn context_tools(s: &AppState) -> El {
                 } else {
                     reference.text.chars().take(500).collect::<String>()
                 })
+                .wrap()
+                .shrink()
                 .font(type_::BODY)
                 .color(MUTED)
                 .selectable(true),
@@ -1082,6 +1099,54 @@ fn library(s: &AppState, bookmark: bool) -> El {
 mod layout_regressions {
     use super::*;
     use rune::{Env, Runtime};
+
+    #[test]
+    fn retry_shortcut_is_shown_only_for_live_initial_registration_failure() {
+        use crate::invocation_ui::InvocationRegistration;
+        let mut runtime = Runtime::new(
+            AppState::default(),
+            |s, _| {
+                col()
+                    .w_full()
+                    .h_full()
+                    .padding(16.0)
+                    .child(invocation_recovery(s))
+            },
+            (480.0, 240.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        assert!(runtime.find("retry-invocation").is_none());
+        runtime.update(|s, _| {
+            s.native_enabled = true;
+            s.invocation_registration = InvocationRegistration::NeedsRetry;
+        });
+        for _ in 0..60 {
+            runtime.frame(1.0 / 60.0);
+        }
+        let (x, y) = runtime.find("retry-invocation").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert!(
+            runtime
+                .state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("native invocation service")
+        );
+        assert!(!runtime.state.settings_pending);
+        runtime.update(|s, _| s.invocation_registration = InvocationRegistration::Ready);
+        runtime.frame(0.0);
+        assert!(runtime.find("retry-invocation").is_none());
+        runtime.update(|s, _| {
+            s.native_enabled = false;
+            s.invocation_registration = InvocationRegistration::NeedsRetry;
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("retry-invocation").is_none());
+    }
 
     #[test]
     fn settings_notes_wrap_inside_the_minimum_window_width() {

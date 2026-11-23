@@ -55,7 +55,11 @@ Copy-Item -LiteralPath $capabilities -Destination (Join-Path $PWD $(if ($hasIden
 if ($hasIdentity) {
   $ocrReport = Join-Path $PWD 'artifacts/identity-ocr-result.json'
   $ocrErrors = Join-Path $PWD 'artifacts/identity-native-ocr-stderr.log'
-  $ocr = Start-Process -FilePath $application -ArgumentList @('--verify-windows-ocr') -RedirectStandardOutput $ocrReport -RedirectStandardError $ocrErrors -Wait -PassThru
+  $priorFixturePath = [Environment]::GetEnvironmentVariable('PICKLE_OCR_FIXTURE_PNG','Process')
+  try {
+    $env:PICKLE_OCR_FIXTURE_PNG = Join-Path $PWD 'artifacts/identity-native-ocr-fixture.png'
+    $ocr = Start-Process -FilePath $application -ArgumentList @('--verify-windows-ocr') -RedirectStandardOutput $ocrReport -RedirectStandardError $ocrErrors -Wait -PassThru
+  } finally { [Environment]::SetEnvironmentVariable('PICKLE_OCR_FIXTURE_PNG',$priorFixturePath,'Process') }
   if ($ocr.ExitCode -ne 0) {
     # Only this fixed owned-image probe writes this log; it never contains source/window OCR.
     $reader = [IO.File]::OpenText($ocrErrors)

@@ -147,10 +147,9 @@ pub fn setup(s: &mut AppState, waker: rune::Waker) {
         });
     }) {
         Ok(shell) => {
-            if let Err(error) = shell.configure_invocation(s.settings.invocation_config()) {
-                s.notice = Some(error.to_string());
-            }
             s.native_shell = Some(shell);
+            s.invocation_registration = crate::invocation_ui::InvocationRegistration::NeedsRetry;
+            s.apply_invocation(s.settings.invocation_config());
         }
         Err(error) => s.notice = Some(error.to_string()),
     }
