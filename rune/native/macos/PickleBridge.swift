@@ -22,9 +22,11 @@ func failure(_ message: String) -> UnsafeMutablePointer<CChar>? {
 }
 @_cdecl("pickle_string_free") public func pickleStringFree(_ pointer: UnsafeMutablePointer<CChar>?)
 { free(pointer) }
-private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-  var value: CFTypeRef?
-  return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+// AX messaging timeouts belong to each object; configuring only the app root
+// does not bound descendant calls. A single budget also bounds the traversal.
+func selectionAXTimeout(deadline: Double, now: Double) -> Float? {
+  let remaining = deadline - now
+  return remaining > 0 ? Float(min(0.08, remaining)) : nil
 }
 private func exclusions(_ text: UnsafePointer<CChar>?) -> Set<String> {
   guard let text, let data = String(cString: text).data(using: .utf8),
@@ -133,7 +135,26 @@ public func pickleWindowWorkArea(_ number: UInt32, _ fallbackX: Int32, _ fallbac
     )
   }
   let root = AXUIElementCreateApplication(app.processIdentifier)
-  AXUIElementSetMessagingTimeout(root, 0.35)
+  let deadline = ProcessInfo.processInfo.systemUptime + 1.5
+  var failed = false
+  func prepare(_ element: AXUIElement) -> Bool {
+    guard !failed, let timeout = selectionAXTimeout(deadline:deadline,now:ProcessInfo.processInfo.systemUptime),
+      AXUIElementSetMessagingTimeout(element, timeout) == .success
+    else { failed = true; return false }
+    var owner: pid_t = 0
+    guard AXUIElementGetPid(element,&owner) == .success, owner == app.processIdentifier else {
+      failed = true; return false
+    }
+    return true
+  }
+  func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    guard prepare(element) else { return nil }
+    var value: CFTypeRef?
+    let status = AXUIElementCopyAttributeValue(element,name as CFString,&value)
+    if status == .success { return value }
+    if status != .attributeUnsupported && status != .noValue { failed = true }
+    return nil
+  }
   guard let raw = attribute(root, kAXFocusedUIElementAttribute),
     CFGetTypeID(raw) == AXUIElementGetTypeID()
   else {
@@ -196,10 +217,14 @@ public func pickleWindowWorkArea(_ number: UInt32, _ fallbackX: Int32, _ fallbac
     return failure("This selection is too long. Select a shorter passage.")
   }
   var bounds: [String: Double]?
-  if let range = attribute(element, kAXSelectedTextRangeAttribute) {
+  if let range = attribute(element, kAXSelectedTextRangeAttribute), prepare(element) {
     var raw: CFTypeRef?
-    if AXUIElementCopyParameterizedAttributeValue(
-      element, kAXBoundsForRangeParameterizedAttribute as CFString, range, &raw) == .success,
+    let status = AXUIElementCopyParameterizedAttributeValue(
+      element, kAXBoundsForRangeParameterizedAttribute as CFString, range, &raw)
+    if status != .success && status != .attributeUnsupported
+      && status != .parameterizedAttributeUnsupported && status != .notImplemented && status != .noValue
+    { failed = true }
+    if status == .success,
       let raw, CFGetTypeID(raw) == AXValueGetTypeID()
     {
       var rect = CGRect.zero
@@ -209,6 +234,9 @@ public func pickleWindowWorkArea(_ number: UInt32, _ fallbackX: Int32, _ fallbac
         bounds = ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
       }
     }
+  }
+  guard !failed, selectionAXTimeout(deadline:deadline,now:ProcessInfo.processInfo.systemUptime) != nil else {
+    return failure("This source did not respond in time. Select text again or paste the passage.")
   }
   guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
     return failure("The source changed during capture. Select the passage again.")

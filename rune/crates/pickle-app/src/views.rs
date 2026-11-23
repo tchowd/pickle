@@ -1113,6 +1113,7 @@ fn navigate_library(s: &mut AppState, route: Route) {
     s.library_selected = None;
     s.library_page = 0;
     s.route = route;
+    s.resume_library_search();
 }
 
 fn library_destructive_blocked(s: &AppState, bookmark: bool) -> bool {
@@ -1261,7 +1262,10 @@ fn library(s: &AppState, bookmark: bool) -> El {
         .w_full()
         .color(INK)
         .on_edit(|s: &mut AppState| &mut s.search)
-        .on_input_change(|s: &mut AppState, _| s.library_page = 0);
+        .on_input_change(|s: &mut AppState, _| {
+            s.library_page = 0;
+            s.resume_library_search();
+        });
     content = content.child(
         col()
             .w_full()
@@ -1279,20 +1283,57 @@ fn library(s: &AppState, bookmark: bool) -> El {
             ),
     );
     if entries.is_empty() && s.library_error(bookmark).is_none() && !busy {
-        content = content.child(paragraph(if bookmark {
-            "Choose Save beside an answer to keep it here."
-        } else {
-            "Enable the knowledge base in Settings to record completed answers on this device."
-        }));
+        content = content.child(
+            paragraph(if bookmark {
+                "Choose Save beside an answer to keep it here."
+            } else {
+                "Enable the knowledge base in Settings to record completed answers on this device."
+            })
+            .key("library-empty-store"),
+        );
     }
-    let matches: Vec<_> = entries
-        .iter()
-        .filter(|entry| entry.matches(&s.search.text))
-        .collect();
+    let mut search_complete = true;
+    let matches: Vec<_> = match s.library_search_rows(bookmark) {
+        crate::library_search::SearchRows::All => entries.iter().collect(),
+        crate::library_search::SearchRows::Ready(rows) => {
+            rows.iter().filter_map(|row| entries.get(*row)).collect()
+        }
+        crate::library_search::SearchRows::Pending => {
+            search_complete = false;
+            content = content.child(note("Searching saved answers…").key("library-search-pending"));
+            vec![]
+        }
+        crate::library_search::SearchRows::Failed(message) => {
+            search_complete = false;
+            content = content
+                .child(note(message).key("library-search-error"))
+                .child(action(
+                    s,
+                    "library-search-retry",
+                    "Retry search",
+                    false,
+                    |s, _| s.retry_library_search(),
+                ))
+                .child(action(
+                    s,
+                    "library-search-clear",
+                    "Clear search",
+                    false,
+                    |s, _| {
+                        s.search.clear();
+                        s.library_page = 0;
+                        s.refresh_library_search();
+                    },
+                ));
+            vec![]
+        }
+    };
     let pages = matches.len().div_ceil(20).max(1);
     let page = s.library_page.min(pages - 1);
-    if !entries.is_empty() && matches.is_empty() {
-        content = content.child(paragraph("No saved answers match this search."));
+    if search_complete && !entries.is_empty() && matches.is_empty() {
+        content = content.child(
+            paragraph("No saved answers match this search.").key("library-search-no-matches"),
+        );
     }
     for entry in matches.iter().skip(page * 20).take(20) {
         let id = entry.id.clone();

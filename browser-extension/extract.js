@@ -17,7 +17,7 @@ globalThis.pickleExtract = function(mode) {
     if (match > 1500) content = content.slice(match - 1500);
     const text = bound(content, 11700) + (new TextEncoder().encode(content).length > 11700 || match > 1500 ? '\n[Page excerpt; the entire article is not included.]' : '');
     if (!text.trim()) throw new Error('No article found. Try selecting a passage.');
-    return {selection, reference:{url,title,text,kind:'article',timestamp:null}};
+    return {selection, documentURL:url, reference:{url,title,text,kind:'article',timestamp:null}};
   }
   const videos = [...document.querySelectorAll('video')].filter(v => v.getBoundingClientRect().width > 0);
   videos.sort((a,b) => Number(a.paused) - Number(b.paused) || b.clientWidth*b.clientHeight - a.clientWidth*a.clientHeight);
@@ -42,5 +42,5 @@ globalThis.pickleExtract = function(mode) {
   const full = cues.map(c => `[${timestamp(c.start)}] ${c.text}`).join('\n');
   const truncated = new TextEncoder().encode(full).length > 11500;
   const text = bound(full,11500) + (truncated ? '\n[Transcript excerpt only; the remaining video is not included.]' : '\n[Available captions only; completeness has not been verified.]');
-  return {selection, reference:{url,title,text,kind:mode === 'moment' ? 'video captions' : 'video transcript',timestamp:time}};
+  return {selection, documentURL:url, reference:{url,title,text,kind:mode === 'moment' ? 'video captions' : 'video transcript',timestamp:time}};
 };

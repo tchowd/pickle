@@ -35,6 +35,14 @@ pub struct BrowserPayload {
     pub captured_at: f64,
     pub selection: String,
     pub reference: WebReference,
+    /// Ephemeral exact location.href. Legacy packets cannot authorize screen
+    /// preparation; this is never a reference pointer or retained app field.
+    #[serde(
+        default,
+        rename = "documentURL",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub document_url: Option<String>,
     #[serde(rename = "bundleID")]
     pub browser_id: String,
 }
@@ -67,6 +75,13 @@ impl BrowserPayload {
         if !self.captured_at.is_finite()
             || (Utc::now().timestamp_millis() as f64 / 1000.0 - self.captured_at).abs() >= 60.0
             || self.selection.len() > 12_000
+            || self.document_url.as_ref().is_some_and(|raw| {
+                WebReference::public_url(raw).is_none()
+                    || raw
+                        .chars()
+                        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+                    || !url::Url::parse(raw).is_ok_and(|url| url.as_str() == raw)
+            })
             || !BrowserKind::ALL
                 .iter()
                 .any(|kind| kind.identity() == self.browser_id)
@@ -95,6 +110,7 @@ enum AdmissionState {
 struct BrowserAdmission {
     deadline: Instant,
     state: AdmissionMutex<AdmissionState>,
+    cancel: CancellationToken,
 }
 impl BrowserAdmission {
     fn cancel_pending(&self) {
@@ -104,6 +120,7 @@ impl BrowserAdmission {
             .unwrap_or_else(|poison| poison.into_inner());
         if *state == AdmissionState::Pending {
             *state = AdmissionState::Cancelled;
+            self.cancel.cancel();
         }
     }
     fn accepted(&self) -> bool {
@@ -121,6 +138,14 @@ impl Drop for CancelPendingAdmission {
     }
 }
 impl BrowserRequest {
+    pub fn preparation_token(&self) -> CancellationToken {
+        self.admission.cancel.child_token()
+    }
+    pub fn remaining_budget(&self) -> Duration {
+        self.admission
+            .deadline
+            .saturating_duration_since(Instant::now())
+    }
     /// Read-only preflight. The desktop must still call try_admit immediately
     /// before applying its result; this does not reserve admission.
     pub fn is_pending(&self) -> bool {
@@ -145,6 +170,7 @@ impl BrowserRequest {
         {
             if *state == AdmissionState::Pending {
                 *state = AdmissionState::Cancelled;
+                self.admission.cancel.cancel();
             }
             return Err("This browser capture expired. Send it again from the browser.".into());
         }
@@ -223,6 +249,7 @@ impl BrowserBridge {
                 let admission = Arc::new(BrowserAdmission {
                     deadline,
                     state: AdmissionMutex::new(AdmissionState::Pending),
+                    cancel: CancellationToken::new(),
                 });
                 tokio::spawn(async move {
                     let _slot = slot;

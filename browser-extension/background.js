@@ -6,7 +6,7 @@ async function send(mode) {
   await chrome.scripting.executeScript({target:{tabId:tab.id},files:['Readability.js','extract.js']});
   const [{result}] = await chrome.scripting.executeScript({target:{tabId:tab.id},func:mode => globalThis.pickleExtract(mode),args:[mode]});
   const current = await chrome.tabs.get(tab.id);
-  if (current.url !== result.reference.url) throw new Error('The page changed. Try again.');
+  if (typeof result.documentURL !== 'string' || current.url !== result.documentURL) throw new Error('The page changed. Try again.');
   return await chrome.runtime.sendNativeMessage('com.pickle.reader', {...result, id:crypto.randomUUID(), capturedAt:Date.now()/1000});
 }
 chrome.runtime.onMessage.addListener((message,sender,reply) => {

@@ -25,9 +25,15 @@ pub struct WorkArea {
     pub width: u32,
     pub height: u32,
 }
+mod browser_page;
 mod browser_target;
+pub use browser_page::{capture_browser_page, document_urls_match};
 mod geometry;
 pub use browser_target::{capture_browser_target, validate_browser_target_metadata};
+mod library_search;
+pub use library_search::{
+    LibrarySearchIndex, LibrarySearchLocale, LibrarySearchStats, library_search_locale,
+};
 mod invocation;
 #[cfg(any(target_os = "windows", test))]
 mod windows_capabilities;

@@ -1,0 +1,42 @@
+{
+  "rune/crates/pickle-app/src/library_search.rs": {
+    "sha256": "38ab619505b8d8ad420ddf78fb9dd46c2dbd115d92938dd1556f431d3e555e61",
+    "bytes": 18339
+  },
+  "rune/crates/pickle-app/src/library_search_tests.rs": {
+    "sha256": "52a380512941941f8eb2cf3eb17ff03b99005e28dba7936e3bd1193155cc6364",
+    "bytes": 16217
+  },
+  "rune/crates/pickle-app/src/library_search_benchmark.rs": {
+    "sha256": "dbae561f207a6700bc8f6ffd603f569df7824127af740c99089933a38c41343b",
+    "bytes": 18124
+  },
+  "rune/crates/pickle-app/src/storage.rs": {
+    "sha256": "79c8fc975c8194eafe8161a34e19952054045e74d1f6d816f3f3e718a5ddc1a8",
+    "bytes": 36144
+  },
+  "rune/crates/pickle-app/src/views.rs": {
+    "sha256": "3d20e8f386ad82f9ef13cba60ca7991e8f1619ecdeee3c335a0068af4fa8dc47",
+    "bytes": 77243
+  },
+  "rune/crates/pickle-app/src/controller.rs": {
+    "sha256": "3e5a759d4f963bd3ee7e7560a38c61b00787ae37d1b0acc87af28c4f286f3c65",
+    "bytes": 73411
+  },
+  "rune/crates/pickle-app/src/main.rs": {
+    "sha256": "3d3aa453e304b63c75ba447c84b5bd7f001c0f19fd572b49e56ea65d4333a323",
+    "bytes": 12417
+  },
+  "rune/crates/pickle-app/src/library_controller.rs": {
+    "sha256": "9124616b420530bfd99f20ddcf7384c6048a74cdc17cdec1951694ce0f1f70c3",
+    "bytes": 17060
+  },
+  "rune/crates/pickle-platform/src/library_search.rs": {
+    "sha256": "625782ef839f6e41cda3201bfbb2711d6139640e3de1b40e45d517e98f009e51",
+    "bytes": 16794
+  },
+  "rune/native/macos/PickleLibrarySearch.swift": {
+    "sha256": "215c11b235b428fc231d95bbbf2c9c8745cf1b0fef419c405893ed2f6d999c4d",
+    "bytes": 3145
+  }
+}

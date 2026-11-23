@@ -37,7 +37,7 @@ async fn native_host_executable_preserves_frames_and_enforces_origin() {
     let _bridge = BrowserBridge::start(registration.bridge_directory, tx, CancellationToken::new())
         .await
         .unwrap();
-    let payload = json!({"id":Uuid::new_v4(),"capturedAt":Utc::now().timestamp_millis() as f64/1000.0,"selection":"日本語 café","bundleID":"page-controlled identity","reference":{"url":"https://example.com/article","title":"Fixture","kind":"article","text":"A source passage."}});
+    let payload = json!({"id":Uuid::new_v4(),"capturedAt":Utc::now().timestamp_millis() as f64/1000.0,"selection":"日本語 café","documentURL":"https://example.com/Path%2Fpart?q=1#exact-fragment","bundleID":"page-controlled identity","reference":{"url":"https://example.com/article","title":"Fixture","kind":"article","text":"A source passage."}});
     let frame = serde_json::to_vec(&payload).unwrap();
     let run = move |origin: String, frame: Vec<u8>| {
         let mut child = Command::new(&executable)
@@ -64,6 +64,14 @@ async fn native_host_executable_preserves_frames_and_enforces_origin() {
     let received = rx.recv().await.unwrap();
     assert_eq!(received.payload.selection, "日本語 café");
     assert_eq!(received.payload.browser_id, BrowserKind::Chrome.identity());
+    assert_eq!(
+        received.payload.document_url.as_deref(),
+        Some("https://example.com/Path%2Fpart?q=1#exact-fragment")
+    );
+    assert_eq!(
+        received.payload.reference.url,
+        "https://example.com/article"
+    );
     received.try_admit().unwrap();
     received.reply.send(Ok(())).unwrap();
     assert_eq!(task.await.unwrap()["ok"], "true");

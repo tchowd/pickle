@@ -29,8 +29,8 @@ fn entry(id: &str) -> Entry {
 fn state(bookmark: bool, records: Vec<Entry>) -> AppState {
     AppState {
         route: Route::Library(bookmark),
-        entries: if bookmark { vec![] } else { records.clone() },
-        bookmarks: if bookmark { records } else { vec![] },
+        entries: if bookmark { vec![] } else { records.clone() }.into(),
+        bookmarks: if bookmark { records } else { vec![] }.into(),
         ..AppState::default()
     }
 }
@@ -135,6 +135,7 @@ fn confirmation_uses_total_store_count_and_cancel_never_writes_either_archive() 
         rt.update(|s, _| {
             s.search = TextEdit::new("record-24");
             s.library_page = 5;
+            s.complete_library_search_fixture(bookmark);
         });
         settle(&mut rt);
         click(&mut rt, "library-delete-all");

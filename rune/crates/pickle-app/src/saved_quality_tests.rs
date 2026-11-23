@@ -107,8 +107,8 @@ fn repository_reopen_retains_quality_labels_in_cards_and_detail_for_both_stores(
         let bytes = std::fs::read(&archive).unwrap();
         let state = AppState {
             route: Route::Library(bookmark),
-            entries: if bookmark { vec![] } else { loaded.clone() },
-            bookmarks: if bookmark { loaded.clone() } else { vec![] },
+            entries: if bookmark { vec![] } else { loaded.clone() }.into(),
+            bookmarks: if bookmark { loaded.clone() } else { vec![] }.into(),
             ..AppState::default()
         };
         let mut runtime = Runtime::new(state, view, (480.0, 1800.0), Env::new(true, 1.0));
@@ -156,16 +156,18 @@ fn long_stored_quality_is_plain_text_and_fits_the_minimum_width_in_both_views() 
             let record = entry("long-label", Some(label.clone()));
             let state = AppState {
                 route: Route::Library(bookmark),
-                entries: if bookmark {
+                entries: (if bookmark {
                     vec![]
                 } else {
                     vec![record.clone()]
-                },
-                bookmarks: if bookmark {
+                })
+                .into(),
+                bookmarks: (if bookmark {
                     vec![record.clone()]
                 } else {
                     vec![]
-                },
+                })
+                .into(),
                 library_selected: detail.then(|| record.id.clone()),
                 ..AppState::default()
             };

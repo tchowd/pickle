@@ -46,12 +46,22 @@ let bridge = BrowserBridge::start(
 while let Some(request) = receiver.recv().await {
     // Perform current pause, context, exclusion, and session-policy checks on the UI thread.
     // Payload has already passed authentication, freshness, size, identity, URL, and replay checks.
-    let decision = accept_reference_after_policy_checks(&request.payload);
+    // Recheck policy/session after any async preparation. Immediately before
+    // mutating the session, call request.try_admit(); expiry/drop may have won.
+    let decision = accept_reference_after_policy_checks(&request);
     let _ = request.reply.send(decision);
 }
 ```
 
 `BrowserRequest` contains the payload and a one-shot acknowledgement channel. Acknowledging receipt before checking application policy would bypass that policy; check it first. The bridge does not automatically generate an answer or capture a screen.
+
+The optional `documentURL` field is the exact loaded `location.href`, independent
+of the retained reference pointer. Legacy packets remain valid without it. The
+desktop may use it transiently for independently verified native document/window
+capture; it is not a trusted native window handle or proof of extension tab
+identity. It must not become retained source/reference/diagnostic metadata.
+Preparation uses a child cancellation token and the request's remaining monotonic
+budget. Expiry, cancellation or a superseding intent cannot admit a late result.
 
 `BrowserPayload::is_excluded(exclusions)` recognizes browser identity aliases and Windows executable-path basenames. Extension captures do not establish a source PID/window handle, so never treat them as permission to capture an arbitrary foreground window.
 

@@ -14,6 +14,13 @@ async fn queued_request_with(
     selection: &str,
     capture_id: uuid::Uuid,
 ) -> (tempfile::TempDir, BrowserBridge, BrowserRequest, TcpStream) {
+    queued_document_request(selection, capture_id, None).await
+}
+async fn queued_document_request(
+    selection: &str,
+    capture_id: uuid::Uuid,
+    document_url: Option<&str>,
+) -> (tempfile::TempDir, BrowserBridge, BrowserRequest, TcpStream) {
     let directory = tempfile::tempdir().unwrap();
     let (sender, mut requests) = tokio::sync::mpsc::unbounded_channel();
     let bridge = BrowserBridge::start(
@@ -31,7 +38,7 @@ async fn queued_request_with(
         .unwrap();
     let message = serde_json::json!({"token":connection["token"],"payload":{
         "id":capture_id,"capturedAt":chrono::Utc::now().timestamp_millis() as f64/1000.0,
-        "selection":selection,"bundleID":BrowserKind::Chrome.identity(),
+        "selection":selection,"bundleID":BrowserKind::Chrome.identity(),"documentURL":document_url,
         "reference":{"url":"https://example.com/owned-video","title":"Owned caption fixture","kind":"video captions","text":"[0:12] Controlled caption context.","timestamp":12.0}
     }});
     socket
@@ -442,4 +449,239 @@ fn audio_completion_requires_the_live_context_generation_and_does_not_clear_newe
         Some("New operation status")
     );
     assert!(!cancel.is_cancelled());
+}
+
+fn prepared_page() -> pickle_platform::CapturedPage {
+    pickle_platform::CapturedPage {
+        jpeg: Vec::new(),
+        text: "Owned browser-window OCR fixture.".into(),
+        truncated: false,
+    }
+}
+
+#[tokio::test]
+async fn verified_document_page_is_ephemeral_and_preserves_the_independent_caption_reference() {
+    let document = "https://example.com/document%2Froute?q=2#fragment-only-for-matching";
+    let (_directory, _bridge, request, mut socket) = queued_document_request(
+        "Controlled Café selection.",
+        uuid::Uuid::new_v4(),
+        Some(document),
+    )
+    .await;
+    let mut runtime = runtime();
+    runtime.state.settings.screen_context_enabled = true;
+    let attempt = stage_browser_intent(&mut runtime.state, &request).unwrap();
+    runtime.update(move |state, tx| {
+        complete_browser_request(
+            state,
+            request,
+            BrowserPreparation {
+                target: Ok(native_target()),
+                page: Some(prepared_page()),
+            },
+            attempt,
+            tx,
+        )
+    });
+    assert_eq!(reply(&mut socket).await["ok"], "true");
+    assert_eq!(
+        runtime.state.context_state.page.as_ref().unwrap().text,
+        "Owned browser-window OCR fixture."
+    );
+    let reference = serde_json::to_value(&runtime.state.context_state.reference).unwrap();
+    assert_eq!(reference["url"], "https://example.com/owned-video");
+    assert_eq!(reference["timestamp"], 12.0);
+    runtime.update(|state, _| state.collect_context());
+    assert_eq!(
+        serde_json::to_value(&runtime.state.context_state.reference).unwrap(),
+        reference
+    );
+    assert!(runtime.state.context_state.page.is_some());
+    assert!(
+        runtime
+            .state
+            .context_state
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("recognition errors")
+    );
+    let mut input = pickle_core::RequestInput::new(
+        runtime.state.snapshot.clone().unwrap(),
+        pickle_core::ReadingAction::Simplify,
+    );
+    input.reference = runtime.state.context_state.reference.clone();
+    input.page_context = runtime.state.context_state.reading_text();
+    input.validate().unwrap();
+    let serialized = serde_json::to_string(&input).unwrap();
+    assert!(!serialized.contains(document));
+    assert!(serialized.contains("Owned browser-window OCR fixture."));
+    assert_eq!(
+        runtime
+            .state
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .source_url
+            .as_deref(),
+        Some("https://example.com/owned-video")
+    );
+    assert!(
+        runtime
+            .state
+            .capture_target
+            .as_ref()
+            .unwrap()
+            .source_url
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn prepared_page_requires_opt_in_live_policy_and_a_new_verified_target() {
+    for mode in 0..5 {
+        let (_directory, _bridge, request, mut socket) = queued_document_request(
+            "Controlled source.",
+            uuid::Uuid::new_v4(),
+            if mode == 0 {
+                None
+            } else {
+                Some("https://example.com/page#one")
+            },
+        )
+        .await;
+        let mut runtime = runtime();
+        runtime.state.settings.screen_context_enabled = true;
+        let attempt = stage_browser_intent(&mut runtime.state, &request).unwrap();
+        let prior = runtime.state.snapshot.clone();
+        let target = if mode == 1 {
+            Err(pickle_platform::PlatformError(
+                "Owned unavailable fixture".into(),
+            ))
+        } else {
+            Ok(native_target())
+        };
+        if mode == 2 {
+            runtime.state.settings.screen_context_enabled = false;
+        }
+        if mode == 3 {
+            runtime.state.paused = true;
+        }
+        if mode == 4 {
+            runtime.update(|state, _| state.clear_context());
+        }
+        runtime.update(move |state, tx| {
+            complete_browser_request(
+                state,
+                request,
+                BrowserPreparation {
+                    target,
+                    page: Some(prepared_page()),
+                },
+                attempt,
+                tx,
+            )
+        });
+        let response = reply(&mut socket).await;
+        if mode >= 3 {
+            assert!(response["error"].is_string());
+            assert_eq!(runtime.state.snapshot, prior);
+        } else {
+            assert_eq!(response["ok"], "true");
+            assert!(runtime.state.context_state.reference.is_some());
+        }
+        assert!(runtime.state.context_state.page.is_none());
+    }
+}
+
+#[tokio::test]
+async fn slow_optional_page_preparation_is_cancelled_and_text_still_admitted() {
+    let (_directory, _bridge, request, mut socket) = queued_document_request(
+        "Controlled text fallback.",
+        uuid::Uuid::new_v4(),
+        Some("https://example.com/page#one"),
+    )
+    .await;
+    let mut runtime = runtime();
+    runtime.state.settings.screen_context_enabled = true;
+    let attempt = stage_browser_intent(&mut runtime.state, &request).unwrap();
+    let parent = runtime
+        .state
+        .context_state
+        .browser_preparation
+        .as_ref()
+        .unwrap()
+        .clone();
+    let worker_cancel = parent.child_token();
+    let observed_cancel = worker_cancel.clone();
+    let (finished_sender, finished) = tokio::sync::oneshot::channel();
+    let page = prepare_browser_page(
+        worker_cancel,
+        std::time::Duration::from_millis(20),
+        move |cancel| {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            while !cancel.is_cancelled() && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let _ = finished_sender.send(cancel.is_cancelled());
+            Ok(prepared_page())
+        },
+    )
+    .await;
+    assert!(page.is_none() && observed_cancel.is_cancelled());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), finished)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    assert!(!parent.is_cancelled());
+    runtime.update(move |state, tx| {
+        complete_browser_request(
+            state,
+            request,
+            BrowserPreparation {
+                target: Ok(native_target()),
+                page,
+            },
+            attempt,
+            tx,
+        )
+    });
+    assert_eq!(reply(&mut socket).await["ok"], "true");
+    assert_eq!(
+        runtime.state.snapshot.as_ref().unwrap().text,
+        "Controlled text fallback."
+    );
+    assert!(runtime.state.context_state.page.is_none());
+}
+
+#[tokio::test]
+async fn newer_browser_intent_and_source_reset_cancel_preparation_without_changing_source() {
+    let (_a, _ba, older, _sa) = queued_request().await;
+    let (_b, _bb, newer, _sb) = queued_request().await;
+    let mut runtime = runtime();
+    let source = runtime.state.snapshot.clone();
+    stage_browser_intent(&mut runtime.state, &older).unwrap();
+    let older_cancel = runtime
+        .state
+        .context_state
+        .browser_preparation
+        .as_ref()
+        .unwrap()
+        .clone();
+    stage_browser_intent(&mut runtime.state, &newer).unwrap();
+    assert!(older_cancel.is_cancelled());
+    let newer_cancel = runtime
+        .state
+        .context_state
+        .browser_preparation
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_eq!(runtime.state.snapshot, source);
+    assert!(!newer_cancel.is_cancelled());
+    runtime.update(|state, _| state.clear_context());
+    assert!(newer_cancel.is_cancelled());
+    assert_eq!(runtime.state.snapshot, source);
 }

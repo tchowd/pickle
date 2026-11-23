@@ -1,3 +1,4 @@
+use crate::library_search::{EntryStore, LibrarySearchState};
 use crate::storage::{Entry, EntryReference, Repository, Settings};
 use pickle_core::*;
 use pickle_providers::{
@@ -158,8 +159,9 @@ pub struct AppState {
     pub demo: bool,
     pub paused: bool,
     pub notice: Option<String>,
-    pub entries: Vec<Entry>,
-    pub bookmarks: Vec<Entry>,
+    pub entries: EntryStore,
+    pub bookmarks: EntryStore,
+    pub library_search: LibrarySearchState,
     pub handle: Option<AppHandle<Self>>,
     pub window: Option<WindowHandle>,
     pub window_geometry: Option<crate::geometry_store::WindowFrame>,
@@ -226,8 +228,9 @@ impl Default for AppState {
             demo: false,
             paused: false,
             notice: None,
-            entries: vec![],
-            bookmarks: vec![],
+            entries: EntryStore::default(),
+            bookmarks: EntryStore::default(),
+            library_search: LibrarySearchState::default(),
             handle: None,
             window: None,
             window_geometry: None,
@@ -368,6 +371,7 @@ impl AppState {
     /// The same idempotent preparation is used by Escape, native dismiss, close
     /// and quit hooks. Preserve the pre-preview frame before restoring the panel.
     pub fn prepare_window_close(&mut self) {
+        self.pause_library_search();
         if !self.geometry_close_prepared {
             if self.auto_preview.is_none() {
                 self.remember_window_geometry();
@@ -395,6 +399,7 @@ impl AppState {
         self.settings = settings;
     }
     pub fn cancel(&mut self) {
+        self.library_search.cancel_all();
         self.stop_reader_follow();
         self.cancel_local_connection_test();
         if let Some(services) = &self.services {

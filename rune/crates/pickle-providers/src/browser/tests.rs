@@ -38,6 +38,7 @@ fn payload() -> BrowserPayload {
             text: "Public source text".into(),
             timestamp: None,
         },
+        document_url: None,
         browser_id: BrowserKind::Chrome.identity().into(),
     }
 }
@@ -87,6 +88,34 @@ fn payload_validation_rejects_expiry_identity_and_oversized_selection() {
     value = good;
     value.selection = "a".repeat(12_001);
     assert!(value.validate().is_err());
+}
+
+#[test]
+fn document_url_is_optional_exact_ephemeral_metadata_separate_from_reference() {
+    let legacy = payload();
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("documentURL")
+            .is_none()
+    );
+    let mut current = legacy.clone();
+    let document = "https://example.com/Path%2Fpart?q=Caf%C3%A9&b=2#route-one";
+    current.document_url = Some(document.into());
+    current.validate().unwrap();
+    let decoded: BrowserPayload =
+        serde_json::from_value(serde_json::to_value(&current).unwrap()).unwrap();
+    assert_eq!(decoded.document_url.as_deref(), Some(document));
+    assert_eq!(decoded.reference.url, legacy.reference.url);
+    for invalid in [
+        "https://example.com/\n".to_owned(),
+        "https://example.com\\path".into(),
+        "https://user:pass@example.com/".into(),
+        format!("https://example.com/{}", "a".repeat(4096)),
+    ] {
+        current.document_url = Some(invalid);
+        assert!(current.validate().is_err());
+    }
 }
 
 async fn send(directory: &Path, token: Option<&str>, payload: &BrowserPayload) -> Value {
@@ -171,6 +200,7 @@ async fn native_host_relay_overwrites_page_supplied_browser_identity() {
             .await
             .unwrap();
     let mut value = serde_json::to_value(payload()).unwrap();
+    value["documentURL"] = json!("https://example.com/current?section=2#fragment");
     value["bundleID"] = json!("malicious page identity");
     let registration = HostRegistration {
         browser: BrowserKind::Edge,
@@ -182,6 +212,14 @@ async fn native_host_relay_overwrites_page_supplied_browser_identity() {
     let task = tokio::task::spawn_blocking(move || relay_native_message(value, &registration));
     let received = rx.recv().await.unwrap();
     assert_eq!(received.payload.browser_id, BrowserKind::Edge.identity());
+    assert_eq!(
+        received.payload.document_url.as_deref(),
+        Some("https://example.com/current?section=2#fragment")
+    );
+    assert_eq!(
+        received.payload.reference.url,
+        "https://example.com/article"
+    );
     received.try_admit().unwrap();
     received.reply.send(Ok(())).unwrap();
     assert_eq!(task.await.unwrap().unwrap()["ok"], "true");
@@ -220,6 +258,8 @@ async fn queued_browser_request_expires_with_its_owned_relay_and_fresh_request_s
         .unwrap()
         .unwrap();
     assert!(!queued.reply.is_closed());
+    let preparation = queued.preparation_token();
+    assert!(!preparation.is_cancelled());
     let mut bytes = Vec::new();
     tokio::time::timeout(Duration::from_secs(1), socket.read_to_end(&mut bytes))
         .await
@@ -227,6 +267,7 @@ async fn queued_browser_request_expires_with_its_owned_relay_and_fresh_request_s
         .unwrap();
     assert!(bytes.is_empty());
     assert!(queued.reply.is_closed());
+    assert!(preparation.is_cancelled());
     assert!(queued.try_admit().unwrap_err().contains("expired"));
     assert!(!queued.admission.accepted());
     let consumer = tokio::spawn(async move {
@@ -250,6 +291,7 @@ fn browser_admission_checks_deadline_even_with_live_reply_and_is_claimed_once() 
                 admission: Arc::new(BrowserAdmission {
                     deadline,
                     state: AdmissionMutex::new(AdmissionState::Pending),
+                    cancel: CancellationToken::new(),
                 }),
             },
             receiver,

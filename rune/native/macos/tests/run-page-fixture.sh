@@ -13,3 +13,5 @@ xcrun swiftc -parse-as-library -O -target "$fixture_arch-apple-macosx14.0" \
   -o target/native-tests/PageFixture
 target/native-tests/PageFixture
 bash native/macos/tests/run-browser-target-fixture.sh
+bash native/macos/tests/run-browser-page-fixture.sh
+bash native/macos/tests/run-library-search-fixture.sh

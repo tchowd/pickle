@@ -17,8 +17,8 @@ fn entry(name: &str) -> Entry {
 
 fn loaded(repo: &Repository) -> AppState {
     AppState {
-        entries: repo.history().unwrap(),
-        bookmarks: repo.bookmarks().unwrap(),
+        entries: repo.history().unwrap().into(),
+        bookmarks: repo.bookmarks().unwrap().into(),
         settings: Settings {
             history_enabled: true,
             ..Settings::default()

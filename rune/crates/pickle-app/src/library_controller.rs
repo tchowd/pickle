@@ -77,7 +77,7 @@ impl Reservation {
 #[derive(Default)]
 pub struct LibraryState {
     pub(crate) operations: [Option<uuid::Uuid>; 2],
-    delete_snapshot: Option<Vec<Entry>>,
+    delete_snapshot: Option<crate::library_search::EntryStore>,
     tails: [Option<Arc<Completion>>; 2],
     queued_history: usize,
     notices: [Option<String>; 2],
@@ -86,7 +86,7 @@ pub struct LibraryState {
 pub(crate) enum LibraryOperation {
     Append(Box<Entry>),
     Remove(String),
-    RemoveAll(Vec<Entry>),
+    RemoveAll(crate::library_search::EntryStore),
     Reload,
 }
 
@@ -159,7 +159,11 @@ impl AppState {
         if !self.library_writable(bookmark) || self.library_entries(bookmark).is_empty() {
             return;
         }
-        self.library_state.delete_snapshot = Some(self.library_entries(bookmark).to_vec());
+        self.library_state.delete_snapshot = Some(if bookmark {
+            self.bookmarks.clone()
+        } else {
+            self.entries.clone()
+        });
         self.library_delete_confirmation = Some(bookmark);
     }
     pub fn cancel_remove_all(&mut self) {
@@ -356,10 +360,12 @@ impl AppState {
                 if changed && self.library_delete_confirmation == Some(bookmark) {
                     self.cancel_remove_all();
                 }
-                if bookmark {
-                    self.bookmarks = entries;
-                } else {
-                    self.entries = entries;
+                if changed {
+                    if bookmark {
+                        self.bookmarks = entries.into();
+                    } else {
+                        self.entries = entries.into();
+                    }
                 }
                 if reload {
                     if (self.library_errors[index].is_some()
@@ -391,6 +397,7 @@ impl AppState {
         {
             self.library_notice(bookmark, notice.into());
         }
+        self.refresh_library_search();
     }
     pub(super) fn import_library_legacy(&mut self) {
         if !self.library_writable(false) || !self.library_writable(true) {

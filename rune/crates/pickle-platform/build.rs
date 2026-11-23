@@ -22,6 +22,8 @@ fn main() {
         ])
         .arg("../../native/macos/PickleBridge.swift")
         .arg("../../native/macos/PickleBrowserTarget.swift")
+        .arg("../../native/macos/PickleBrowserPage.swift")
+        .arg("../../native/macos/PickleLibrarySearch.swift")
         .arg("../../native/macos/PickleAudio.swift")
         .arg("../../native/macos/PickleInvocation.swift")
         .arg("../../native/macos/PickleWindow.swift")
@@ -57,6 +59,8 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleAudio.swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleBrowserTarget.swift");
+    println!("cargo:rerun-if-changed=../../native/macos/PickleBrowserPage.swift");
+    println!("cargo:rerun-if-changed=../../native/macos/PickleLibrarySearch.swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleInvocation.swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleWindow.swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleLaunch.swift");

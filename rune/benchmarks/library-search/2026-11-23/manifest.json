@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "date": "2026-11-23",
+  "environment": {
+    "cpu": "Apple M4 Max",
+    "memory_bytes": 68719476736,
+    "os": "macOS 26.6.2",
+    "os_build": "25G83",
+    "architecture": "arm64"
+  },
+  "reports_sha256": {
+    "baseline-lowercase.json": "57de017e2c0e8cc6c1d5a1876a582bc286536141fc0d379e6b8f2c5251431d1f",
+    "native-original-order.json": "4d7bb77859c5e142740ae24d12856c27da60bf148df20ddb128d439f31044bf6",
+    "native-short-fields-first.json": "754f4801d8d80f1a4121445d73d1b552d9d1ca26505e70c8c91dbe6e5a4fc99d",
+    "source-manifest.json": "c142032a0e11cbf26eda0fc171e915997c08c7b0ea548834223a8bd0c9008504"
+  },
+  "scope": "Synthetic CPU/retained-tree observations on one development machine; no native input, GPU presentation, real AppHandle queue delay or peak RSS measured. Early dirty source snapshots were not retained. Final compiled-source hashes are retained and checked against source-manifest.json."
+}

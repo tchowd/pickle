@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 pub struct ContextState {
     pub id: uuid::Uuid,
     pub browser_attempt: Option<uuid::Uuid>,
+    pub browser_preparation: Option<CancellationToken>,
     pub cancel: CancellationToken,
     pub pending: usize,
     pub action: Option<Pending>,
@@ -22,6 +23,7 @@ impl Default for ContextState {
         Self {
             id: uuid::Uuid::new_v4(),
             browser_attempt: None,
+            browser_preparation: None,
             cancel: CancellationToken::new(),
             pending: 0,
             action: None,
@@ -38,6 +40,9 @@ impl Default for ContextState {
 impl Drop for ContextState {
     fn drop(&mut self) {
         self.cancel.cancel();
+        if let Some(cancel) = &self.browser_preparation {
+            cancel.cancel();
+        }
     }
 }
 impl ContextState {
@@ -46,6 +51,9 @@ impl ContextState {
         self.cancel = CancellationToken::new();
         self.id = uuid::Uuid::new_v4();
         self.browser_attempt = None;
+        if let Some(cancel) = self.browser_preparation.take() {
+            cancel.cancel();
+        }
         self.pending = 0;
         self.action = None;
     }
@@ -356,6 +364,7 @@ impl AppState {
         app_id: String,
         reference: WebReference,
         target: Result<CapturedSelection, pickle_platform::PlatformError>,
+        page: Option<CapturedPage>,
     ) {
         self.reset();
         let mut snapshot =
@@ -369,12 +378,22 @@ impl AppState {
         self.source = rune::TextEdit::new(&snapshot.text);
         self.snapshot = Some(snapshot);
         self.context_state.reference = Some(reference);
+        if self.capture_target.is_some() && self.settings.screen_context_enabled {
+            self.context_state.page = page;
+            self.context_state.page_image = self.context_state.page.as_ref().and_then(|page| {
+                self.image_cache
+                    .as_ref()
+                    .map(|cache| cache.load(page.jpeg.clone()))
+            });
+        }
         self.context_state.notice = Some(self.browser_capture_notice());
         self.panel = crate::controller::Panel::Choosing;
     }
     fn browser_capture_notice(&self) -> String {
         let mut notice = "Browser text is ready.".to_owned();
-        if self.settings.screen_context_enabled {
+        if self.context_state.page.is_some() {
+            notice.push_str(" Screen text was captured from the browser window and may contain recognition errors.");
+        } else if self.settings.screen_context_enabled {
             notice.push_str(" Screen context is unavailable for this capture. Select text on that page and invoke Pickle's shortcut to try screen capture.");
         }
         notice.push_str(if self.capture_target.is_some() {

@@ -150,6 +150,7 @@ pub fn setup(s: &mut AppState, waker: rune::Waker) {
                 }
                 PlatformEvent::Reopen | PlatformEvent::Invoke | PlatformEvent::AutomaticInvoke => {}
             }
+            s.resume_library_search();
             if let Some(handle) = &s.handle {
                 handle.open();
             }
@@ -223,14 +224,35 @@ fn prepare_browser_request(
             return;
         }
     };
-    let cancel = services.shutdown.child_token();
+    let shutdown = services.shutdown.child_token();
+    let cancel = state
+        .context_state
+        .browser_preparation
+        .as_ref()
+        .expect("staged browser preparation")
+        .clone();
     let expected = request.payload.browser_id.clone();
+    let document_url = request.payload.document_url.clone();
+    let include_screen = state.settings.screen_context_enabled;
     services.runtime.spawn(async move {
-        let target = tokio::select! {
+        let preparation = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {cancel.cancel();return;},
             _ = cancel.cancelled() => return,
-            target = resolve_browser_target(move || pickle_platform::capture_browser_target(&expected)) => target,
+            preparation = async {
+                let target = resolve_browser_target(move || pickle_platform::capture_browser_target(&expected)).await;
+                let budget = request.remaining_budget().saturating_sub(std::time::Duration::from_millis(200)).min(std::time::Duration::from_secs(2));
+                let page = match (&target,document_url) {
+                    (Ok(target),Some(url)) if include_screen && !budget.is_zero() => {
+                        let target=target.clone();let worker_cancel=cancel.child_token();
+                        prepare_browser_page(worker_cancel,budget,move |cancel| pickle_platform::capture_browser_page(&target,&url,cancel)).await
+                    },
+                    _ => None,
+                };
+                BrowserPreparation{target,page}
+            } => preparation,
         };
-        handle.update(move |state, tx| complete_browser_request(state, request, target, attempt, tx));
+        handle.update(move |state, tx| complete_browser_request(state, request, preparation, attempt, tx));
     });
 }
 
@@ -250,11 +272,52 @@ fn stage_browser_intent(
         return Err("This browser capture expired. Send it again from the browser.");
     }
     let id = uuid::Uuid::new_v4();
+    if let Some(cancel) = state.context_state.browser_preparation.take() {
+        cancel.cancel();
+    }
+    state.context_state.browser_preparation = Some(request.preparation_token());
     state.context_state.browser_attempt = Some(id);
     Ok(BrowserAttempt {
         revision: state.revision,
         id,
     })
+}
+
+struct BrowserPreparation {
+    target: Result<pickle_platform::CapturedSelection, pickle_platform::PlatformError>,
+    page: Option<pickle_platform::CapturedPage>,
+}
+impl From<Result<pickle_platform::CapturedSelection, pickle_platform::PlatformError>>
+    for BrowserPreparation
+{
+    fn from(
+        target: Result<pickle_platform::CapturedSelection, pickle_platform::PlatformError>,
+    ) -> Self {
+        Self { target, page: None }
+    }
+}
+async fn prepare_browser_page(
+    cancel: tokio_util::sync::CancellationToken,
+    budget: std::time::Duration,
+    capture: impl FnOnce(
+        tokio_util::sync::CancellationToken,
+    ) -> Result<pickle_platform::CapturedPage, pickle_platform::PlatformError>
+    + Send
+    + 'static,
+) -> Option<pickle_platform::CapturedPage> {
+    struct CancelOnDrop(tokio_util::sync::CancellationToken);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            self.0.cancel();
+        }
+    }
+    let _cleanup = CancelOnDrop(cancel.clone());
+    let work = tokio::task::spawn_blocking(move || capture(cancel));
+    tokio::time::timeout(budget, work)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .and_then(Result::ok)
 }
 
 async fn resolve_browser_target(
@@ -273,7 +336,7 @@ async fn resolve_browser_target(
 fn complete_browser_request(
     state: &mut AppState,
     request: pickle_providers::browser::BrowserRequest,
-    target: Result<pickle_platform::CapturedSelection, pickle_platform::PlatformError>,
+    preparation: impl Into<BrowserPreparation>,
     attempt: BrowserAttempt,
     tx: &mut rune::Tx,
 ) {
@@ -288,6 +351,17 @@ fn complete_browser_request(
         let _ = request.reply.send(Err(reason.into()));
         return;
     }
+    if state
+        .context_state
+        .browser_preparation
+        .as_ref()
+        .is_none_or(|cancel| cancel.is_cancelled())
+    {
+        let _ = request.reply.send(Err(
+            "The browser capture was cancelled. Send it again.".into()
+        ));
+        return;
+    }
     // This is the atomic, monotonic admission boundary immediately before any
     // session mutation or focus change, after potentially delayed OS work.
     if let Err(error) = request.try_admit() {
@@ -295,11 +369,15 @@ fn complete_browser_request(
         return;
     }
     let payload = request.payload;
+    let BrowserPreparation { target, page } = preparation.into();
+    let page =
+        page.filter(|_| state.settings.screen_context_enabled && payload.document_url.is_some());
     state.reference_from_browser(
         payload.selection,
         payload.browser_id,
         payload.reference,
         target,
+        page,
     );
     state.expand(tx, 360.0);
     if let Some(handle) = &state.handle {

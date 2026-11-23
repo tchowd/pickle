@@ -43,6 +43,34 @@ other playing tabs. No microphone or whole-system loopback fallback is used.
 - Native failure messages are bounded static descriptions rather than raw provider,
   operating-system, or process output.
 
+## Library collation and conditional browser capture
+
+`LibrarySearchIndex` retains separate immutable text fields and is constructed and
+queried on a worker. Mac calls the original application's Foundation
+`localizedCaseInsensitiveContains`; Windows calls
+[`FindNLSStringEx`](https://learn.microsoft.com/en-us/windows/win32/api/winnls/nf-winnls-findnlsstringex)
+with linguistic case flags and the current user locale. Windows NLS equivalence
+is not a promise of identical Foundation behavior. Native errors and changed
+locale tokens fail the whole result, never silently select a simpler comparison.
+Row/byte batching targets bound routine cancellation intervals without truncating
+legal long fields or queries; one native comparison remains synchronous.
+
+`capture_browser_page` accepts an already resolved browser source and ephemeral
+exact document URL. It refuses metadata/URL mismatches and observes native window
+and document identity immediately before and after capture. On Mac it reads only
+the sole exposed top-level AXWebArea URL, correlating the public AX window frame
+with one eligible CGWindowID. On Windows it reads only the sole visible Document
+whose Chromium `IsWebContentRoot` custom property is true, using its ValuePattern.
+Address bars, links and document descendants are excluded. Missing permissions or
+Windows package identity return a text-only fallback without prompts.
+
+These checks are observational: same-document mutation, navigation away and back,
+or native identity reuse cannot be made atomic with an OS screenshot. They do not
+establish extension tab identity. Windows uses a separate single-flight MTA thread
+with a bounded caller wait; timed-out native work retains admission until it
+finishes. Mac similarly holds async admission until the task actually finishes.
+Synthetic native fixtures and actual-browser acceptance are separate evidence.
+
 ## Invocation configuration and automatic chooser
 
 `NativeShell::configure_invocation(InvocationConfig)` applies a conventional shortcut,

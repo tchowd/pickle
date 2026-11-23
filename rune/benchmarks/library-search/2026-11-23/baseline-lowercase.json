@@ -1,0 +1,1230 @@
+{
+  "architecture": "aarch64",
+  "available_parallelism": 16,
+  "build_reported_commit": "",
+  "compiled_storage_source_sha256": "036e204fca871bfb095a7bef406ab920e3ab5eba0dd88c997d470c074fbbf55c",
+  "compiled_view_source_sha256": "2e88e29e7af1ebd527af90c43ee96c746adeaacd696a57326e7f137f0e3d9e4c",
+  "configuration": "release",
+  "fixture": {
+    "answer_bytes_per_entry": 12000,
+    "combined_encoded_pretty_archive_bytes": 31418468,
+    "estimated_owned_entry_heap_bytes": 31464000,
+    "history_encoded_pretty_archive_bytes": 26182034,
+    "history_entries": 1000,
+    "memory_estimate_scope": "Vec<Entry> allocation plus owned String capacities only; excludes allocator overhead, temporary lowercase strings, Runtime/font caches, process RSS and GPU memory",
+    "passage_bytes_per_entry": 12000,
+    "saved_encoded_pretty_archive_bytes": 5236434,
+    "saved_entries": 200
+  },
+  "interpretation": "Timing completion is not Unicode correctness. Desired-equivalence misses are reported separately; no hardware-dependent performance pass threshold or frame-rate guarantee.",
+  "native_window": false,
+  "os": "macos",
+  "preparation_ms": 10.946124999999999,
+  "provider_requests": 0,
+  "repository_reads": 0,
+  "runtime": {
+    "cold_runtime_and_first_frame_ms": 17.260958,
+    "method": "Runtime::update(query/state) plus Runtime::frame; CPU retained-tree layout/instances, no GPU submission or native input",
+    "settle_frames_excluded_from_query_timing": 60,
+    "stores": [
+      {
+        "queries": [
+          {
+            "first_frame": {
+              "p50_ms": 0.824,
+              "p95_ms": 1.030459,
+              "samples": 5,
+              "total_ms": 4.328875,
+              "worst_ms": 1.030459
+            },
+            "observed_matches": 1000,
+            "query": "empty_whitespace",
+            "query_transition": {
+              "p50_ms": 0.824625,
+              "p95_ms": 1.052917,
+              "samples": 5,
+              "total_ms": 4.354042,
+              "worst_ms": 1.052917
+            },
+            "rendered_cards": 20,
+            "unchanged_frame": {
+              "p50_ms": 0.033583,
+              "p95_ms": 0.03808400000000001,
+              "samples": 5,
+              "total_ms": 0.173208,
+              "worst_ms": 0.03808400000000001
+            },
+            "update": {
+              "p50_ms": 0.0005,
+              "p95_ms": 0.022208000000000002,
+              "samples": 5,
+              "total_ms": 0.024292000000000005,
+              "worst_ms": 0.022208000000000002
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 12.832667,
+              "p95_ms": 12.976166000000001,
+              "samples": 5,
+              "total_ms": 64.222667,
+              "worst_ms": 12.976166000000001
+            },
+            "observed_matches": 1000,
+            "query": "source_tail_all",
+            "query_transition": {
+              "p50_ms": 12.833874999999999,
+              "p95_ms": 12.979790999999999,
+              "samples": 5,
+              "total_ms": 64.230291,
+              "worst_ms": 12.979790999999999
+            },
+            "rendered_cards": 20,
+            "unchanged_frame": {
+              "p50_ms": 0.040208,
+              "p95_ms": 0.091709,
+              "samples": 5,
+              "total_ms": 0.242375,
+              "worst_ms": 0.091709
+            },
+            "update": {
+              "p50_ms": 0.00075,
+              "p95_ms": 0.0011250000000000001,
+              "samples": 5,
+              "total_ms": 0.004,
+              "worst_ms": 0.0011250000000000001
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 25.591915999999998,
+              "p95_ms": 27.277458,
+              "samples": 5,
+              "total_ms": 130.15625,
+              "worst_ms": 27.277458
+            },
+            "observed_matches": 1,
+            "query": "answer_tail_one",
+            "query_transition": {
+              "p50_ms": 25.593958,
+              "p95_ms": 27.279208,
+              "samples": 5,
+              "total_ms": 130.165874,
+              "worst_ms": 27.279208
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.136375,
+              "p95_ms": 0.166708,
+              "samples": 5,
+              "total_ms": 0.70275,
+              "worst_ms": 0.166708
+            },
+            "update": {
+              "p50_ms": 0.001291,
+              "p95_ms": 0.002458,
+              "samples": 5,
+              "total_ms": 0.007999,
+              "worst_ms": 0.002458
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 25.435541999999998,
+              "p95_ms": 25.538458,
+              "samples": 5,
+              "total_ms": 127.22666699999999,
+              "worst_ms": 25.538458
+            },
+            "observed_matches": 1,
+            "query": "question_one",
+            "query_transition": {
+              "p50_ms": 25.436125,
+              "p95_ms": 25.540292,
+              "samples": 5,
+              "total_ms": 127.232709,
+              "worst_ms": 25.540292
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.010792,
+              "p95_ms": 0.013208,
+              "samples": 5,
+              "total_ms": 0.05641700000000001,
+              "worst_ms": 0.013208
+            },
+            "update": {
+              "p50_ms": 0.000875,
+              "p95_ms": 0.001458,
+              "samples": 5,
+              "total_ms": 0.004792,
+              "worst_ms": 0.001458
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 25.352875,
+              "p95_ms": 25.497374999999998,
+              "samples": 5,
+              "total_ms": 126.95191700000001,
+              "worst_ms": 25.497374999999998
+            },
+            "observed_matches": 1,
+            "query": "reference_title_one",
+            "query_transition": {
+              "p50_ms": 25.354125000000003,
+              "p95_ms": 25.499333,
+              "samples": 5,
+              "total_ms": 126.958082,
+              "worst_ms": 25.499333
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.011125,
+              "p95_ms": 0.015209,
+              "samples": 5,
+              "total_ms": 0.060251,
+              "worst_ms": 0.015209
+            },
+            "update": {
+              "p50_ms": 0.000833,
+              "p95_ms": 0.00175,
+              "samples": 5,
+              "total_ms": 0.005125,
+              "worst_ms": 0.00175
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 25.276416,
+              "p95_ms": 25.505833,
+              "samples": 5,
+              "total_ms": 126.706417,
+              "worst_ms": 25.505833
+            },
+            "observed_matches": 1,
+            "query": "reference_url_one",
+            "query_transition": {
+              "p50_ms": 25.2775,
+              "p95_ms": 25.507125,
+              "samples": 5,
+              "total_ms": 126.712083,
+              "worst_ms": 25.507125
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.010166000000000001,
+              "p95_ms": 0.014292,
+              "samples": 5,
+              "total_ms": 0.054748000000000005,
+              "worst_ms": 0.014292
+            },
+            "update": {
+              "p50_ms": 0.000958,
+              "p95_ms": 0.001166,
+              "samples": 5,
+              "total_ms": 0.004332,
+              "worst_ms": 0.001166
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 12.465916,
+              "p95_ms": 12.981708999999999,
+              "samples": 5,
+              "total_ms": 62.65746,
+              "worst_ms": 12.981708999999999
+            },
+            "observed_matches": 1000,
+            "query": "unicode_case",
+            "query_transition": {
+              "p50_ms": 12.466415999999999,
+              "p95_ms": 12.982542,
+              "samples": 5,
+              "total_ms": 62.661249999999995,
+              "worst_ms": 12.982542
+            },
+            "rendered_cards": 20,
+            "unchanged_frame": {
+              "p50_ms": 0.215666,
+              "p95_ms": 0.22945800000000002,
+              "samples": 5,
+              "total_ms": 1.087291,
+              "worst_ms": 0.22945800000000002
+            },
+            "update": {
+              "p50_ms": 0.000625,
+              "p95_ms": 0.0006670000000000001,
+              "samples": 5,
+              "total_ms": 0.0029170000000000003,
+              "worst_ms": 0.0006670000000000001
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 25.559708,
+              "p95_ms": 25.904792,
+              "samples": 5,
+              "total_ms": 127.776875,
+              "worst_ms": 25.904792
+            },
+            "observed_matches": 0,
+            "query": "absent_full_scan",
+            "query_transition": {
+              "p50_ms": 25.5605,
+              "p95_ms": 25.907291999999998,
+              "samples": 5,
+              "total_ms": 127.783334,
+              "worst_ms": 25.907291999999998
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.07225,
+              "p95_ms": 0.154833,
+              "samples": 5,
+              "total_ms": 0.442166,
+              "worst_ms": 0.154833
+            },
+            "update": {
+              "p50_ms": 0.00075,
+              "p95_ms": 0.002042,
+              "samples": 5,
+              "total_ms": 0.004917,
+              "worst_ms": 0.002042
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 25.321209,
+              "p95_ms": 25.398792,
+              "samples": 5,
+              "total_ms": 126.661876,
+              "worst_ms": 25.398792
+            },
+            "observed_matches": 0,
+            "query": "canonical_cafe",
+            "query_transition": {
+              "p50_ms": 25.321916,
+              "p95_ms": 25.399542,
+              "samples": 5,
+              "total_ms": 126.66675000000001,
+              "worst_ms": 25.399542
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.005959,
+              "p95_ms": 0.006625,
+              "samples": 5,
+              "total_ms": 0.030126,
+              "worst_ms": 0.006625
+            },
+            "update": {
+              "p50_ms": 0.0006659999999999999,
+              "p95_ms": 0.000833,
+              "samples": 5,
+              "total_ms": 0.003457,
+              "worst_ms": 0.000833
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 27.026583,
+              "p95_ms": 27.59725,
+              "samples": 5,
+              "total_ms": 135.266124,
+              "worst_ms": 27.59725
+            },
+            "observed_matches": 0,
+            "query": "full_fold_sharp_s",
+            "query_transition": {
+              "p50_ms": 27.027167000000002,
+              "p95_ms": 27.598292,
+              "samples": 5,
+              "total_ms": 135.271209,
+              "worst_ms": 27.598292
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.006042,
+              "p95_ms": 0.008666,
+              "samples": 5,
+              "total_ms": 0.033624,
+              "worst_ms": 0.008666
+            },
+            "update": {
+              "p50_ms": 0.000833,
+              "p95_ms": 0.001041,
+              "samples": 5,
+              "total_ms": 0.0037489999999999997,
+              "worst_ms": 0.001041
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 25.444167,
+              "p95_ms": 25.473167,
+              "samples": 5,
+              "total_ms": 126.94321000000001,
+              "worst_ms": 25.473167
+            },
+            "observed_matches": 0,
+            "query": "full_fold_sigma",
+            "query_transition": {
+              "p50_ms": 25.445625,
+              "p95_ms": 25.473834,
+              "samples": 5,
+              "total_ms": 126.94808400000001,
+              "worst_ms": 25.473834
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.006416,
+              "p95_ms": 0.006667,
+              "samples": 5,
+              "total_ms": 0.030666000000000002,
+              "worst_ms": 0.006667
+            },
+            "update": {
+              "p50_ms": 0.000584,
+              "p95_ms": 0.0012079999999999999,
+              "samples": 5,
+              "total_ms": 0.0035009999999999993,
+              "worst_ms": 0.0012079999999999999
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 26.254583,
+              "p95_ms": 26.288334,
+              "samples": 5,
+              "total_ms": 131.255876,
+              "worst_ms": 26.288334
+            },
+            "observed_matches": 0,
+            "query": "canonical_reference_title",
+            "query_transition": {
+              "p50_ms": 26.255375,
+              "p95_ms": 26.288958,
+              "samples": 5,
+              "total_ms": 131.26412399999998,
+              "worst_ms": 26.288958
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.006417,
+              "p95_ms": 0.009792,
+              "samples": 5,
+              "total_ms": 0.034502,
+              "worst_ms": 0.009792
+            },
+            "update": {
+              "p50_ms": 0.0006670000000000001,
+              "p95_ms": 0.000959,
+              "samples": 5,
+              "total_ms": 0.0033350000000000003,
+              "worst_ms": 0.000959
+            }
+          }
+        ],
+        "store": "history"
+      },
+      {
+        "queries": [
+          {
+            "first_frame": {
+              "p50_ms": 0.890708,
+              "p95_ms": 1.6467910000000001,
+              "samples": 5,
+              "total_ms": 5.336790000000001,
+              "worst_ms": 1.6467910000000001
+            },
+            "observed_matches": 200,
+            "query": "empty_whitespace",
+            "query_transition": {
+              "p50_ms": 0.891167,
+              "p95_ms": 1.647542,
+              "samples": 5,
+              "total_ms": 5.339626,
+              "worst_ms": 1.647542
+            },
+            "rendered_cards": 20,
+            "unchanged_frame": {
+              "p50_ms": 0.192958,
+              "p95_ms": 0.230167,
+              "samples": 5,
+              "total_ms": 0.9228339999999999,
+              "worst_ms": 0.230167
+            },
+            "update": {
+              "p50_ms": 0.000417,
+              "p95_ms": 0.000583,
+              "samples": 5,
+              "total_ms": 0.0022080000000000003,
+              "worst_ms": 0.000583
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 3.195375,
+              "p95_ms": 3.230208,
+              "samples": 5,
+              "total_ms": 15.905374,
+              "worst_ms": 3.230208
+            },
+            "observed_matches": 200,
+            "query": "source_tail_all",
+            "query_transition": {
+              "p50_ms": 3.1958339999999996,
+              "p95_ms": 3.2308749999999997,
+              "samples": 5,
+              "total_ms": 15.908292,
+              "worst_ms": 3.2308749999999997
+            },
+            "rendered_cards": 20,
+            "unchanged_frame": {
+              "p50_ms": 0.034459000000000004,
+              "p95_ms": 0.038417,
+              "samples": 5,
+              "total_ms": 0.17820999999999998,
+              "worst_ms": 0.038417
+            },
+            "update": {
+              "p50_ms": 0.000458,
+              "p95_ms": 0.0005,
+              "samples": 5,
+              "total_ms": 0.0022510000000000004,
+              "worst_ms": 0.0005
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.271792,
+              "p95_ms": 5.387917,
+              "samples": 5,
+              "total_ms": 26.447249999999997,
+              "worst_ms": 5.387917
+            },
+            "observed_matches": 1,
+            "query": "answer_tail_one",
+            "query_transition": {
+              "p50_ms": 5.272542,
+              "p95_ms": 5.38875,
+              "samples": 5,
+              "total_ms": 26.450375,
+              "worst_ms": 5.38875
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.12808399999999998,
+              "p95_ms": 0.135791,
+              "samples": 5,
+              "total_ms": 0.648417,
+              "worst_ms": 0.135791
+            },
+            "update": {
+              "p50_ms": 0.000417,
+              "p95_ms": 0.000542,
+              "samples": 5,
+              "total_ms": 0.002167,
+              "worst_ms": 0.000542
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.139083,
+              "p95_ms": 5.157458,
+              "samples": 5,
+              "total_ms": 25.699874,
+              "worst_ms": 5.157458
+            },
+            "observed_matches": 1,
+            "query": "question_one",
+            "query_transition": {
+              "p50_ms": 5.1395,
+              "p95_ms": 5.158125,
+              "samples": 5,
+              "total_ms": 25.702292,
+              "worst_ms": 5.158125
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.008624999999999999,
+              "p95_ms": 0.008749999999999999,
+              "samples": 5,
+              "total_ms": 0.043166,
+              "worst_ms": 0.008749999999999999
+            },
+            "update": {
+              "p50_ms": 0.00033299999999999996,
+              "p95_ms": 0.000417,
+              "samples": 5,
+              "total_ms": 0.0017499999999999998,
+              "worst_ms": 0.000417
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.128458,
+              "p95_ms": 5.167292000000001,
+              "samples": 5,
+              "total_ms": 25.681917,
+              "worst_ms": 5.167292000000001
+            },
+            "observed_matches": 1,
+            "query": "reference_title_one",
+            "query_transition": {
+              "p50_ms": 5.128917,
+              "p95_ms": 5.167833,
+              "samples": 5,
+              "total_ms": 25.68425,
+              "worst_ms": 5.167833
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.008583,
+              "p95_ms": 0.008708,
+              "samples": 5,
+              "total_ms": 0.042998,
+              "worst_ms": 0.008708
+            },
+            "update": {
+              "p50_ms": 0.00033299999999999996,
+              "p95_ms": 0.000375,
+              "samples": 5,
+              "total_ms": 0.001666,
+              "worst_ms": 0.000375
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.157916999999999,
+              "p95_ms": 5.163250000000001,
+              "samples": 5,
+              "total_ms": 25.762916,
+              "worst_ms": 5.163250000000001
+            },
+            "observed_matches": 1,
+            "query": "reference_url_one",
+            "query_transition": {
+              "p50_ms": 5.158417,
+              "p95_ms": 5.163667,
+              "samples": 5,
+              "total_ms": 25.765376000000003,
+              "worst_ms": 5.163667
+            },
+            "rendered_cards": 1,
+            "unchanged_frame": {
+              "p50_ms": 0.008667,
+              "p95_ms": 0.008957999999999999,
+              "samples": 5,
+              "total_ms": 0.043542,
+              "worst_ms": 0.008957999999999999
+            },
+            "update": {
+              "p50_ms": 0.000334,
+              "p95_ms": 0.000417,
+              "samples": 5,
+              "total_ms": 0.0017919999999999998,
+              "worst_ms": 0.000417
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 3.247333,
+              "p95_ms": 3.684708,
+              "samples": 5,
+              "total_ms": 16.679332000000002,
+              "worst_ms": 3.684708
+            },
+            "observed_matches": 200,
+            "query": "unicode_case",
+            "query_transition": {
+              "p50_ms": 3.247792,
+              "p95_ms": 3.685333,
+              "samples": 5,
+              "total_ms": 16.682291,
+              "worst_ms": 3.685333
+            },
+            "rendered_cards": 20,
+            "unchanged_frame": {
+              "p50_ms": 0.207333,
+              "p95_ms": 0.21125000000000002,
+              "samples": 5,
+              "total_ms": 1.042333,
+              "worst_ms": 0.21125000000000002
+            },
+            "update": {
+              "p50_ms": 0.00041600000000000003,
+              "p95_ms": 0.0005,
+              "samples": 5,
+              "total_ms": 0.002124,
+              "worst_ms": 0.0005
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.159917,
+              "p95_ms": 5.2373330000000005,
+              "samples": 5,
+              "total_ms": 25.884,
+              "worst_ms": 5.2373330000000005
+            },
+            "observed_matches": 0,
+            "query": "absent_full_scan",
+            "query_transition": {
+              "p50_ms": 5.160375,
+              "p95_ms": 5.238208,
+              "samples": 5,
+              "total_ms": 25.887,
+              "worst_ms": 5.238208
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.07125,
+              "p95_ms": 0.072875,
+              "samples": 5,
+              "total_ms": 0.355709,
+              "worst_ms": 0.072875
+            },
+            "update": {
+              "p50_ms": 0.000375,
+              "p95_ms": 0.000625,
+              "samples": 5,
+              "total_ms": 0.002166,
+              "worst_ms": 0.000625
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.096333,
+              "p95_ms": 5.111375,
+              "samples": 5,
+              "total_ms": 25.490791,
+              "worst_ms": 5.111375
+            },
+            "observed_matches": 0,
+            "query": "canonical_cafe",
+            "query_transition": {
+              "p50_ms": 5.096792,
+              "p95_ms": 5.111958,
+              "samples": 5,
+              "total_ms": 25.496042000000003,
+              "worst_ms": 5.111958
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.004667,
+              "p95_ms": 0.0053750000000000004,
+              "samples": 5,
+              "total_ms": 0.023917,
+              "worst_ms": 0.0053750000000000004
+            },
+            "update": {
+              "p50_ms": 0.000375,
+              "p95_ms": 0.003,
+              "samples": 5,
+              "total_ms": 0.004457,
+              "worst_ms": 0.003
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.391083,
+              "p95_ms": 5.405959,
+              "samples": 5,
+              "total_ms": 26.944249999999997,
+              "worst_ms": 5.405959
+            },
+            "observed_matches": 0,
+            "query": "full_fold_sharp_s",
+            "query_transition": {
+              "p50_ms": 5.3915,
+              "p95_ms": 5.406416,
+              "samples": 5,
+              "total_ms": 26.949291,
+              "worst_ms": 5.406416
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.004583,
+              "p95_ms": 0.0047079999999999995,
+              "samples": 5,
+              "total_ms": 0.023082000000000002,
+              "worst_ms": 0.0047079999999999995
+            },
+            "update": {
+              "p50_ms": 0.00033299999999999996,
+              "p95_ms": 0.0030410000000000003,
+              "samples": 5,
+              "total_ms": 0.004332,
+              "worst_ms": 0.0030410000000000003
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.103833000000001,
+              "p95_ms": 5.20875,
+              "samples": 5,
+              "total_ms": 25.619374999999998,
+              "worst_ms": 5.20875
+            },
+            "observed_matches": 0,
+            "query": "full_fold_sigma",
+            "query_transition": {
+              "p50_ms": 5.104333,
+              "p95_ms": 5.209709,
+              "samples": 5,
+              "total_ms": 25.622042,
+              "worst_ms": 5.209709
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.00475,
+              "p95_ms": 0.0085,
+              "samples": 5,
+              "total_ms": 0.027292,
+              "worst_ms": 0.0085
+            },
+            "update": {
+              "p50_ms": 0.000334,
+              "p95_ms": 0.000584,
+              "samples": 5,
+              "total_ms": 0.0018769999999999998,
+              "worst_ms": 0.000584
+            }
+          },
+          {
+            "first_frame": {
+              "p50_ms": 5.304416,
+              "p95_ms": 5.331542,
+              "samples": 5,
+              "total_ms": 26.37975,
+              "worst_ms": 5.331542
+            },
+            "observed_matches": 0,
+            "query": "canonical_reference_title",
+            "query_transition": {
+              "p50_ms": 5.304875,
+              "p95_ms": 5.332,
+              "samples": 5,
+              "total_ms": 26.382292,
+              "worst_ms": 5.332
+            },
+            "rendered_cards": 0,
+            "unchanged_frame": {
+              "p50_ms": 0.0047079999999999995,
+              "p95_ms": 0.00475,
+              "samples": 5,
+              "total_ms": 0.023457,
+              "worst_ms": 0.00475
+            },
+            "update": {
+              "p50_ms": 0.000375,
+              "p95_ms": 0.000458,
+              "samples": 5,
+              "total_ms": 0.0019159999999999997,
+              "worst_ms": 0.000458
+            }
+          }
+        ],
+        "store": "saved"
+      }
+    ],
+    "viewport_logical": [
+      560,
+      900
+    ]
+  },
+  "runtime_wall_ms": 1949.052375,
+  "schema": 1,
+  "search": {
+    "history": {
+      "aggregate": {
+        "p50_ms": 25.246042,
+        "p95_ms": 26.615040999999998,
+        "samples": 180,
+        "total_ms": 3785.8370440000012,
+        "worst_ms": 27.636417
+      },
+      "method": "actual Entry::matches over every complete entry; no mirrored algorithm or cached index",
+      "queries": [
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1000,
+          "observed_matches": 1000,
+          "query": "empty_whitespace",
+          "query_text": " \t\n",
+          "timing": {
+            "p50_ms": 0.004958,
+            "p95_ms": 0.006,
+            "samples": 15,
+            "total_ms": 0.07604300000000001,
+            "worst_ms": 0.006
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1000,
+          "observed_matches": 1000,
+          "query": "source_tail_all",
+          "query_text": "SOURCE-END",
+          "timing": {
+            "p50_ms": 11.750709,
+            "p95_ms": 11.969667,
+            "samples": 15,
+            "total_ms": 175.83849999999995,
+            "worst_ms": 11.969667
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "answer_tail_one",
+          "query_text": "answer-end-0150",
+          "timing": {
+            "p50_ms": 25.278875,
+            "p95_ms": 25.706584,
+            "samples": 15,
+            "total_ms": 377.93170599999996,
+            "worst_ms": 25.706584
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "question_one",
+          "query_text": "question-0150",
+          "timing": {
+            "p50_ms": 25.320458000000002,
+            "p95_ms": 25.565375000000003,
+            "samples": 15,
+            "total_ms": 377.57929199999995,
+            "worst_ms": 25.565375000000003
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "reference_title_one",
+          "query_text": "title-0150",
+          "timing": {
+            "p50_ms": 25.27925,
+            "p95_ms": 25.525,
+            "samples": 15,
+            "total_ms": 377.030999,
+            "worst_ms": 25.525
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "reference_url_one",
+          "query_text": "/SOURCE/0150",
+          "timing": {
+            "p50_ms": 25.288708,
+            "p95_ms": 25.972166,
+            "samples": 15,
+            "total_ms": 378.175832,
+            "worst_ms": 25.972166
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1000,
+          "observed_matches": 1000,
+          "query": "unicode_case",
+          "query_text": " CAF\u00c9 \n",
+          "timing": {
+            "p50_ms": 11.4605,
+            "p95_ms": 11.821208,
+            "samples": 15,
+            "total_ms": 171.59074900000002,
+            "worst_ms": 11.821208
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 0,
+          "observed_matches": 0,
+          "query": "absent_full_scan",
+          "query_text": "NO-SUCH-BENCHMARK-TERM-zzz",
+          "timing": {
+            "p50_ms": 25.295166000000002,
+            "p95_ms": 25.753459,
+            "samples": 15,
+            "total_ms": 377.53679299999993,
+            "worst_ms": 25.753459
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 1000,
+          "observed_matches": 0,
+          "query": "canonical_cafe",
+          "query_text": "cafe\u0301",
+          "timing": {
+            "p50_ms": 25.2875,
+            "p95_ms": 25.941625,
+            "samples": 15,
+            "total_ms": 378.25695999999994,
+            "worst_ms": 25.941625
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 1000,
+          "observed_matches": 0,
+          "query": "full_fold_sharp_s",
+          "query_text": "STRASSE",
+          "timing": {
+            "p50_ms": 26.929584,
+            "p95_ms": 27.636417,
+            "samples": 15,
+            "total_ms": 403.09492,
+            "worst_ms": 27.636417
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 1000,
+          "observed_matches": 0,
+          "query": "full_fold_sigma",
+          "query_text": "\u03bf\u03c3",
+          "timing": {
+            "p50_ms": 25.254959,
+            "p95_ms": 25.71575,
+            "samples": 15,
+            "total_ms": 377.72404300000005,
+            "worst_ms": 25.71575
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 1000,
+          "observed_matches": 0,
+          "query": "canonical_reference_title",
+          "query_text": "e\u0301le\u0301phant",
+          "timing": {
+            "p50_ms": 26.142791,
+            "p95_ms": 26.615040999999998,
+            "samples": 15,
+            "total_ms": 391.0012070000001,
+            "worst_ms": 26.615040999999998
+          }
+        }
+      ]
+    },
+    "saved": {
+      "aggregate": {
+        "p50_ms": 5.057584,
+        "p95_ms": 5.402417,
+        "samples": 180,
+        "total_ms": 761.0736649999997,
+        "worst_ms": 5.451290999999999
+      },
+      "method": "actual Entry::matches over every complete entry; no mirrored algorithm or cached index",
+      "queries": [
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 200,
+          "observed_matches": 200,
+          "query": "empty_whitespace",
+          "query_text": " \t\n",
+          "timing": {
+            "p50_ms": 0.000959,
+            "p95_ms": 0.00125,
+            "samples": 15,
+            "total_ms": 0.015123000000000004,
+            "worst_ms": 0.00125
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 200,
+          "observed_matches": 200,
+          "query": "source_tail_all",
+          "query_text": "SOURCE-END",
+          "timing": {
+            "p50_ms": 2.3461250000000002,
+            "p95_ms": 2.403167,
+            "samples": 15,
+            "total_ms": 35.23321000000001,
+            "worst_ms": 2.403167
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "answer_tail_one",
+          "query_text": "answer-end-0150",
+          "timing": {
+            "p50_ms": 5.057584,
+            "p95_ms": 5.073958,
+            "samples": 15,
+            "total_ms": 75.87637500000001,
+            "worst_ms": 5.073958
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "question_one",
+          "query_text": "question-0150",
+          "timing": {
+            "p50_ms": 5.056,
+            "p95_ms": 5.153124999999999,
+            "samples": 15,
+            "total_ms": 75.931875,
+            "worst_ms": 5.153124999999999
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "reference_title_one",
+          "query_text": "title-0150",
+          "timing": {
+            "p50_ms": 5.052083,
+            "p95_ms": 5.144208,
+            "samples": 15,
+            "total_ms": 75.945875,
+            "worst_ms": 5.144208
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 1,
+          "observed_matches": 1,
+          "query": "reference_url_one",
+          "query_text": "/SOURCE/0150",
+          "timing": {
+            "p50_ms": 5.061583,
+            "p95_ms": 5.157916,
+            "samples": 15,
+            "total_ms": 76.13183299999999,
+            "worst_ms": 5.157916
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 200,
+          "observed_matches": 200,
+          "query": "unicode_case",
+          "query_text": " CAF\u00c9 \n",
+          "timing": {
+            "p50_ms": 2.291625,
+            "p95_ms": 2.340584,
+            "samples": 15,
+            "total_ms": 34.463668,
+            "worst_ms": 2.340584
+          }
+        },
+        {
+          "correctness_matches_desired": true,
+          "desired_equivalence_case": false,
+          "desired_matches": 0,
+          "observed_matches": 0,
+          "query": "absent_full_scan",
+          "query_text": "NO-SUCH-BENCHMARK-TERM-zzz",
+          "timing": {
+            "p50_ms": 5.059791,
+            "p95_ms": 5.138375,
+            "samples": 15,
+            "total_ms": 76.01195800000002,
+            "worst_ms": 5.138375
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 200,
+          "observed_matches": 0,
+          "query": "canonical_cafe",
+          "query_text": "cafe\u0301",
+          "timing": {
+            "p50_ms": 5.062958999999999,
+            "p95_ms": 5.090833,
+            "samples": 15,
+            "total_ms": 75.94533299999998,
+            "worst_ms": 5.090833
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 200,
+          "observed_matches": 0,
+          "query": "full_fold_sharp_s",
+          "query_text": "STRASSE",
+          "timing": {
+            "p50_ms": 5.406541,
+            "p95_ms": 5.451290999999999,
+            "samples": 15,
+            "total_ms": 81.091458,
+            "worst_ms": 5.451290999999999
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 200,
+          "observed_matches": 0,
+          "query": "full_fold_sigma",
+          "query_text": "\u03bf\u03c3",
+          "timing": {
+            "p50_ms": 5.061125,
+            "p95_ms": 5.1402920000000005,
+            "samples": 15,
+            "total_ms": 75.986916,
+            "worst_ms": 5.1402920000000005
+          }
+        },
+        {
+          "correctness_matches_desired": false,
+          "desired_equivalence_case": true,
+          "desired_matches": 200,
+          "observed_matches": 0,
+          "query": "canonical_reference_title",
+          "query_text": "e\u0301le\u0301phant",
+          "timing": {
+            "p50_ms": 5.2274579999999995,
+            "p95_ms": 5.294083,
+            "samples": 15,
+            "total_ms": 78.440041,
+            "worst_ms": 5.294083
+          }
+        }
+      ]
+    }
+  },
+  "search_wall_ms": 4845.976125,
+  "source_commit": "af73833206060c97516fa1cc09c5c550bf62f87f",
+  "test": "release-library-search-baseline",
+  "wall_ms": 6810.634583
+}

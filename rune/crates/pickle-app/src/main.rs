@@ -9,6 +9,7 @@ mod diagnostics;
 mod geometry_store;
 mod instance;
 mod invocation_ui;
+mod library_search;
 mod lifecycle;
 mod local_connection;
 mod maintenance;
@@ -109,11 +110,11 @@ fn main() {
                     Err(error) => startup_error = Some(error),
                 }
                 match repo.history() {
-                    Ok(entries) => initial.entries = entries,
+                    Ok(entries) => initial.entries = entries.into(),
                     Err(error) => initial.library_errors[0] = Some(error),
                 }
                 match repo.bookmarks() {
-                    Ok(entries) => initial.bookmarks = entries,
+                    Ok(entries) => initial.bookmarks = entries.into(),
                     Err(error) => initial.library_errors[1] = Some(error),
                 }
                 Some(Arc::new(repo))
@@ -170,6 +171,7 @@ fn main() {
         scenes: scenes::SCENES,
         setup: Some(shell::setup),
         on_key: Some(on_key),
+        poll: Some(library_search::poll),
         min_size: Some((480.0, 180.0)),
         ..AppSpec::new(
             "Pickle",
@@ -205,7 +207,10 @@ fn main() {
         std::thread::spawn(move || {
             while !shutdown.is_cancelled() {
                 match receiver.recv_timeout(std::time::Duration::from_millis(200)) {
-                    Ok(instance::InstanceEvent::Reopen) => handle.open(),
+                    Ok(instance::InstanceEvent::Reopen) => {
+                        handle.update(|state, _| state.resume_library_search());
+                        handle.open();
+                    }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(_) => break,
                 }
@@ -229,6 +234,7 @@ fn main() {
             s.cancel();
         })
         .on_reopen(|s, _, _| {
+            s.resume_library_search();
             s.geometry_close_prepared = false;
             // Rune deliberately leaves accessory apps/nonactivating panels out of its default reopen policy.
             if let Some(handle) = &s.handle {

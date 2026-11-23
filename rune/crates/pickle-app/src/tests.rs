@@ -173,8 +173,8 @@ mod reader_parity {
                 .collect();
             let state = AppState {
                 route: Route::Library(bookmarks),
-                entries: records.clone(),
-                bookmarks: records.clone(),
+                entries: records.clone().into(),
+                bookmarks: records.clone().into(),
                 library_page: 1,
                 ..AppState::default()
             };
@@ -217,7 +217,7 @@ mod reader_parity {
             .collect();
         let state = AppState {
             route: Route::Library(false),
-            entries: records,
+            entries: records.into(),
             library_page: 1,
             ..AppState::default()
         };
@@ -236,6 +236,10 @@ mod reader_parity {
         rt.frame(0.0);
         assert_eq!(rt.state.search.text, "fixed");
         assert_eq!(rt.state.library_page, 0);
+        rt.update(|state, _| {
+            state.complete_library_search_fixture(false);
+        });
+        rt.frame(0.0);
         assert!(rt.find("entry-search-0").is_some());
         assert!(rt.state.services.is_none());
     }
@@ -271,8 +275,8 @@ mod reader_parity {
                 rt.use_clipboard(&clipboard);
                 rt.update(|state, _| {
                     state.route = Route::Library(bookmarks);
-                    state.entries = vec![entry()];
-                    state.bookmarks = vec![entry()];
+                    state.entries = vec![entry()].into();
+                    state.bookmarks = vec![entry()].into();
                     state.library_selected = detail.then(|| "parity".into());
                 });
                 click(

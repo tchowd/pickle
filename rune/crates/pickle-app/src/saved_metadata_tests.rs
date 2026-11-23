@@ -130,8 +130,8 @@ fn state(entries: Vec<Entry>, bookmark: bool, detail: Option<String>) -> AppStat
     AppState {
         route: Route::Library(bookmark),
         library_selected: detail,
-        entries: if bookmark { vec![] } else { entries.clone() },
-        bookmarks: if bookmark { entries } else { vec![] },
+        entries: if bookmark { vec![] } else { entries.clone() }.into(),
+        bookmarks: if bookmark { entries } else { vec![] }.into(),
         ..AppState::default()
     }
 }

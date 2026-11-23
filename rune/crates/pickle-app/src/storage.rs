@@ -7,6 +7,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+#[path = "library_search_benchmark.rs"]
+mod library_search_benchmark;
+
 const MAX_ARCHIVE_BYTES: usize = 32_000_000;
 
 /// Count encoded bytes, including JSON escapes, before touching durable data.
@@ -256,11 +260,7 @@ impl Entry {
         }
         Ok(())
     }
-    pub fn matches(&self, query: &str) -> bool {
-        let q = query.trim().to_lowercase();
-        if q.is_empty() {
-            return true;
-        }
+    pub(crate) fn search_fields(&self) -> [&str; 6] {
         [
             self.passage.as_str(),
             self.answer.as_str(),
@@ -275,8 +275,22 @@ impl Entry {
                 .map(|reference| reference.url.as_str())
                 .unwrap_or_default(),
         ]
-        .iter()
-        .any(|text| text.to_lowercase().contains(&q))
+    }
+    #[cfg(test)]
+    pub fn matches(&self, query: &str) -> bool {
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let locale = pickle_platform::library_search_locale().expect("Native fixture locale");
+        let index =
+            pickle_platform::LibrarySearchIndex::new(&[self.search_fields().to_vec()], &cancel)
+                .expect("Native fixture index");
+        !index
+            .search(query, &locale, &cancel)
+            .expect("Native fixture search")
+            .is_empty()
     }
 }
 

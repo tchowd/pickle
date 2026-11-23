@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('browser-extension/extract.js','utf8');
-function extract(mode, {videos=[],rows=[],article='Article content',selection='',host='example.com'}={}) {
-  const context = {TextEncoder,location:{href:`https://${host}/watch`,protocol:'https:',hostname:host},getSelection:()=>selection,
-    Readability: class {parse(){return {textContent:article}}},
+function extract(mode, {videos=[],rows=[],article='Article content',selection='',host='example.com',href=`https://${host}/watch`}={}) {
+  const context = {TextEncoder,location:{href,protocol:'https:',hostname:host},getSelection:()=>selection,
+    Readability: class {parse(){return {textContent:article,url:'https://canonical.example/other'}}},
     document:{title:'Video title',cloneNode:()=>({querySelectorAll:()=>[],querySelector:()=>null}),querySelector:()=>null,
       querySelectorAll:selector=>selector==='video'?videos:rows}};
   vm.createContext(context);vm.runInContext(source,context);return context.pickleExtract(mode);
@@ -27,4 +27,28 @@ assert.match(extract('moment',{videos:[{...video,textTracks:[]}],rows,host:'www.
 assert.throws(()=>extract('moment',{videos:[{...video,textTracks:[]}],rows,host:'youtube.com.attacker.com'}),/No readable captions/);
 const longVideo = {...video,textTracks:[{kind:'captions',cues:[{startTime:0,endTime:2,text:'🌍'.repeat(8000)}]}]};
 assert.match(extract('video',{videos:[longVideo]}).reference.text,/Transcript excerpt only/);
+const exactURL = 'https://example.com/Path%2Fpart?q=Caf%C3%A9&b=2#route-one';
+for (const mode of ['article','moment','video']) {
+  const result = extract(mode,{videos:[video],href:exactURL});
+  assert.equal(result.documentURL,exactURL);
+  assert.equal(result.reference.url,exactURL);
+}
 console.log('PASS: video windows, transcript scope, unavailable captions, YouTube adapter, host boundary, Unicode limits');
+(async () => {
+  const background = fs.readFileSync('browser-extension/background.js','utf8');
+  for (const changed of [false,true]) {
+    let listener, native;
+    const result={selection:'Owned selection',documentURL:exactURL,reference:{url:'https://canonical.example/article',text:'Owned article'}};
+    const context={crypto:{randomUUID:()=> 'owned-capture-id'},chrome:{
+      tabs:{query:async()=>[{id:1,url:exactURL,incognito:false}],get:async()=>({url:changed?exactURL.replace('#route-one','#route-two'):exactURL})},
+      scripting:{executeScript:async request=>request.files?[]:[{result}]},
+      runtime:{id:'owned-extension',onMessage:{addListener:value=>listener=value},sendNativeMessage:async(_host,payload)=>{native=payload;return {ok:'true'}}},
+      commands:{onCommand:{addListener:()=>{}}},action:{setBadgeText:()=>{}}
+    }};
+    vm.createContext(context);vm.runInContext(background,context);
+    const reply=await new Promise(resolve=>listener({mode:'article'},{id:'owned-extension'},resolve));
+    if(changed){assert.match(reply.error,/page changed/);assert.equal(native,undefined);}
+    else {assert.equal(reply.ok,'true');assert.equal(native.documentURL,exactURL);assert.equal(native.reference.url,'https://canonical.example/article');}
+  }
+  console.log('PASS: exact ephemeral document URL, independent canonical reference, fragment navigation refusal');
+})().catch(error=>{console.error(error);process.exitCode=1});
