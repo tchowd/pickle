@@ -256,3 +256,23 @@ The new chooser was rendered headlessly and visually inspected with its full-sou
 
 
 The complete final local app suite passed **149 tests, zero failed, one ignored**, including fourteen new reader/context/library regressions. Workspace formatting and strict all-target app Clippy passed. Independent reviews found the preview-matching and unsent-term defects during development; both were fixed and rechecked before the batch was frozen. Updated native execution and full two-platform CI remain separate candidate checks.
+
+
+### Built candidate `d2f2ba3d86c9dd2292366d0973aee0dffc7eadd1`
+
+The optimized local development bundle was rebuilt from the clean committed checkout with that exact `PICKLE_BUILD_COMMIT`; the executable contains the matching commit identifier. Compilation and package inspection passed. The first local packaging invocation omitted the optional commit metadata and was replaced before native testing; its bytes are not the candidate recorded here.
+
+| Local candidate artifact | SHA-256 |
+|---|---|
+| `Pickle Rune.app/Contents/MacOS/PickleRune` | `c45ce8f16668875b40ca70be90c8c1f8bd4de98cf8b9df174c8d3949ca41c432` |
+| `PickleRune-macos.zip` | `76f523f6c2477d36ae62bc9873dec05726833b915e30a3a50bb71a9c27a70c87` |
+
+This candidate is ad hoc signed. It has not been restarted and exercised through the native UI because the Mac was locked at the attempted normal quit. Earlier native results remain attached to their original artifacts. Capture grants, the OS clipboard, native saved-data lifecycle and new word/clear controls are not claimed verified on these bytes.
+
+
+### Windows selection regression caught by candidate CI
+
+At `d2f2ba3`, [run 45107549644](https://github.com/tchowd/pickle/actions/runs/45107549644) failed the Windows desktop app suite in `selected_source_copies_and_explains_before_a_base_answer`: the pointer drag produced no selected text, and the test's selection unwrap failed. The other 145 Windows app tests passed, with one ignored. This was not counted as a Windows selection pass or dismissed because the local Mac test passed. The cause and a portable real selection regression must be verified before this candidate can inherit complete two-platform CI evidence.
+
+
+The fixture was subsequently corrected to set Rune's normalized primary-modifier flag on every platform, and to derive its drag endpoints from the Runtime's own shaped first-word range using the source font/style/scale. It now asserts the actual source hit, exact cursor endpoints, exact selected word **The**, identical in-memory Copy, and the matching Explain consent/source identity. This strengthens the selection requirement rather than skipping the Windows path. All twelve reader-parity tests and strict app Clippy passed locally. The old failure did not include geometry diagnostics, so the original guessed-coordinate cause is not claimed established before a Windows rerun; new failures include geometry, hit, selection-anchor and event evidence.

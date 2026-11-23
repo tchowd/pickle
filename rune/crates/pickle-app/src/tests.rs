@@ -138,7 +138,8 @@ mod reader_parity {
         rt.key(KeyEvent {
             key,
             mods: Mods {
-                cmd: cfg!(target_os = "macos"),
+                // Rune normalizes the primary modifier to `cmd` on every OS.
+                cmd: true,
                 ctrl: !cfg!(target_os = "macos"),
                 ..Mods::default()
             },
@@ -477,13 +478,56 @@ mod reader_parity {
             .into_iter()
             .find(|element| element.text.as_deref() == Some(crate::controller::SAMPLE))
             .unwrap();
-        let (x, y) = (source.rect[0] + 1.0, source.rect[1] + 10.0);
+        // Use the same font/style/scale as the source, rather than assuming
+        // macOS glyph advances or where a Windows font's first line sits.
+        let scale = rt.env.scale;
+        let layout = rt.text.layout_rich(
+            crate::controller::SAMPLE,
+            &[],
+            rune::tok::TextStyle::new(14.0, 400.0).lh(21.0),
+            scale,
+            Some(source.rect[2] * scale / source.scale),
+        );
+        let boxes = rune::text::range_boxes(&layout, 0, "The".len(), false);
+        assert_eq!(boxes.len(), 1, "The first word must occupy one shaped line");
+        let word = boxes[0].0;
+        let inset = (word.x1 - word.x0) * 0.01;
+        let word_y = ((word.y0 + word.y1) * 0.5) as f32;
+        let start_x = (word.x0 + inset) as f32;
+        let end_x = (word.x1 - inset) as f32;
+        assert_eq!(
+            rune::text::cursor_from_point(&layout, start_x, word_y).index(),
+            0
+        );
+        assert_eq!(
+            rune::text::cursor_from_point(&layout, end_x, word_y).index(),
+            3
+        );
+        let to_window = source.scale / scale;
+        let (x, end_x, y) = (
+            source.rect[0] + start_x * to_window,
+            source.rect[0] + end_x * to_window,
+            source.rect[1] + word_y * to_window,
+        );
+        assert_eq!(
+            rt.element_at(x, y).as_ref().map(|picked| picked.path()),
+            Some(source.path.as_str()),
+            "The shaped word point must hit the actual source text: {source:?} {word:?}"
+        );
         rt.pointer_down(x, y);
-        rt.pointer_move(x + 24.0, y);
-        rt.pointer_up(x + 24.0, y);
+        rt.pointer_move(end_x, y);
+        rt.pointer_up(end_x, y);
         rt.frame(0.0);
-        let selected = rt.selected_text().unwrap().trim().to_owned();
-        assert!(!selected.is_empty());
+        let selected = rt.selected_text();
+        assert_eq!(
+            selected.as_deref(),
+            Some("The"),
+            "Shaped source drag did not select its exact first word: source={source:?}, word={word:?}, points=({x},{y})..({end_x},{y}), anchor={:?}, hit={:?}, events={:?}",
+            rt.text_selection(),
+            rt.element_at(x, y),
+            rt.events
+        );
+        let selected = selected.unwrap();
         key(&mut rt, Key::Command('c'));
         assert_eq!(clipboard.text().unwrap().trim(), selected);
         let snapshot = rt.state.snapshot.clone();
