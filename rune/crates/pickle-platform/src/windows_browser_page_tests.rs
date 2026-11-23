@@ -12,6 +12,7 @@ use ::windows::{
 };
 use std::{
     cell::Cell,
+    io::Write,
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -20,6 +21,52 @@ use std::{
 
 const EXPECTED: &str = "https://example.invalid/Path%2Fpart?q=Caf%C3%A9&b=2#route-one";
 const COMMAND: u32 = WM_APP + 200;
+
+struct Trace {
+    path: PathBuf,
+    mode: &'static str,
+    stage: &'static str,
+}
+impl Trace {
+    fn new(artifacts: &Path) -> Self {
+        std::fs::create_dir_all(artifacts).unwrap();
+        let path = artifacts.join("windows-browser-page-native-smoke.log");
+        std::fs::write(&path, []).unwrap();
+        let mut trace = Self {
+            path,
+            mode: "fixture",
+            stage: "started",
+        };
+        trace.step("fixture", "started");
+        trace
+    }
+    fn append(&self, error: Option<&'static str>) -> std::io::Result<()> {
+        if std::fs::metadata(&self.path)?.len() > 16000 {
+            return Ok(());
+        }
+        let line = if let Some(error) = error {
+            format!("mode={} stage={} error={error}\n", self.mode, self.stage)
+        } else {
+            format!("mode={} stage={}\n", self.mode, self.stage)
+        };
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.path)?
+            .write_all(line.as_bytes())
+    }
+    fn step(&mut self, mode: &'static str, stage: &'static str) {
+        self.mode = mode;
+        self.stage = stage;
+        self.append(None).unwrap();
+    }
+}
+impl Drop for Trace {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let _ = self.append(Some("assertion-or-unavailable"));
+        }
+    }
+}
 
 struct Fixture {
     child: Child,
@@ -171,9 +218,34 @@ fn command(source: &CapturedSelection, code: usize) -> Result<usize, PlatformErr
     }
 }
 
+fn framework_path(path: &Path) -> PathBuf {
+    // Framework csc predates extended Win32 paths and can misparse mixed
+    // separators/parent components. Only an owned existing temp directory is
+    // canonicalized; use its normal drive/UNC form for every compiler argument.
+    let canonical = std::fs::canonicalize(path).unwrap();
+    let value = canonical.to_str().unwrap();
+    let plain = if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        value.strip_prefix(r"\\?\").unwrap_or(value).to_owned()
+    };
+    PathBuf::from(plain)
+}
+
 fn compile_provider(directory: &Path) -> PathBuf {
-    let framework = PathBuf::from(std::env::var_os("WINDIR").unwrap())
-        .join("Microsoft.NET/Framework64/v4.0.30319");
+    let directory = framework_path(directory);
+    let source = directory.join("BrowserDocumentFixture.cs");
+    // Embed only this checked-in synthetic fixture at Rust compile time. Runtime
+    // compilation no longer depends on repository cwd or slash interpretation.
+    std::fs::write(
+        &source,
+        include_bytes!("../../../native/windows/BrowserDocumentFixture.cs"),
+    )
+    .unwrap();
+    let framework = framework_path(
+        &PathBuf::from(std::env::var_os("WINDIR").unwrap())
+            .join("Microsoft.NET/Framework64/v4.0.30319"),
+    );
     let executable = directory.join("PickleDocumentFixture.exe");
     let mut compiler = Command::new(framework.join("csc.exe"));
     compiler
@@ -204,14 +276,7 @@ fn compile_provider(directory: &Path) -> PathBuf {
             framework.join("WPF").join(reference).display()
         ));
     }
-    let output = compiler
-        .arg(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../native/windows/BrowserDocumentFixture.cs"),
-        )
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let output = compiler.arg(source).stdin(Stdio::null()).output().unwrap();
     assert!(
         output.stdout.len() + output.stderr.len() < 16000,
         "Unexpected compiler output size"
@@ -225,7 +290,10 @@ fn compile_provider(directory: &Path) -> PathBuf {
     executable
 }
 
-fn verify(source: CapturedSelection, phase: &'static str) -> (bool, usize, usize) {
+fn verify(
+    source: CapturedSelection,
+    phase: &'static str,
+) -> Result<(bool, usize, usize), PlatformError> {
     let cancel = CancellationToken::new();
     let worker_cancel = cancel.clone();
     on_document_worker(cancel, move || {
@@ -264,7 +332,6 @@ fn verify(source: CapturedSelection, phase: &'static str) -> (bool, usize, usize
         );
         Ok((outcome.is_ok(), captured.get(), reads.get()))
     })
-    .unwrap()
 }
 
 fn wait_admission_recovery() {
@@ -293,13 +360,16 @@ fn owned_native_document_provider() {
     }
     let artifacts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts");
     let evidence = artifacts.join("windows-browser-page-native-smoke.json");
+    let mut trace = Trace::new(&artifacts);
     match std::fs::remove_file(&evidence) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => panic!("Could not remove previous synthetic document report"),
     }
     let directory = tempfile::tempdir().unwrap();
+    trace.step("fixture", "compiling");
     let executable = compile_provider(directory.path());
+    trace.step("fixture", "compiled");
     let mut case = 0;
     for (mode, phase, success, captures) in [
         ("stable", "stable", true, 1),
@@ -315,9 +385,18 @@ fn owned_native_document_provider() {
         ("stable", "after-navigation", false, 1),
         ("stable", "identity-change", false, 0),
     ] {
+        let trace_mode = if phase == "stable" { mode } else { phase };
+        trace.step(trace_mode, "launching");
         let fixture = Fixture::launch(&executable, directory.path(), mode, case);
+        trace.step(trace_mode, "ready");
         case += 1;
-        let outcome = verify(fixture.source.clone(), phase);
+        trace.step(trace_mode, "observing");
+        let result = verify(fixture.source.clone(), phase);
+        if result.is_err() {
+            trace.step(trace_mode, "adapter-unavailable");
+        }
+        let outcome = result.unwrap();
+        trace.step(trace_mode, if outcome.0 { "accepted" } else { "rejected" });
         assert_eq!(outcome.0, success, "{mode}/{phase}");
         assert_eq!(outcome.1, captures, "{mode}/{phase}");
         let counts = fixture.command(3).unwrap();
@@ -339,22 +418,28 @@ fn owned_native_document_provider() {
             );
             assert_eq!(outcome.2, 3);
         }
+        trace.step(trace_mode, "closing");
         fixture.close();
+        trace.step(trace_mode, "closed");
     }
 
     // A genuine delayed external provider must fail within the outer bound;
     // stopping that exact owned process releases any outstanding COM request.
+    trace.step("slow", "launching");
     let mut slow = Fixture::launch(&executable, directory.path(), "slow", case);
+    trace.step("slow", "ready");
     let source = slow.source.clone();
     let token = CancellationToken::new();
     let worker_token = token.clone();
     let started = Instant::now();
+    trace.step("slow", "observing");
     assert!(
         on_document_worker(token, move || DocumentReader::new(&source, worker_token)?
             .observe())
         .is_err()
     );
     let provider_timeout_ms = started.elapsed().as_millis();
+    trace.step("slow", "unavailable");
     assert!(
         provider_timeout_ms < 3500,
         "Native provider timeout exceeded bounded caller wait"
@@ -367,11 +452,13 @@ fn owned_native_document_provider() {
     slow.child.wait().unwrap();
     drop(slow);
     wait_admission_recovery();
+    trace.step("slow", "stopped-and-admission-recovered");
 
     // Deterministic outer timeout and cancellation while the isolated MTA is
     // actually live, independent of UIA's own short RPC transaction timeouts.
     let (release_tx, release_rx) = mpsc::sync_channel(1);
     let started = Instant::now();
+    trace.step("worker-timeout", "observing");
     assert!(
         on_document_worker(CancellationToken::new(), move || {
             let _ = release_rx.recv();
@@ -387,6 +474,7 @@ fn owned_native_document_provider() {
     );
     release_tx.send(()).unwrap();
     wait_admission_recovery();
+    trace.step("worker-timeout", "admission-recovered");
 
     let cancel = CancellationToken::new();
     let signal = cancel.clone();
@@ -397,6 +485,7 @@ fn owned_native_document_provider() {
         signal.cancel();
     });
     let started = Instant::now();
+    trace.step("worker-cancel", "observing");
     assert!(
         on_document_worker(cancel, move || {
             entered_tx.send(()).unwrap();
@@ -410,7 +499,9 @@ fn owned_native_document_provider() {
     assert!(on_document_worker(CancellationToken::new(), || Ok(())).is_err());
     release_tx.send(()).unwrap();
     wait_admission_recovery();
+    trace.step("worker-cancel", "admission-recovered");
 
+    trace.step("fixture", "cleanup");
     directory.close().unwrap();
     let report = serde_json::json!({"schema":1,"test":"windows-owned-uia-document-provider","passed":true,
         "synthetic_provider_only":true,"real_browser_compatibility_proven":false,
@@ -427,5 +518,21 @@ fn owned_native_document_provider() {
         "no_package_or_permission_changes":true,"no_network_requests":true});
     std::fs::create_dir_all(artifacts).unwrap();
     std::fs::write(evidence, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    trace.step("fixture", "passed");
     println!("{report}");
+}
+
+#[test]
+fn framework_compiler_source_path_is_owned_absolute_and_not_verbatim() {
+    let directory = tempfile::tempdir().unwrap();
+    let clean = framework_path(directory.path());
+    assert!(clean.is_absolute());
+    assert!(!clean.to_str().unwrap().starts_with(r"\\?\"));
+    assert!(!clean.to_str().unwrap().contains('/'));
+    let source = clean.join("fixture.cs");
+    std::fs::write(&source, b"owned compile fixture").unwrap();
+    assert_eq!(
+        std::fs::read(directory.path().join("fixture.cs")).unwrap(),
+        b"owned compile fixture"
+    );
 }

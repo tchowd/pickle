@@ -28,7 +28,7 @@ Native search uses more CPU than the original lowercase implementation, especial
 
 The final History/Saved index construction took 65.57 / 13.01 ms, once on the worker. The largest final pending Runtime CPU frame was 1.13 ms and completion frame 1.43 ms across the sampled cases. For the absent History query specifically, its pending frame had p95 0.28 ms, while the independent worker query took about 182–186 ms. The original absent-query UI transition took about 25.6–25.9 ms. These figures compare UI work and result latency separately: the new implementation keeps measured UI work short while the result itself can take longer.
 
-[manifest.json](manifest.json) records immutable report hashes. [source-manifest.json](source-manifest.json) records the final measured source hashes; the final JSON has matching compiled hashes for the six implementation/harness files. Their later committed equivalents can be checked directly against these hashes without retaining duplicate source copies.
+[manifest.json](manifest.json) records immutable report hashes. [source-manifest.json](source-manifest.json) records the final measured source hashes; the final JSON has matching compiled hashes for the six implementation/harness files. All ten measured files match commit `31104f1fb4f4052b1be0902c51c5f6d5be63ae55` byte-for-byte. A later Windows native observation corrected a full-width test expectation and explanatory comment; the search flags, field ordering and scheduler did not change. Use the pinned commit to resolve measured hashes, rather than claiming the later comment bytes were measured. No timing rerun was needed for that comment/test-only correction.
 
 ## Responsiveness and retained data
 

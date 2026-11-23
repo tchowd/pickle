@@ -14,5 +14,7 @@
     "native-short-fields-first.json": "754f4801d8d80f1a4121445d73d1b552d9d1ca26505e70c8c91dbe6e5a4fc99d",
     "source-manifest.json": "c142032a0e11cbf26eda0fc171e915997c08c7b0ea548834223a8bd0c9008504"
   },
-  "scope": "Synthetic CPU/retained-tree observations on one development machine; no native input, GPU presentation, real AppHandle queue delay or peak RSS measured. Early dirty source snapshots were not retained. Final compiled-source hashes are retained and checked against source-manifest.json."
+  "scope": "Synthetic CPU/retained-tree observations on one development machine; no native input, GPU presentation, real AppHandle queue delay or peak RSS measured. Early dirty source snapshots were not retained. Final compiled-source hashes are retained and checked against source-manifest.json.",
+  "measured_source_files_match_commit": "31104f1fb4f4052b1be0902c51c5f6d5be63ae55",
+  "later_change_scope": "Windows full-width expectation and explanatory comment corrected after native CI; native search flags, preparation and scheduler behavior unchanged. No timing rerun for comment/test-only changes."
 }

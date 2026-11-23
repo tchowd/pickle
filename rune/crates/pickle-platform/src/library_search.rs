@@ -319,9 +319,11 @@ mod native {
         core::PCWSTR,
     };
 
-    // Ignore actual case, not every tertiary distinction (NORM_IGNORECASE can
-    // also ignore CJK width). Explicit linguistic casing respects Turkish/Azeri
-    // user-locale rules. No nonspace/width/symbol/kana ignore flags are added.
+    // Request linguistic case comparison and user-locale casing without adding
+    // nonspace/width/symbol/kana ignore flags. NLS equivalence still depends on
+    // the OS/locale: hosted Windows also equates fullwidth X with ASCII x under
+    // these flags, unlike the observed Foundation comparison. Do not emulate
+    // another platform's collation or post-filter the native result.
     const FLAGS: u32 = FIND_FROMSTART | LINGUISTIC_IGNORECASE.0 | NORM_LINGUISTIC_CASING.0;
     struct Chunk {
         rows: Vec<Vec<Box<[u16]>>>,
