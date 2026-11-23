@@ -168,6 +168,14 @@ struct ReaderDiagnostic {
     variant_type: u16,
     variant_bool: i16,
     nullable_navigation_ends: usize,
+    root_pid: i32,
+    node_pid: i32,
+    queue_len: usize,
+    node_depth: usize,
+    node_native_hwnd_present: Option<bool>,
+    node_hwnd_root_matches_source: Option<bool>,
+    node_executable_matches_source: Option<bool>,
+    post_rejection_metadata: bool,
 }
 impl DocumentReader {
     fn new(source: &CapturedSelection, cancel: CancellationToken) -> Result<Self, PlatformError> {
@@ -225,6 +233,14 @@ impl DocumentReader {
                 variant_type: 0,
                 variant_bool: 0,
                 nullable_navigation_ends: 0,
+                root_pid: 0,
+                node_pid: 0,
+                queue_len: 0,
+                node_depth: 0,
+                node_native_hwnd_present: None,
+                node_hwnd_root_matches_source: None,
+                node_executable_matches_source: None,
+                post_rejection_metadata: false,
             }),
         })
     }
@@ -258,7 +274,83 @@ impl DocumentReader {
         let value = self.diagnostic.get();
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         let elapsed = (self.deadline - Duration::from_millis(1800)).elapsed();
-        serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool,"nullable_navigation_ends":value.nullable_navigation_ends})
+        serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool,"nullable_navigation_ends":value.nullable_navigation_ends,
+            "source_pid":self.source.source_pid,"root_pid":value.root_pid,"node_pid":value.node_pid,"queue_len":value.queue_len,"node_depth":value.node_depth,
+            "node_native_hwnd_present":value.node_native_hwnd_present,"node_hwnd_root_matches_source":value.node_hwnd_root_matches_source,"node_executable_matches_source":value.node_executable_matches_source,"post_rejection_metadata":value.post_rejection_metadata})
+    }
+    #[cfg(test)]
+    fn record_rejected_node(&self, node: &IUIAutomationElement, pid: i32) {
+        use ::windows::{
+            Win32::{
+                Foundation::CloseHandle,
+                System::Threading::{
+                    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                    QueryFullProcessImageNameW,
+                },
+            },
+            core::PWSTR,
+        };
+        // These extra queries occur only after the production PID guard has
+        // rejected this observation. They never influence capture admission.
+        self.diagnostic.update(|mut value| {
+            value.post_rejection_metadata = true;
+            value
+        });
+        if self.cancel.is_cancelled() || Instant::now() >= self.deadline {
+            return;
+        }
+        let control = unsafe { node.CurrentControlType() }.ok();
+        if self.cancel.is_cancelled() || Instant::now() >= self.deadline {
+            return;
+        }
+        let native = unsafe { node.CurrentNativeWindowHandle() }.ok();
+        let hwnd_root = native
+            .filter(|value| !value.0.is_null())
+            .and_then(|window| {
+                let mut owner = 0;
+                unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
+                if owner != self.source.source_pid || !unsafe { IsWindow(Some(window)) }.as_bool() {
+                    return None;
+                }
+                Some(
+                    unsafe { GetAncestor(window, GA_ROOT) }.0 as u64
+                        == self.source.source_window.unwrap_or(0),
+                )
+            });
+        let executable_matches = (|| {
+            if pid <= 0 {
+                return None;
+            }
+            let source = self.source.app_id.strip_prefix("windows:")?;
+            let process =
+                unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid as u32) }
+                    .ok()?;
+            let mut path = vec![0u16; 32768];
+            let mut size = path.len() as u32;
+            let read = unsafe {
+                QueryFullProcessImageNameW(
+                    process,
+                    PROCESS_NAME_WIN32,
+                    PWSTR(path.as_mut_ptr()),
+                    &mut size,
+                )
+            };
+            let _ = unsafe { CloseHandle(process) };
+            read.ok()?;
+            let path = String::from_utf16(&path[..size as usize]).ok()?;
+            let actual = std::fs::canonicalize(path).ok()?;
+            let expected = std::fs::canonicalize(source).ok()?;
+            Some(actual.to_str()?.eq_ignore_ascii_case(expected.to_str()?))
+        })();
+        self.diagnostic.update(|mut value| {
+            if let Some(control) = control {
+                value.control_type = control.0;
+            }
+            value.node_native_hwnd_present = native.map(|value| !value.0.is_null());
+            value.node_hwnd_root_matches_source = hwnd_root;
+            value.node_executable_matches_source = executable_matches;
+            value
+        });
     }
     fn check(&self) -> Result<(), PlatformError> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -350,7 +442,13 @@ impl DocumentReader {
         }
         self.check()?;
         self.stage("root-pid");
-        if self.rpc(unsafe { fresh.CurrentProcessId() })? as u32 != self.source.source_pid {
+        let root_pid = self.rpc(unsafe { fresh.CurrentProcessId() })?;
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.root_pid = root_pid;
+            value
+        });
+        if root_pid as u32 != self.source.source_pid {
             return Err(unavailable());
         }
         // A secure focused field is refused without reading any field value.
@@ -386,6 +484,14 @@ impl DocumentReader {
             self.diagnostic.update(|mut value| {
                 value.nodes = count;
                 value.documents = documents.len();
+                value.queue_len = queue.len();
+                value.node_depth = depth;
+                value.node_pid = 0;
+                value.control_type = 0;
+                value.node_native_hwnd_present = None;
+                value.node_hwnd_root_matches_source = None;
+                value.node_executable_matches_source = None;
+                value.post_rejection_metadata = false;
                 value
             });
             if depth > 12 || count > 192 {
@@ -393,7 +499,15 @@ impl DocumentReader {
             }
             self.check()?;
             self.stage("traversal-pid");
-            if self.rpc(unsafe { node.CurrentProcessId() })? as u32 != self.source.source_pid {
+            let node_pid = self.rpc(unsafe { node.CurrentProcessId() })?;
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.node_pid = node_pid;
+                value
+            });
+            if node_pid as u32 != self.source.source_pid {
+                #[cfg(test)]
+                self.record_rejected_node(&node, node_pid);
                 return Err(unavailable());
             }
             self.check()?;
@@ -424,6 +538,13 @@ impl DocumentReader {
             while let Some(element) = child {
                 count += 1;
                 if count > 192 {
+                    self.stage("traversal-node-limit");
+                    #[cfg(test)]
+                    self.diagnostic.update(|mut value| {
+                        value.nodes = count;
+                        value.queue_len = queue.len();
+                        value
+                    });
                     return Err(unavailable());
                 }
                 self.check()?;

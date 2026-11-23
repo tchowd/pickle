@@ -41,18 +41,24 @@ struct Log {
     stage: &'static str,
     browser: &'static str,
     passed: bool,
+    runner_image: serde_json::Value,
+    browser_versions: serde_json::Map<String, serde_json::Value>,
 }
 impl Log {
     fn new(artifacts: &Path) -> Self {
         std::fs::create_dir_all(artifacts).unwrap();
         let path = artifacts.join("windows-browser-real-native-smoke.log");
         std::fs::write(&path, []).unwrap();
-        Self {
+        let log = Self {
             path,
             stage: "started",
             browser: "fixture",
             passed: false,
-        }
+            runner_image: serde_json::json!({"ImageOS":public_image("ImageOS"),"ImageVersion":public_image("ImageVersion")}),
+            browser_versions: serde_json::Map::new(),
+        };
+        log.write(serde_json::json!({"stage":"runner-image","runner_image":log.runner_image}));
+        log
     }
     fn write(&self, value: serde_json::Value) {
         let mut bytes = serde_json::to_vec(&value).unwrap();
@@ -78,7 +84,7 @@ impl Drop for Log {
     fn drop(&mut self) {
         if std::thread::panicking() && !self.passed {
             // No partial run can masquerade as native compatibility evidence.
-            let report = serde_json::json!({"schema":1,"test":"windows-installed-browser-document","passed":false,"browser":self.browser,"stage":self.stage,"error":"assertion-or-unavailable","real_browser_component_only":true,"extension_bridge_proven":false,"screen_capture_proven":false});
+            let report = serde_json::json!({"schema":1,"test":"windows-installed-browser-document","passed":false,"browser":self.browser,"stage":self.stage,"error":"assertion-or-unavailable","runner_image":self.runner_image,"browser_versions":self.browser_versions,"real_browser_component_only":true,"extension_bridge_proven":false,"screen_capture_proven":false});
             if let Some(parent) = self.path.parent() {
                 let _ = std::fs::write(
                     parent.join("windows-browser-real-native-smoke.json"),
@@ -87,6 +93,44 @@ impl Drop for Log {
             }
         }
     }
+}
+
+fn public_image(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| {
+        value.len() <= 128
+            && value
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || " ._-".contains(character))
+    })
+}
+
+#[test]
+fn failed_browser_report_retains_discovered_version_and_runner_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let failure = std::panic::catch_unwind(|| {
+        let mut log = Log::new(directory.path());
+        log.browser_versions
+            .insert("chrome".into(), serde_json::json!("138.0.1.2"));
+        log.step("chrome", "document-attempt");
+        panic!("Fixed synthetic failure for report retention");
+    });
+    assert!(failure.is_err());
+    let report: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            directory
+                .path()
+                .join("windows-browser-real-native-smoke.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["passed"], false);
+    assert_eq!(report["browser_versions"]["chrome"], "138.0.1.2");
+    assert_eq!(report["stage"], "document-attempt");
+    assert_eq!(
+        report["runner_image"],
+        serde_json::json!({"ImageOS":public_image("ImageOS"),"ImageVersion":public_image("ImageVersion")})
+    );
 }
 
 struct PageServer {
@@ -493,8 +537,20 @@ unsafe extern "system" fn enumerate(hwnd: HWND, argument: LPARAM) -> ::windows::
     }
     true.into()
 }
-fn source(browser: &Browser, executable: &Path) -> Option<CapturedSelection> {
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+struct WindowCounts {
+    job_members: usize,
+    visible_owned: usize,
+    exact_executable: usize,
+}
+
+fn source(
+    browser: &Browser,
+    executable: &Path,
+    counts: &mut WindowCounts,
+) -> Option<CapturedSelection> {
     let pids = browser.child().job_pids().ok()?;
+    counts.job_members = pids.len();
     if pids.is_empty() {
         return None;
     }
@@ -509,6 +565,7 @@ fn source(browser: &Browser, executable: &Path) -> Option<CapturedSelection> {
         )
     }
     .ok()?;
+    counts.visible_owned = data.found.len();
     let expected = std::fs::canonicalize(executable).ok()?;
     let mut eligible = vec![];
     for (window, pid) in data.found {
@@ -519,6 +576,7 @@ fn source(browser: &Browser, executable: &Path) -> Option<CapturedSelection> {
         if std::fs::canonicalize(&path).ok()? != expected {
             continue;
         }
+        counts.exact_executable += 1;
         eligible.push(CapturedSelection {
             text: String::new(),
             app_name: "Owned installed browser".into(),
@@ -582,7 +640,30 @@ fn attempt(source: CapturedSelection, expected: String) -> Result<Attempt, Platf
             || {
                 let value = reader.observe();
                 let diagnostic = reader.failure_diagnostics();
-                observations.borrow_mut().push(serde_json::json!({"stage":reader.failure_stage(),"accepted":value.is_ok(),"url_matches_expected":value.as_ref().is_ok_and(|value|document_urls_match(&expected,&value.url)),"hresult":diagnostic["hresult"],"elapsed_ms":diagnostic["elapsed_ms"],"remaining_ms":diagnostic["remaining_ms"],"nodes":diagnostic["nodes"],"documents":diagnostic["documents"],"nullable_navigation_ends":diagnostic["nullable_navigation_ends"]}));
+                let mut record = serde_json::json!({"stage":reader.failure_stage(),"accepted":value.is_ok(),"url_matches_expected":value.as_ref().is_ok_and(|value|document_urls_match(&expected,&value.url))});
+                for key in [
+                    "hresult",
+                    "elapsed_ms",
+                    "remaining_ms",
+                    "nodes",
+                    "documents",
+                    "control_type",
+                    "custom_variant_type",
+                    "custom_variant_bool",
+                    "nullable_navigation_ends",
+                    "source_pid",
+                    "root_pid",
+                    "node_pid",
+                    "queue_len",
+                    "node_depth",
+                    "node_native_hwnd_present",
+                    "node_hwnd_root_matches_source",
+                    "node_executable_matches_source",
+                    "post_rejection_metadata",
+                ] {
+                    record[key] = diagnostic[key].clone();
+                }
+                observations.borrow_mut().push(record);
                 value
             },
             || {
@@ -617,6 +698,7 @@ fn installed_chrome_and_edge_document_urls() {
     let directory = tempfile::tempdir().unwrap();
     let mut server = PageServer::start();
     let mut reports = vec![];
+    let mut browsers = vec![];
     for name in ["chrome", "edge"] {
         log.step(name, "discovering");
         let Some(executable) = installed(name) else {
@@ -625,6 +707,12 @@ fn installed_chrome_and_edge_document_urls() {
         };
         log.step(name, "reading-file-version");
         let version = version(&executable);
+        log.browser_versions
+            .insert(name.into(), serde_json::json!(version));
+        log.write(serde_json::json!({"browser":name,"stage":"installed-file-version","file_version":version}));
+        browsers.push((name, executable, version));
+    }
+    for (name, executable, version) in browsers {
         let profile = directory.path().join(format!("owned-{name}-profile"));
         std::fs::create_dir(&profile).unwrap();
         let expected = server.url(name);
@@ -637,20 +725,34 @@ fn installed_chrome_and_edge_document_urls() {
         let startup = Instant::now();
         let mut selected = None;
         let mut polls = 0;
+        let mut last_counts = WindowCounts::default();
+        let mut last_signature = None;
+        let mut readiness_records = 0;
         while startup.elapsed() < Duration::from_secs(25) {
             polls += 1;
             // A launcher may exit while its browser descendants remain in the
             // exact held job. Do not call Child::try_wait (which closes it).
-            if let Some(source) = source(&browser, &executable)
-                && server.pages.load(Ordering::Acquire) > pages_before
-                && profile.join("Default").is_dir()
+            let mut counts = WindowCounts::default();
+            let candidate = source(&browser, &executable, &mut counts);
+            let page_seen = server.pages.load(Ordering::Acquire) > pages_before;
+            let profile_seen = profile.join("Default").is_dir();
+            let signature = (counts, page_seen, profile_seen);
+            if last_signature != Some(signature) && readiness_records < 8 {
+                log.write(serde_json::json!({"browser":name,"stage":"startup-readiness","elapsed_ms":startup.elapsed().as_millis(),"poll":polls,"owned_job_members":counts.job_members,"visible_owned_windows":counts.visible_owned,"exact_executable_windows":counts.exact_executable,"owned_page_seen":page_seen,"owned_profile_directory_observed":profile_seen}));
+                readiness_records += 1;
+            }
+            last_signature = Some(signature);
+            last_counts = counts;
+            if let Some(source) = candidate
+                && page_seen
+                && profile_seen
             {
                 selected = Some(source);
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        log.write(serde_json::json!({"browser":name,"stage":"startup-result","elapsed_ms":startup.elapsed().as_millis(),"polls":polls,"owned_window_found":selected.is_some(),"owned_profile_directory_observed":profile.join("Default").is_dir(),"page_requests":server.pages.load(Ordering::Acquire)-pages_before,"owned_job_members":browser.child().job_pids().map(|pids|pids.len()).unwrap_or(0)}));
+        log.write(serde_json::json!({"browser":name,"stage":"startup-result","elapsed_ms":startup.elapsed().as_millis(),"polls":polls,"owned_window_found":selected.is_some(),"owned_profile_directory_observed":profile.join("Default").is_dir(),"page_requests":server.pages.load(Ordering::Acquire)-pages_before,"owned_job_members":last_counts.job_members,"visible_owned_windows":last_counts.visible_owned,"exact_executable_windows":last_counts.exact_executable}));
         let source = selected.expect(
             "Owned installed browser did not expose one owned visible window and load its page",
         );
@@ -739,14 +841,6 @@ fn installed_chrome_and_edge_document_urls() {
     drop(server);
     log.step("fixture", "removing-profiles");
     directory.close().unwrap();
-    let public_image = |name| {
-        std::env::var(name).ok().filter(|value| {
-            value.len() <= 128
-                && value.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || " ._-".contains(character)
-                })
-        })
-    };
     let report = serde_json::json!({"schema":1,"test":"windows-installed-browser-document","passed":true,"runner_image":{"ImageOS":public_image("ImageOS"),"ImageVersion":public_image("ImageVersion")},"browsers":reports,"real_browser_component_only":true,"extension_bridge_proven":false,"screen_capture_proven":false,"no_pixels_read":true,"no_model_calls":true,"test_pages_served_by_owned_loopback_proxy":true,"reserved_test_origin_default_http_port":true,"browser_http_proxy_no_forwarding":true,"loopback_page_requests":pages,"rejected_proxy_requests":rejected,"all_owned_processes_stopped":true,"server_joined":true,"temporary_profiles_removed":true,"no_permissions_package_firewall_or_system_proxy_changes":true});
     std::fs::write(evidence, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     log.step("fixture", "passed");
