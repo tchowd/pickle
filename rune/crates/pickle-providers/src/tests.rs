@@ -421,6 +421,107 @@ async fn chart_requests_use_schema_capable_cloud_model_and_buffer_objects() {
 }
 
 #[tokio::test]
+async fn legacy_structured_cloudflare_object_crosses_http_and_pipeline_with_source_bars() {
+    // Exact source, selected small prose model, and response-object shape from
+    // TransportTests.testStructuredCloudflareResponseObjectAndSchema. Only the
+    // HTTP origin is replaced with an owned loopback listener; real prompt
+    // construction, Cloudflare decoding and deterministic chart validation run.
+    const SOURCE: &str = "$10 and $15";
+    const SMALL: &str = "@cf/meta/llama-3.2-1b-instruct";
+    const DIAGRAM: &str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    let evidence = pickle_core::numeric_evidence(SOURCE);
+    assert_eq!(evidence.len(), 2);
+    assert_eq!(evidence[0].id, "n0");
+    assert_eq!(evidence[1].id, "n8");
+    let (base, captured) = server(vec![Reply::json(json!({
+        "success":true,
+        "result":{"response":{"type":"bar_chart","bars":[
+            {"evidenceID":evidence[0].id},
+            {"evidenceID":evidence[1].id}
+        ]}}
+    }))]);
+    let account = "a".repeat(32);
+    // Leave the ordinary streaming preference enabled: structured charts must
+    // still use the buffered object contract rather than expose JSON drafts.
+    let writer = CloudflareProvider::new(&account, "test-token", SMALL).with_test_base(base);
+    let pipeline = Pipeline::new(Arc::new(writer), None, false);
+    let mut input = RequestInput::new(
+        SelectionSnapshot::new(SOURCE, "Test", "test"),
+        ReadingAction::Chart,
+    );
+    input.chart_choice = Some(pickle_core::ChartKind::Bar);
+    let (events, mut received) = unbounded_channel();
+    let outcome = pipeline
+        .run(input, events, CancellationToken::new())
+        .await
+        .unwrap();
+    let PipelineOutcome::Result(result) = outcome else {
+        panic!("The original response object must produce a validated bar chart")
+    };
+    let Some(pickle_core::ValidatedChart::Bar(bars)) = &result.chart else {
+        panic!("Expected source-backed bars, not raw JSON or a refusal")
+    };
+    assert_eq!(
+        bars.iter().map(|bar| bar.value).collect::<Vec<_>>(),
+        [10.0, 15.0]
+    );
+    assert_eq!(
+        bars.iter().map(|bar| bar.unit.as_str()).collect::<Vec<_>>(),
+        ["USD", "USD"]
+    );
+    assert_eq!(
+        bars.iter()
+            .map(|bar| bar.quote.as_str())
+            .collect::<Vec<_>>(),
+        ["$10", "$15"]
+    );
+    assert_eq!(
+        result.text,
+        "Quantities in your selection\n$10 and $15: 10 USD\n$10 and $15: 15 USD"
+    );
+    assert_eq!(result.action, ReadingAction::Chart);
+    assert_eq!(result.quality, pickle_core::QualityStatus::ChartValidated);
+    assert_eq!(result.repairs, 0);
+    assert_eq!(CloudflareProvider::DIAGRAM_MODEL, DIAGRAM);
+    assert_eq!(result.model, DIAGRAM);
+    while let Ok(event) = received.try_recv() {
+        assert!(
+            !matches!(event, PipelineEvent::Draft(_)),
+            "Chart JSON must not stream into the prose draft"
+        );
+    }
+
+    let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_native_json_post(&request, &format!("/accounts/{account}/ai/run/{DIAGRAM}"));
+    assert!(!request.path.ends_with(SMALL));
+    assert_eq!(request.body["stream"], false);
+    assert_eq!(request.body["max_tokens"], 1800);
+    assert_eq!(request.body["response_format"]["type"], "json_schema");
+    let schema = &request.body["response_format"]["json_schema"];
+    assert!(
+        schema.is_object(),
+        "The actual chart schema must reach HTTP"
+    );
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["properties"]["type"]["enum"], json!(["bar_chart"]));
+    assert_eq!(schema["properties"]["bars"]["minItems"], 2);
+    assert_eq!(
+        schema["properties"]["bars"]["items"]["properties"]["evidenceID"]["enum"],
+        json!(["n0", "n8"])
+    );
+    assert_eq!(request.body["messages"][0]["role"], "system");
+    assert_eq!(request.body["messages"][1]["role"], "user");
+    let user: Value =
+        serde_json::from_str(request.body["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(user["source"], SOURCE);
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+#[tokio::test]
 async fn invalid_cloud_accounts_send_no_writer_or_jev_requests() {
     // Keep an actual listening fixture alive: an implementation that attempted
     // either request would be observed, rather than merely failing DNS/connect.
