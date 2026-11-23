@@ -87,6 +87,60 @@ $navigationFailure | Add-Member -NotePropertyName page_observation_before_naviga
 $navigationFailure | Add-Member -NotePropertyName navigation_failure_observation -NotePropertyValue $observed
 $null=ConvertTo-PickleExtensionStageReport $navigationFailure
 Assert-ExtensionRefused { Assert-PickleExtensionStageReport $navigationFailure 'edge' }
+$failureObserved=[ordered]@{
+  incomplete=$false;nodes=20;property_errors=0;title_candidate_count=1;title_records_truncated=$false
+  title_records=@([ordered]@{flags=3;control_type_id=50020;offscreen=$false;ancestor_role_ids=@(50020,50026,50032)})
+  developer_candidate_count=1;developer_records_truncated=$false;toggle_count=1;checkbox_count=0;button_count=0
+  developer_records=@([ordered]@{name_flags=0;help_flags=0;labeled_by_flags=15;labeled_by_bound=$true;control_type_id=50002;enabled=$true;offscreen=$false;toggle_supported=$true;toggle_state=1;invoke_supported=$false})
+  owned_window_count=1;window_records_truncated=$false
+  window_records=@([ordered]@{class_kind=2;original_window=$false;owner_is_original=$true;root_is_original=$false;foreground=$true;known_error_count=1;scan_nodes=4;scan_truncated=$false;scan_unavailable=$false})
+}
+$failureObserved=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
+$clean=ConvertTo-PickleExtensionFailureObservation $failureObserved
+if ($clean.title_records[0].flags -ne 3 -or $clean.title_records[0].ancestor_role_ids.Count -ne 3 -or $clean.developer_records[0].labeled_by_flags -ne 15 -or $clean.developer_records[0].name_flags -ne 0 -or $clean.window_records[0].known_error_count -ne 1) { throw 'Closed scalar mapping observations were changed.' }
+$partial=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
+$partial.incomplete=$true;$partial.owned_window_count=0;$partial.window_records=@()
+$partialClean=ConvertTo-PickleExtensionFailureObservation $partial
+if (!$partialClean.incomplete -or $partialClean.title_records[0].flags -ne 3 -or $partialClean.developer_records[0].labeled_by_flags -ne 15 -or $partialClean.window_records.Count -ne 0) { throw 'Completed primary records were lost from a partial failure observation.' }
+$diagnosed=$failure | ConvertTo-Json | ConvertFrom-Json
+$diagnosed.stage='developer-mode';$diagnosed.failure='developer-toggle-unavailable'
+$diagnosed | Add-Member -NotePropertyName failure_observation -NotePropertyValue $failureObserved
+$null=ConvertTo-PickleExtensionStageReport $diagnosed
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $diagnosed 'edge' }
+$partialReport=$diagnosed | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$partialReport.failure_observation=$partial
+$null=ConvertTo-PickleExtensionStageReport $partialReport
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $partialReport 'edge' }
+$bad=$valid | ConvertTo-Json | ConvertFrom-Json
+$bad | Add-Member -NotePropertyName failure_observation -NotePropertyValue $failureObserved
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $bad 'chrome' }
+foreach ($change in @(@('incomplete','true'),@('nodes',1025),@('owned_window_count',65),@('title_candidate_count',21),@('title_records_truncated',$true),@('property_errors','0'))) {
+  $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+}
+foreach ($group in @('title','developer','window')) {
+  $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
+  $bad.($group+'_records')[0] | Add-Member -NotePropertyName arbitrary_text -NotePropertyValue 'must-not-be-published'
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+  $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
+  $bad.($group+'_records')=@(1..9 | ForEach-Object { $failureObserved.($group+'_records')[0] })
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+}
+foreach ($change in @(@('flags',0),@('control_type_id',49999),@('offscreen','false'),@('ancestor_role_ids',@(50020,50026,50032,50032,50032,50032,50032,50032,50032)))) {
+  $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.title_records[0].($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+}
+foreach ($change in @(@('name_flags',1),@('labeled_by_bound',$false),@('toggle_state',-1),@('toggle_supported',$false),@('enabled',1))) {
+  $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.developer_records[0].($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+}
+foreach ($change in @(@('class_kind',3),@('known_error_count',5),@('scan_nodes',129),@('foreground',1))) {
+  $bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json;$bad.window_records[0].($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
+}
+$bad=$failureObserved | ConvertTo-Json -Depth 7 | ConvertFrom-Json
+$bad | Add-Member -NotePropertyName private_url -NotePropertyValue 'must-not-be-published'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionFailureObservation $bad }
 foreach ($change in @(@('nodes',1025),@('candidate_count',17),@('legacy_observed','true'),@('legacy_observed',$true))) {
   $bad=$observation | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$bad.($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionDeveloperObservation $bad }

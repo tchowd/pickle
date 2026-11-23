@@ -34,6 +34,25 @@ public static class BrowserExtensionPredicates {
             (String.Equals(value.Trim(),expected,StringComparison.OrdinalIgnoreCase) ? 4 : 0) |
             (value.IndexOf(expected,StringComparison.OrdinalIgnoreCase)>=0 ? 8 : 0);
     }
+    // Closed classifications only: observations never retain the input string.
+    public static int KnownErrorFlags(string value) {
+        if(value==null || value.Length>4096) return 0;
+        string[] known={"Failed to load extension","Error loading extension","Manifest file is missing or unreadable","Manifest is not valid JSON","Could not load manifest"};
+        int flags=0;for(int i=0;i<known.Length;i++) if(value.IndexOf(known[i],StringComparison.OrdinalIgnoreCase)>=0) flags|=1<<i;
+        return flags;
+    }
+    public static int LibraryLabelFlags(string value) {
+        if(value==null || value.Length>4096) return 0;
+        const string title="Pickle — page and video context";
+        return (value==title ? 1 : 0) | (value.IndexOf(title,StringComparison.Ordinal)>=0 ? 2 : 0) |
+            (value=="0.1.0" ? 4 : 0) | (IdFromLabel(value)!=null ? 8 : 0) | (KnownErrorFlags(value)!=0 ? 16 : 0);
+    }
+    public static int WindowClassKind(string value) { return value=="Chrome_WidgetWin_1" ? 1 : value=="#32770" ? 2 : 0; }
+    public static void RecordCandidate<T>(List<T> records,ref int count,Func<T> create) {
+        // Failed property reads must not leave a count without its record.
+        if(records.Count<8) records.Add(create());
+        count++;
+    }
     public static int InternalUriForm(string value,string browser) {
         if(!Browser(browser)) return 0;
         string expected=browser+"://extensions/";
@@ -65,6 +84,16 @@ public static class BrowserExtensionPredicates {
         if(DeveloperLabelFlags("Developer mode")!=15 || DeveloperLabelFlags("DEVELOPER MODE")!=14 ||
             DeveloperLabelFlags(" developer MODE ")!=12 || DeveloperLabelFlags("Turn on Developer mode")!=8 ||
             DeveloperLabelFlags("private unrelated text")!=0 || DeveloperLabelFlags(null)!=0 || DeveloperLabelFlags(new string('x',4097))!=0) throw new Exception("diagnostic-label-classification");
+        if(LibraryLabelFlags("Pickle — page and video context")!=3 || LibraryLabelFlags("prefix Pickle — page and video context suffix")!=2 ||
+            LibraryLabelFlags("0.1.0")!=4 || LibraryLabelFlags("ID: "+id)!=8 || LibraryLabelFlags("Failed to load extension: owned fixture")!=16 ||
+            LibraryLabelFlags("private unrelated text")!=0 || LibraryLabelFlags(new string('x',4097))!=0 || KnownErrorFlags("FAILED TO LOAD EXTENSION")!=1 ||
+            WindowClassKind("Chrome_WidgetWin_1")!=1 || WindowClassKind("#32770")!=2 || WindowClassKind("private unrelated text")!=0) throw new Exception("failure-scalar-classification");
+        var records=new List<int>();int count=0;bool refused=false;
+        try { RecordCandidate(records,ref count,()=> { throw new InvalidOperationException(); }); } catch(InvalidOperationException) { refused=true; }
+        if(!refused || count!=0 || records.Count!=0) throw new Exception("failed-observation-count");
+        for(int i=0;i<8;i++) RecordCandidate(records,ref count,()=>7);
+        RecordCandidate(records,ref count,()=> { throw new InvalidOperationException(); });
+        if(count!=9 || records.Count!=8) throw new Exception("bounded-observation-count");
         if(InternalUriForm("chrome://extensions/","chrome")!=1 || InternalUriForm("edge://extensions","edge")!=2 ||
             InternalUriForm("edge://extensions/","chrome")!=0 || InternalUriForm("https://private.invalid/chrome://extensions/","chrome")!=0 ||
             InternalUriForm("chrome://extensions/?private","chrome")!=0 || InternalUriForm(" chrome://extensions/","chrome")!=0) throw new Exception("diagnostic-exact-uri");
@@ -108,7 +137,7 @@ public static class BrowserExtensionFixtureProgram {
     }
     [MTAThread] public static int Main(string[] args) {
         if (args.Length==1 && args[0]=="--self-test") { BrowserExtensionPredicates.SelfTest(); return 0; }
-        bool loaded=false,drained=false;
+        bool loaded=false,drained=false;IntPtr window=IntPtr.Zero;
         try {
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted") Fail("requires-hosted-windows-ci");
             string[] names={"--browser","--executable","--profile","--extension","--proxy-port","--evidence"};
@@ -137,7 +166,6 @@ public static class BrowserExtensionFixtureProgram {
             stage="launch-contained-browser";
             browser=new BrowserJob(exe,profile,kind+"://extensions/",port);
             Report["atomic_job_membership_verified"]=true;
-            IntPtr window=IntPtr.Zero;
             stage="owned-browser-window";
             Wait(()=> { window=browser.Window(false,IntPtr.Zero); return window!=IntPtr.Zero; },25,"owned-browser-window-unavailable");
             Report["owned_window_verified"]=true;
@@ -214,7 +242,12 @@ public static class BrowserExtensionFixtureProgram {
             },20,"loaded-extension-id-unavailable");
             Report["extension_card_identity_verified"]=true;Report["extension_loaded"]=true;Report["extension_id"]=id;Report["extension_version"]=extensionVersion;
             loaded=true;stage="browser-cleanup";
-        } catch (ExtensionStageFailure error) { Report["failure"]=error.Code; }
+        } catch (ExtensionStageFailure error) {
+            Report["failure"]=error.Code;
+            if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card")) {
+                try { ObserveFailure(window); } catch { Report["failure_observation_unavailable"]=true; }
+            }
+        }
         catch (Exception error) { Report["failure"]="native-operation-failed";Report["error_kind"]=ErrorKind(error);Report["error_hresult"]=error.HResult; }
         finally {
             if (browser!=null) { try { drained=browser.Close(); } catch { drained=false; } browser.Dispose(); }
@@ -258,18 +291,18 @@ public static class BrowserExtensionFixtureProgram {
         Check();int pid=element==null ? 0 : element.Current.ProcessId;
         if(element==null || !browser.Owns(pid)) { Report["refused_uia_pid"]=pid;Fail("uia-element-not-owned"); }
     }
-    static List<AutomationElement> Tree(IntPtr window) {
+    static List<AutomationElement> Tree(IntPtr window,bool inspectNames=true) {
         Check();if(!browser.OwnsWindow(window)) Fail("uia-window-not-owned");
-        return Tree(AutomationElement.FromHandle(window));
+        return Tree(AutomationElement.FromHandle(window),inspectNames);
     }
-    static List<AutomationElement> Tree(AutomationElement root) {
+    static List<AutomationElement> Tree(AutomationElement root,bool inspectNames=true) {
         Owned(root);
         var nodes=new List<AutomationElement>();var queue=new Queue<AutomationElement>();queue.Enqueue(root);
         var walker=TreeWalker.RawViewWalker;
         while(queue.Count>0) {
             Check();if(nodes.Count+queue.Count>NodeLimit) Fail("uia-node-bound");
             var node=queue.Dequeue();Owned(node);nodes.Add(node);Report["last_owned_uia_nodes"]=nodes.Count;
-            if(node.Current.Name.Length>4096) Fail("uia-label-bound");
+            if(inspectNames && node.Current.Name.Length>4096) Fail("uia-label-bound");
             var child=walker.GetFirstChild(node);
             while(child!=null) { if(nodes.Count+queue.Count>=NodeLimit) Fail("uia-node-bound");Owned(child);queue.Enqueue(child);child=walker.GetNextSibling(child); }
         }
@@ -389,6 +422,115 @@ public static class BrowserExtensionFixtureProgram {
             // not observed, never a claim that the native control lacks it.
             {"candidate_count",matched},{"candidates_truncated",matched>16},{"legacy_observed",false},{"candidates",candidates}};
     }
+    static bool DiagnosticBound(AutomationElement element,IntPtr window) {
+        if(element==null || !browser.OwnsWindow(window)) return false;
+        var root=AutomationElement.FromHandle(window);Owned(root);
+        for(int depth=0;element!=null && depth<32;depth++) {
+            Check();if(!browser.Owns(element.Current.ProcessId)) return false;
+            if(Automation.Compare(element,root)) return true;
+            element=TreeWalker.RawViewWalker.GetParent(element);
+        }
+        return false;
+    }
+    static int[] DiagnosticAncestorRoles(AutomationElement element,IntPtr window) {
+        var result=new List<int>();var root=AutomationElement.FromHandle(window);
+        for(int depth=0;element!=null && depth<8;depth++) {
+            Check();Owned(element);result.Add(element.Current.ControlType.Id);
+            if(Automation.Compare(element,root)) break;
+            element=TreeWalker.RawViewWalker.GetParent(element);
+        }
+        return result.ToArray();
+    }
+    static void ObserveFailure(IntPtr window) {
+        // Failure-only observations cannot select controls or authorize actions.
+        // Names, help, IDs and exception messages are never serialized. Keep
+        // original global deadline/ownership/cleanup and the original failure.
+        const int retained=8;
+        var titles=new List<Dictionary<string,object>>();
+        var knownDeveloper=new List<Dictionary<string,object>>();var otherDeveloper=new List<Dictionary<string,object>>();
+        var windows=new List<Dictionary<string,object>>();
+        int nodeCount=0,errors=0,titleCount=0,developerCount=0,toggles=0,checkboxes=0,buttons=0,windowCount=0;
+        bool incomplete=true;
+        try {
+        // Action callers keep Tree's original Name bound. This diagnostic path
+        // must prove exact ancestry before reading Name, HelpText or LabeledBy.
+        var nodes=Tree(window,false);nodeCount=nodes.Count;
+        foreach(var node in nodes) {
+            Check();
+            try {
+                if(!DiagnosticBound(node,window)) { errors++;continue; }
+                var current=node.Current;int title=BrowserExtensionPredicates.LibraryLabelFlags(current.Name);
+                if(title!=0) {
+                    BrowserExtensionPredicates.RecordCandidate(titles,ref titleCount,()=>new Dictionary<string,object> {
+                        {"flags",title},{"control_type_id",current.ControlType.Id},{"offscreen",current.IsOffscreen},
+                        {"ancestor_role_ids",DiagnosticAncestorRoles(node,window)}});
+                }
+                object pattern;bool toggle=node.TryGetCurrentPattern(TogglePattern.Pattern,out pattern);
+                int toggleState=toggle ? (int)((TogglePattern)pattern).Current.ToggleState : -1;
+                if(toggle) toggles++;if(current.ControlType==ControlType.CheckBox) checkboxes++;if(current.ControlType==ControlType.Button) buttons++;
+                int name=BrowserExtensionPredicates.DeveloperLabelFlags(current.Name);
+                int help=BrowserExtensionPredicates.DeveloperLabelFlags(current.HelpText),label=0;
+                var labeledBy=current.LabeledBy;bool labelBound=labeledBy!=null && DiagnosticBound(labeledBy,window);
+                if(labelBound) label=BrowserExtensionPredicates.DeveloperLabelFlags(labeledBy.Current.Name);
+                bool known=(name|help|label)!=0;
+                if(!known && !toggle && current.ControlType!=ControlType.CheckBox && current.ControlType!=ControlType.Button) continue;
+                var target=known ? knownDeveloper : otherDeveloper;
+                BrowserExtensionPredicates.RecordCandidate(target,ref developerCount,()=> {
+                object invokePattern;bool invoke=node.TryGetCurrentPattern(InvokePattern.Pattern,out invokePattern);
+                return new Dictionary<string,object> {
+                    {"name_flags",name},{"help_flags",help},{"labeled_by_flags",label},{"labeled_by_bound",labelBound},
+                    {"control_type_id",current.ControlType.Id},{"enabled",current.IsEnabled},{"offscreen",current.IsOffscreen},
+                    {"toggle_supported",toggle},{"toggle_state",toggleState},{"invoke_supported",invoke}};
+                });
+            } catch(ElementNotAvailableException) { errors++; }
+            catch(COMException) { errors++; }
+        }
+        var ownedWindows=new List<IntPtr>();
+        Native.EnumWindows(delegate(IntPtr candidate,IntPtr ignored) {
+            if(DateTime.UtcNow>=deadline) return false;
+            if(Native.IsWindowVisible(candidate) && browser.OwnsWindow(candidate)) ownedWindows.Add(candidate);
+            return ownedWindows.Count<64;
+        },IntPtr.Zero);
+        Check();
+        foreach(var candidate in ownedWindows.Take(retained)) {
+            Check();if(!browser.OwnsWindow(candidate)) Fail("uia-window-not-owned");
+            var className=new StringBuilder(128);Native.GetClassNameW(candidate,className,className.Capacity);
+            int errorCount=0,scanned=0;bool truncated=false,unavailable=false;
+            try {
+                var queue=new Queue<AutomationElement>();queue.Enqueue(AutomationElement.FromHandle(candidate));
+                while(queue.Count>0 && scanned<128) {
+                    Check();var element=queue.Dequeue();Owned(element);scanned++;
+                    if(!DiagnosticBound(element,candidate)) { unavailable=true;continue; }
+                    if(BrowserExtensionPredicates.KnownErrorFlags(element.Current.Name)!=0) errorCount++;
+                    var child=TreeWalker.RawViewWalker.GetFirstChild(element);
+                    while(child!=null) {
+                        Check();Owned(child);if(scanned+queue.Count>=128) { truncated=true;break; }
+                        queue.Enqueue(child);child=TreeWalker.RawViewWalker.GetNextSibling(child);
+                    }
+                }
+                truncated=truncated || queue.Count>0;
+            } catch(ElementNotAvailableException) { unavailable=true; }
+            catch(COMException) { unavailable=true; }
+            windows.Add(new Dictionary<string,object> {
+                {"class_kind",BrowserExtensionPredicates.WindowClassKind(className.ToString())},{"original_window",candidate==window},
+                {"owner_is_original",Native.GetWindow(candidate,4)==window},{"root_is_original",Native.GetAncestor(candidate,2)==window},
+                {"foreground",Native.GetForegroundWindow()==candidate},{"known_error_count",errorCount},{"scan_nodes",scanned},
+                {"scan_truncated",truncated},{"scan_unavailable",unavailable}});
+            windowCount++;
+        }
+        windowCount=ownedWindows.Count;
+        incomplete=false;
+        } finally {
+        // Publish complete records even if a later property call or the existing
+        // global deadline aborts the optional inventory. Counts remain exact for
+        // the retained prefix; incomplete is never interpreted as success.
+        Report["failure_observation"]=new Dictionary<string,object> {
+            {"incomplete",incomplete},{"nodes",nodeCount},{"property_errors",errors},{"title_candidate_count",titleCount},{"title_records_truncated",titleCount>retained},{"title_records",titles},
+            {"developer_candidate_count",developerCount},{"developer_records_truncated",developerCount>retained},{"developer_records",knownDeveloper.Concat(otherDeveloper).Take(retained).ToArray()},
+            {"toggle_count",toggles},{"checkbox_count",checkboxes},{"button_count",buttons},
+            {"owned_window_count",windowCount},{"window_records_truncated",windowCount>retained},{"window_records",windows}};
+        }
+    }
     static void Invoke(AutomationElement element) {
         Owned(element);if(!element.Current.IsEnabled || element.Current.IsOffscreen) Fail("control-not-actionable");
         object pattern;if(!element.TryGetCurrentPattern(InvokePattern.Pattern,out pattern)) Fail("invoke-pattern-unavailable");((InvokePattern)pattern).Invoke();
@@ -489,6 +631,7 @@ public static class BrowserExtensionFixtureProgram {
         [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] inputs,int bytes);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
         [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window,uint flags);
+        [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window,uint command);
         [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr window,StringBuilder value,int length);
         static Input Key(ushort key,bool up) { return new Input {Type=1,Data=new Union {Keyboard=new Keyboard {Key=key,Flags=up ? 2U : 0U}}}; }
         static void Foreground(IntPtr window) { Check();if(!browser.OwnsWindow(window) || GetForegroundWindow()!=window) Fail("navigation-input-target-not-owned"); }

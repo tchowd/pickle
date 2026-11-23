@@ -101,6 +101,7 @@ function Build-PickleExtensionFixture([string]$Directory) {
   return $output
 }
 function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
+  if (@($Report.PSObject.Properties.Name) -ccontains 'failure_observation') { throw 'Failure observations cannot attest a successful loading stage.' }
   if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-bundled-extension-load' -or $Report.scope -cne 'bundled-extension-load-only' -or $Report.browser -cne $Browser) { throw 'The native setup stage report had the wrong scope.' }
   foreach ($key in @('passed','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_card_identity_verified','extension_loaded','browser_job_drained')) {
     if ($Report.$key -isnot [bool] -or !$Report.$key) { throw 'The native bundled-extension loading stage did not pass completely.' }
@@ -142,17 +143,65 @@ function ConvertTo-PickleExtensionDeveloperObservation($Observation) {
   $clean.candidates=$recordsClean
   return [pscustomobject]$clean
 }
+function ConvertTo-PickleExtensionFailureObservation($Observation) {
+  $counts=@('nodes','property_errors','title_candidate_count','developer_candidate_count','toggle_count','checkbox_count','button_count','owned_window_count')
+  $keys=$counts+@('incomplete','title_records_truncated','developer_records_truncated','window_records_truncated','title_records','developer_records','window_records')
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'The failure observation had unknown fields.' }
+  $clean=[ordered]@{}
+  if ($Observation.incomplete -isnot [bool]) { throw 'The partial failure observation marker had the wrong type.' };$clean.incomplete=$Observation.incomplete
+  foreach ($key in $counts) {
+    $value=$Observation.$key
+    if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 1024) { throw 'A failure observation count was invalid.' }
+    $clean[$key]=$value
+  }
+  foreach ($key in @('property_errors','title_candidate_count','developer_candidate_count','toggle_count','checkbox_count','button_count')) { if ($clean[$key] -gt $clean.nodes) { throw 'An observation count exceeded its owned nodes.' } }
+  if ($clean.owned_window_count -gt 64) { throw 'The owned window inventory exceeded its bound.' }
+  foreach ($group in @('title','developer','window')) {
+    $count=if ($group -eq 'window') { $clean.owned_window_count } else { $clean[($group+'_candidate_count')] }
+    $truncated=$Observation.($group+'_records_truncated');$records=@($Observation.($group+'_records'))
+    if ($truncated -isnot [bool] -or $truncated -ne ($count -gt 8) -or $records.Count -ne [Math]::Min(8,$count)) { throw 'The failure records exceeded or contradicted their bound.' }
+    $clean[($group+'_records_truncated')]=$truncated
+    $clean[($group+'_records')]=@(foreach ($record in $records) {
+      $bools=@();$ranges=@{};$extra=@()
+      if ($group -eq 'title') { $bools=@('offscreen');$ranges=@{flags=@(1,31);control_type_id=@(50000,59999)};$extra=@('ancestor_role_ids') }
+      elseif ($group -eq 'developer') { $bools=@('labeled_by_bound','enabled','offscreen','toggle_supported','invoke_supported');$ranges=@{name_flags=@(0,15);help_flags=@(0,15);labeled_by_flags=@(0,15);control_type_id=@(50000,59999);toggle_state=@(-1,2)} }
+      else { $bools=@('original_window','owner_is_original','root_is_original','foreground','scan_truncated','scan_unavailable');$ranges=@{class_kind=@(0,2);known_error_count=@(0,128);scan_nodes=@(0,128)} }
+      $recordKeys=@($bools)+@($ranges.Keys)+$extra
+      if (@($record.PSObject.Properties).Count -ne $recordKeys.Count -or @($record.PSObject.Properties.Name | Where-Object { $_ -cnotin $recordKeys }).Count) { throw 'A failure record had unknown fields.' }
+      $item=[ordered]@{}
+      foreach ($key in $bools) { if ($record.$key -isnot [bool]) { throw 'A failure flag had the wrong type.' };$item[$key]=$record.$key }
+      foreach ($key in $ranges.Keys) {
+        $value=$record.$key;$range=$ranges[$key]
+        if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt $range[0] -or $value -gt $range[1]) { throw 'A failure scalar had the wrong type or range.' };$item[$key]=$value
+      }
+      if ($group -eq 'title') {
+        $roles=@($record.ancestor_role_ids)
+        if (!$roles.Count -or $roles.Count -gt 8 -or $roles[0] -ne $item.control_type_id -or (($item.flags -band 1) -and !($item.flags -band 2))) { throw 'Title ancestry or flags were inconsistent.' }
+        foreach ($role in $roles) { if (($role -isnot [int] -and $role -isnot [long]) -or $role -lt 50000 -or $role -gt 59999) { throw 'An ancestor role was invalid.' } };$item.ancestor_role_ids=$roles
+      } elseif ($group -eq 'developer') {
+        foreach ($key in @('name_flags','help_flags','labeled_by_flags')) { if ($item[$key] -notin @(0,8,12,14,15)) { throw 'A Developer label classification was invalid.' } }
+        if ((!$item.labeled_by_bound -and $item.labeled_by_flags -ne 0) -or ($item.toggle_supported -and $item.toggle_state -notin @(0,1,2)) -or (!$item.toggle_supported -and $item.toggle_state -ne -1)) { throw 'Developer label ownership or pattern flags were inconsistent.' }
+      } elseif ($item.known_error_count -gt $item.scan_nodes) { throw 'Error labels exceeded scanned owned nodes.' }
+      [pscustomobject]$item
+    })
+  }
+  return [pscustomobject]$clean
+}
 function ConvertTo-PickleExtensionStageReport($Report) {
   # Whitelist scalar diagnostic keys. The native helper never writes arbitrary
   # UI names/values or exception messages; no private paths enter artifacts.
-  $booleans=@('passed','full_delivery_verified','native_host_registered','native_host_executed','authenticated_bridge_verified','app_launched','devtools_or_cdp_used','extension_code_modified','browser_job_drained','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_toggle_found','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_name_found','extension_version_found','extension_card_identity_verified','extension_loaded','developer_observation_unavailable')
+  $booleans=@('passed','full_delivery_verified','native_host_registered','native_host_executed','authenticated_bridge_verified','app_launched','devtools_or_cdp_used','extension_code_modified','browser_job_drained','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_toggle_found','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_name_found','extension_version_found','extension_card_identity_verified','extension_loaded','developer_observation_unavailable','failure_observation_unavailable')
   $numbers=@('schema','error_hresult','folder_field_candidates','extension_id_candidates','target_card_candidates','last_owned_uia_nodes','refused_uia_pid','last_owned_picker_windows','last_owned_browser_windows','navigation_shortcut_events','navigation_enter_events','navigation_confirm_shortcut_events','navigation_escape_events')
   $fixed=@{test=@('windows-stable-bundled-extension-load');scope=@('bundled-extension-load-only');browser=@('chrome','edge');stage=@('arguments','launch-contained-browser','owned-browser-window','ordinary-navigation','developer-mode','load-unpacked','owned-folder-picker','folder-picker-path','loaded-extension-card','browser-cleanup');error_kind=@('com','access-denied','io','argument','other')}
   $failures=@('requires-hosted-windows-ci','invalid-arguments','unsupported-browser','invalid-proxy-port','profile-not-empty','wrong-browser-executable','not-installed-stable-brand','invalid-bundled-manifest','unexpected-bundled-extension','stage-deadline','owned-browser-window-unavailable','navigation-window-not-owned','navigation-foreground-unavailable','owned-address-bar-unavailable','address-value-pattern-unavailable','navigation-value-not-applied','navigation-focus-or-value-changed','extensions-document-unavailable','committed-internal-uri-unavailable','extensions-document-changed','navigation-input-target-not-owned','navigation-input-key-already-held','navigation-input-incomplete','developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','load-unpacked-unavailable','owned-folder-picker-unavailable','ambiguous-folder-field','folder-field-unavailable','folder-value-pattern-unavailable','folder-path-value-mismatch','select-folder-unavailable','folder-picker-did-not-close','ambiguous-target-card','ambiguous-extension-id','loaded-extension-id-unavailable','native-operation-failed','invalid-owned-directory','directory-reparse-point','invalid-regular-file','invalid-json-size','invalid-json-object','evidence-too-large','uia-element-not-owned','uia-window-not-owned','uia-node-bound','uia-label-bound','ambiguous-owned-control','control-not-actionable','invoke-pattern-unavailable','job-create-failed','job-limits-failed','attribute-size-failed','attribute-initialize-failed','job-list-failed','browser-create-failed','browser-job-membership-failed','invalid-browser-argument','ambiguous-owned-window')
   $clean=[ordered]@{}
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
-    if ($key -cin @('developer_observation','page_observation_before_navigation','navigation_failure_observation')) { $clean[$key]=ConvertTo-PickleExtensionDeveloperObservation $value }
+    if ($key -ceq 'failure_observation') {
+      if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.stage -cnotin @('developer-mode','loaded-extension-card') -or $Report.failure -isnot [string]) { throw 'Failure diagnostics cannot attest success or another stage.' }
+      $clean[$key]=ConvertTo-PickleExtensionFailureObservation $value
+    }
+    elseif ($key -cin @('developer_observation','page_observation_before_navigation','navigation_failure_observation')) { $clean[$key]=ConvertTo-PickleExtensionDeveloperObservation $value }
     elseif ($key -cin $booleans -and $value -is [bool]) { $clean[$key]=$value }
     elseif ($key -cin $numbers -and ($value -is [int] -or $value -is [long])) { $clean[$key]=$value }
     elseif ($fixed.ContainsKey($key) -and $value -cin $fixed[$key]) { $clean[$key]=$value }
