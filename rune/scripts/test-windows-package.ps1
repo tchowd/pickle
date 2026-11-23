@@ -5,7 +5,7 @@ param(
   [string]$ExpectedVersion
 )
 $ErrorActionPreference = 'Stop'
-$uiMode = if ($Configuration -eq 'release') { 'native-window' } else { 'headless-render' }
+$uiMode = if ($Configuration -eq 'release') { 'native-window' } else { 'headless-render-and-native-window' }
 Set-Location (Join-Path $PSScriptRoot '..')
 $installer = (Resolve-Path $InstallerPath).Path
 if (!$ExpectedVersion) {
@@ -81,17 +81,18 @@ if ($Configuration -eq 'debug') {
   if ($render.ExitCode -ne 0 -or !(Test-Path $snapshot) -or !(Test-Path $tree)) { throw 'Installed debug application could not render the offline sample.' }
 }
 $uninstaller = Join-Path $testDirectory 'Uninstall.exe'
+& (Join-Path $PSScriptRoot 'test-windows-startup-smoke.ps1')
+. (Join-Path $PSScriptRoot 'windows-native-smoke.ps1')
+. (Join-Path $PSScriptRoot 'windows-startup-smoke.ps1')
+$supportRoot = Join-Path $env:LOCALAPPDATA 'Pickle\PickleRune\data'
+Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-startup-failure.json") $Configuration
 $background = $null
 try {
-  if ($Configuration -eq 'release') {
-    . (Join-Path $PSScriptRoot 'windows-native-smoke.ps1')
-    $stdout = Join-Path $PWD "artifacts/$variant-release-native-stdout.log"
-    $stderr = Join-Path $PWD "artifacts/$variant-release-native-stderr.log"
-    $background = Start-Process -FilePath $application -ArgumentList @('--sample') -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-    Assert-PickleNativeReleaseWindow $background $application (Join-Path $PWD "artifacts/$variant-release-native-smoke.json")
-  } else {
-    $background = Start-Process -FilePath $application -ArgumentList @('--background') -PassThru
-  }
+  $stdout = Join-Path $PWD "artifacts/$variant-$Configuration-native-stdout.log"
+  $stderr = Join-Path $PWD "artifacts/$variant-$Configuration-native-stderr.log"
+  $background = Start-Process -FilePath $application -ArgumentList @('--sample') -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+  $nativeTest = if ($Configuration -eq 'release') { 'windows-native-release-window' } else { 'windows-native-debug-window' }
+  Assert-PickleNativeReleaseWindow $background $application (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke.json") $nativeTest
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   $running = $false
   while ([DateTime]::UtcNow -lt $deadline) {
@@ -119,7 +120,6 @@ if ((Invoke-AppProbe @('--check-running')) -ne 0) { throw 'The instance lease di
 if ((Invoke-AppProbe @('--disconnect-browsers')) -ne 0) { throw 'The installed application browser-cleanup command failed.' }
 $marker = Join-Path $testDirectory 'unrelated-file-must-remain.txt'
 Set-Content -LiteralPath $marker -Value 'Uninstall must preserve unrelated files.'
-$supportRoot = Join-Path $env:LOCALAPPDATA 'Pickle\PickleRune\data'
 $dataMarker = Join-Path $supportRoot ('package-smoke-retention-' + [guid]::NewGuid().ToString('N') + '.txt')
 New-Item -ItemType Directory -Path $supportRoot -Force | Out-Null
 Set-Content -LiteralPath $dataMarker -Value 'Uninstall must preserve application data.'

@@ -2,6 +2,30 @@ use super::*;
 use std::io::Cursor;
 use tokio::sync::mpsc::unbounded_channel;
 
+#[test]
+fn registry_path_encoding_is_lossless_terminated_bounded_and_counts_bytes() {
+    let original: Vec<u16> = "C:\\Users\\例子\\Pickle 🥒\\com.pickle.reader.json"
+        .encode_utf16()
+        .collect();
+    let (value, bytes) = registry_reg_sz(original.clone()).unwrap();
+    assert_eq!(&value[..value.len() - 1], &original);
+    assert_eq!(value.last(), Some(&0));
+    assert_eq!(bytes as usize, value.len() * 2);
+    // Windows OsStr is not required to be valid Unicode. Never lossy-convert
+    // its raw UTF-16, or the installed registration can point to another path.
+    let (unpaired, bytes) = registry_reg_sz([0x43, 0x3a, 0x5c, 0xd800]).unwrap();
+    assert_eq!(unpaired, [0x43, 0x3a, 0x5c, 0xd800, 0]);
+    assert_eq!(bytes, 10);
+    assert!(registry_reg_sz([]).is_err());
+    assert!(registry_reg_sz([0x43, 0, 0x44]).is_err());
+    let (limit, bytes) = registry_reg_sz(std::iter::repeat_n(0x61, 32_766)).unwrap();
+    assert_eq!(limit.len(), 32_767);
+    assert_eq!(bytes, 65_534);
+    assert!(registry_reg_sz(std::iter::repeat_n(0x61, 32_767)).is_err());
+    // Infinite input is also bounded before allocation/validation.
+    assert!(registry_reg_sz(std::iter::repeat(0x61)).is_err());
+}
+
 fn payload() -> BrowserPayload {
     BrowserPayload {
         id: Uuid::new_v4(),

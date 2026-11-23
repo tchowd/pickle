@@ -21,6 +21,7 @@ python3 scripts/test_finalize_macos_release.py
     bash rune/native/macos/tests/run-page-fixture.sh
     bash rune/native/macos/tests/run-invocation-fixture.sh
     bash rune/native/macos/tests/run-window-fixture.sh
+    bash rune/native/macos/tests/run-launch-fixture.sh
   fi
 )
 mkdir -p artifacts

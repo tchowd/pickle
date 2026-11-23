@@ -581,7 +581,9 @@ mod tests {
         state.finish_local_connection(attempt, key, Ok(models()));
         assert!(matches!(state.local_connection.status, Status::Idle));
         let (attempt, key, _) = checking(&mut state);
-        let services = std::sync::Arc::new(crate::controller::Services::new(None, &state.settings));
+        let (services, _runtime_owner) =
+            crate::controller::Services::new(None, &state.settings).unwrap();
+        let services = std::sync::Arc::new(services);
         services.shutdown.cancel();
         state.services = Some(services);
         state.finish_local_connection(attempt, key, Ok(models()));

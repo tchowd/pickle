@@ -10,6 +10,10 @@ use std::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+#[path = "context_lifecycle_tests.rs"]
+mod context_lifecycle_tests;
+
 pub const SAMPLE: &str = "The treatment may reduce symptoms in some patients, but the evidence remains limited. Larger studies are needed before the findings can be applied more broadly.";
 pub const SAMPLE_ANSWER: &str = "The treatment **might help some people**, but there is not enough evidence yet.\n\nLarger studies are needed to find out how well it works and who could benefit.\n\nThis is a fixed demonstration. Your passage stays on this device.";
 pub const READER_SCROLL: &str = "reader-scroll";
@@ -59,8 +63,15 @@ pub enum Activity {
     ChooseChart(Pending),
     Failed(String),
 }
+impl Drop for Activity {
+    fn drop(&mut self) {
+        if let Self::Running { cancel, .. } = self {
+            cancel.cancel();
+        }
+    }
+}
 pub struct Services {
-    pub runtime: tokio::runtime::Runtime,
+    pub runtime: crate::service_runtime::ServiceRuntime,
     pub repository: Option<Arc<Repository>>,
     pub paused: AtomicBool,
     pub exclusions: std::sync::Mutex<Vec<String>>,
@@ -73,23 +84,27 @@ pub struct Services {
     pub invocation_revision: AtomicU64,
 }
 impl Services {
-    pub fn new(repository: Option<Arc<Repository>>, settings: &Settings) -> Self {
-        Self {
-            runtime: tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("Could not start the background runtime"),
-            repository,
-            paused: AtomicBool::new(false),
-            exclusions: std::sync::Mutex::new(settings.exclusions.clone()),
-            shutdown: CancellationToken::new(),
-            settings_revision: AtomicU64::new(0),
-            settings_writer: std::sync::Mutex::new(()),
-            policy_pending: AtomicBool::new(false),
-            pinned: AtomicBool::new(false),
-            busy: AtomicBool::new(false),
-            invocation_revision: AtomicU64::new(0),
-        }
+    pub fn new(
+        repository: Option<Arc<Repository>>,
+        settings: &Settings,
+    ) -> std::io::Result<(Self, crate::service_runtime::RuntimeOwner)> {
+        let (runtime, owner) = crate::service_runtime::ServiceRuntime::new()?;
+        Ok((
+            Self {
+                runtime,
+                repository,
+                paused: AtomicBool::new(false),
+                exclusions: std::sync::Mutex::new(settings.exclusions.clone()),
+                shutdown: CancellationToken::new(),
+                settings_revision: AtomicU64::new(0),
+                settings_writer: std::sync::Mutex::new(()),
+                policy_pending: AtomicBool::new(false),
+                pinned: AtomicBool::new(false),
+                busy: AtomicBool::new(false),
+                invocation_revision: AtomicU64::new(0),
+            },
+            owner,
+        ))
     }
 }
 pub struct AppState {
@@ -406,7 +421,10 @@ impl AppState {
     pub fn sample_result(&mut self) {
         self.sample();
         self.panel = Panel::Expanded;
-        self.result = Some(ReadingResult {
+        self.result = Some(Self::demonstration_result());
+    }
+    fn demonstration_result() -> ReadingResult {
+        ReadingResult {
             id: uuid::Uuid::new_v4(),
             action: ReadingAction::Simplify,
             text: SAMPLE_ANSWER.into(),
@@ -418,7 +436,7 @@ impl AppState {
             repairs: 0,
             notes: vec![],
             timing: None,
-        });
+        }
     }
     pub fn accept_capture(&mut self, capture: pickle_platform::CapturedSelection) {
         if self.paused || self.settings_pending {
@@ -621,18 +639,26 @@ impl AppState {
         );
     }
     pub fn start(&mut self, pending: Pending, tx: &mut Tx) {
+        self.start_reading(pending, tx, true);
+    }
+    pub(crate) fn continue_context(&mut self, pending: Pending, tx: &mut Tx) {
+        self.start_reading(pending, tx, false);
+    }
+    fn start_reading(&mut self, pending: Pending, tx: &mut Tx, activate: bool) {
         if self.settings_pending {
             self.notice =
                 Some("Wait for your connection settings to finish saving, then try again.".into());
             return;
         }
-        if !self.commit_auto_preview() {
+        if activate && !self.commit_auto_preview() {
             return;
         }
         self.cancel_request();
-        self.route = Route::Reader;
-        self.panel = Panel::Expanded;
-        self.expand(tx, 680.0);
+        if activate {
+            self.route = Route::Reader;
+            self.panel = Panel::Expanded;
+            self.expand(tx, 680.0);
+        }
         self.last = Some(pending.clone());
         if self.context_state.pending > 0 {
             self.context_state.action = Some(pending);
@@ -705,7 +731,12 @@ impl AppState {
         }
         let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
             if self.demo {
-                self.sample_result();
+                if activate {
+                    self.sample_result();
+                } else {
+                    self.result = Some(Self::demonstration_result());
+                    self.activity = Activity::Idle;
+                }
             } else {
                 self.activity =
                     Activity::Failed("Connection services are not ready. Try again.".into());
@@ -959,7 +990,7 @@ impl AppState {
             }
             let outcome = save_settings_transaction(&repo, &settings);
             let outcome_services = worker.clone();
-            handle.update(move |s, _| {
+            handle.update(move |s, tx| {
                 if outcome_services.settings_revision.load(Ordering::Acquire) != version {
                     return;
                 }
@@ -992,6 +1023,10 @@ impl AppState {
                         }
                     }
                 }
+                // A context callback may have arrived while settings were
+                // pending. Failure retains its action; success may deliberately
+                // cancel it via the policy commit above. Neither navigates.
+                s.context_ready(tx);
             });
         });
     }
@@ -1403,9 +1438,16 @@ async fn make_pipeline(settings: &Settings, demo: bool) -> std::result::Result<P
 mod invocation_settings_tests {
     use super::*;
 
-    fn desktop_without_shell(directory: &std::path::Path) -> (AppState, Arc<Services>) {
+    fn desktop_without_shell(
+        directory: &std::path::Path,
+    ) -> (
+        AppState,
+        Arc<Services>,
+        crate::service_runtime::RuntimeOwner,
+    ) {
         let repository = Arc::new(Repository::new(directory.to_owned()).unwrap());
-        let services = Arc::new(Services::new(Some(repository), &Settings::default()));
+        let (services, owner) = Services::new(Some(repository), &Settings::default()).unwrap();
+        let services = Arc::new(services);
         // Construct only a handle queue; never start Rune's native event loop.
         let app = rune::App::new(rune::AppSpec::new(
             "Settings fixture",
@@ -1421,13 +1463,14 @@ mod invocation_settings_tests {
                 ..AppState::default()
             },
             services,
+            owner,
         )
     }
 
     #[test]
     fn unrelated_connection_save_can_queue_when_native_shell_is_unavailable() {
         let directory = tempfile::tempdir().unwrap();
-        let (mut state, services) = desktop_without_shell(directory.path());
+        let (mut state, services, owner) = desktop_without_shell(directory.path());
         // Keep this admission regression free of native transcriber cache writes:
         // invalidate the queued revision before allowing the worker to proceed.
         let writer = services.settings_writer.lock().unwrap();
@@ -1439,12 +1482,13 @@ mod invocation_settings_tests {
         assert!(state.notice.is_none());
         services.settings_revision.fetch_add(1, Ordering::AcqRel);
         drop(writer);
+        assert!(owner.shutdown(std::time::Duration::from_secs(2)).finished);
     }
 
     #[test]
     fn changed_shortcut_save_rejects_before_storage_when_native_shell_is_unavailable() {
         let directory = tempfile::tempdir().unwrap();
-        let (mut state, services) = desktop_without_shell(directory.path());
+        let (mut state, services, owner) = desktop_without_shell(directory.path());
         let original = state.settings.invocation_config();
         state.shortcut = TextEdit::new("ctrl+alt+q");
         state.save_settings();
@@ -1460,6 +1504,7 @@ mod invocation_settings_tests {
                 .contains("native invocation service")
         );
         assert!(!directory.path().join("settings.json").exists());
+        assert!(owner.shutdown(std::time::Duration::from_secs(2)).finished);
     }
 }
 

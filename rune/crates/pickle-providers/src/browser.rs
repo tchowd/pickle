@@ -368,6 +368,84 @@ pub struct HostRegistration {
     pub application_aumid: Option<String>,
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn registry_reg_sz(value: impl IntoIterator<Item = u16>) -> Result<(Vec<u16>, u32), PickleError> {
+    let mut value = Vec::from_iter(value.into_iter().take(32_767));
+    // Keep native UTF-16 code units, including legal unpaired Windows path
+    // surrogates, without ever allowing an embedded string terminator.
+    if value.is_empty() || value.len() >= 32_767 || value.contains(&0) {
+        return Err(error(
+            "The browser host registry path is invalid or too long.",
+        ));
+    }
+    value.push(0);
+    let bytes = value
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|bytes| u32::try_from(bytes).ok())
+        .ok_or_else(|| error("The browser host registry path is too long."))?;
+    Ok((value, bytes))
+}
+
+#[cfg(target_os = "windows")]
+fn register_browser_manifest(browser: BrowserKind, manifest: &Path) -> Result<(), PickleError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
+            RegCreateKeyExW, RegSetValueExW,
+        },
+    };
+    struct OwnedKey(HKEY);
+    impl Drop for OwnedKey {
+        fn drop(&mut self) {
+            // This handle is owned only after successful creation/opening.
+            unsafe { RegCloseKey(self.0) };
+        }
+    }
+    let name = browser
+        .registry_key()
+        .ok_or_else(|| error("This browser is unsupported on Windows."))?;
+    let (name, _) = registry_reg_sz(name.encode_utf16())?;
+    let (value, bytes) = registry_reg_sz(manifest.as_os_str().encode_wide())?;
+    let mut raw = std::ptr::null_mut();
+    let created = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            name.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut raw,
+            std::ptr::null_mut(),
+        )
+    };
+    if created != ERROR_SUCCESS {
+        return Err(error("Could not register the browser host."));
+    }
+    let key = OwnedKey(raw);
+    // Only the default REG_SZ value under this browser's exact per-user host
+    // key. An in-process write cannot outlive forced app termination, unlike
+    // a detached reg.exe child during a shutdown deadline.
+    let written = unsafe {
+        RegSetValueExW(
+            key.0,
+            std::ptr::null(),
+            0,
+            REG_SZ,
+            value.as_ptr().cast(),
+            bytes,
+        )
+    };
+    if written != ERROR_SUCCESS {
+        return Err(error("Windows could not register the browser host."));
+    }
+    Ok(())
+}
+
 /// Explicit setup action. Installs a browser-specific binary copy and origin-bound registration.
 pub fn install_browser_host(
     browser: BrowserKind,
@@ -465,28 +543,7 @@ pub fn install_browser_host(
             &json!({"name":"com.pickle.reader","description":"Pickle page context","path":destination,"type":"stdio","allowed_origins":[registration.allowed_origin]}),
         )?;
         #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            let status = std::process::Command::new("reg.exe")
-                .args([
-                    "add",
-                    &format!("HKCU\\{}", browser.registry_key().unwrap()),
-                    "/ve",
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                ])
-                .arg(&manifest)
-                .arg("/f")
-                .creation_flags(0x08000000)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(|_| error("Could not register the browser host."))?;
-            if !status.success() {
-                return Err(error("Windows could not register the browser host."));
-            }
-        }
+        register_browser_manifest(browser, &manifest)?;
         Ok(manifest)
     }
 }

@@ -18,6 +18,26 @@ use windows::{
 fn error(message: &str) -> PlatformError {
     PlatformError(message.into())
 }
+
+/// A native dialog independent of Rune/D3D and any reader window. Fixed strings
+/// only: arbitrary rendering errors and source content never enter the dialog.
+pub fn present_reader_failure() -> Result<(), PlatformError> {
+    let title = wide(READER_FAILURE_TITLE)?;
+    let message = wide(READER_FAILURE_MESSAGE)?;
+    let result = unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR | MB_TASKMODAL,
+        )
+    };
+    if result.0 == 0 {
+        Err(error("The native error dialog is unavailable."))
+    } else {
+        Ok(())
+    }
+}
 fn wide(text: &str) -> Result<Vec<u16>, PlatformError> {
     if text.contains('\0') {
         return Err(error(

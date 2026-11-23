@@ -20,7 +20,7 @@ cargo run --locked -p pickle-app
 
 If an installed `stable` toolchain reports the same Rust version, `cargo +stable` can select it without downloading a separately named toolchain. Use the pinned toolchain in CI/release builds.
 
-The app opens a reader and stays running after its window closes. Use the menu-bar/system-tray menu to reopen it or quit. A second normal launch forwards Reopen to the first process.
+The app opens a reader and stays running after its window closes. Use the menu-bar/system-tray menu to reopen it or quit. A second normal launch forwards Reopen to the first process. If the reader cannot initialize its graphics/window, a native error dialog explains the next steps. Quit waits for background work and window preferences to finish; an unsafe shutdown deadline exits with a fixed failure code instead of releasing the instance lease while writers remain.
 
 ### macOS bundle
 
@@ -89,7 +89,7 @@ No personal Ross/Tailscale connection or shared cloud credential is bundled. No 
 
 ## Context tools
 
-Source-window OCR and browser references are off by default in this rebuild. Enable the features you want in Settings. Capture failures fall back to the passage, and late context cannot regenerate an answer.
+Source-window OCR and browser references are off by default in this rebuild. Enable the features you want in Settings. Capture failures fall back to the passage, and late context cannot regenerate an answer. Finishing pending context preserves your current Settings or saved-content view; an explicit new reading action returns to Reader.
 
 - Source-window screenshots are retained in the session. Ordinary reading sends bounded OCR text, not image bytes.
 - **Analyze visuals with Cloudflare** explicitly sends the screenshot and selection to Cloudflare and may incur charges.

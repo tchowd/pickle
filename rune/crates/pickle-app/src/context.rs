@@ -33,6 +33,11 @@ impl Default for ContextState {
         }
     }
 }
+impl Drop for ContextState {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
 impl ContextState {
     pub fn cancel_work(&mut self) {
         self.cancel.cancel();
@@ -172,9 +177,10 @@ impl AppState {
         }
         if self.context_state.pending == 0
             && matches!(self.activity, Activity::WaitingContext)
+            && !self.settings_pending
             && let Some(action) = self.context_state.action.take()
         {
-            self.start(action, tx);
+            self.continue_context(action, tx);
         }
     }
     pub fn clear_context(&mut self) {

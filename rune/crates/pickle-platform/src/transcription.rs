@@ -188,14 +188,13 @@ pub fn transcribe_wav(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
+    #[cfg(not(target_os = "windows"))]
     let mut child = command
         .spawn()
         .map_err(|_| error("The configured local transcription executable could not start."))?;
+    #[cfg(target_os = "windows")]
+    let mut child = super::windows_child_job::spawn(&command)
+        .map_err(|_| error("The local transcription executable could not start inside its required process container."))?;
     let stdin = child
         .stdin
         .take()

@@ -56,8 +56,8 @@ public static class PickleNativeWindowProbe {
 '@
 }
 
-function Assert-PickleNativeReleaseWindow([Diagnostics.Process]$Process, [string]$ExpectedExecutable, [string]$EvidencePath) {
-  $evidence = [ordered]@{ schema=1; test='windows-native-release-window'; passed=$false; process_id=$Process.Id; executable=$ExpectedExecutable; mode='native-sample'; window=$null; responsiveness=@() }
+function Assert-PickleNativeReleaseWindow([Diagnostics.Process]$Process, [string]$ExpectedExecutable, [string]$EvidencePath, [string]$TestName='windows-native-release-window') {
+  $evidence = [ordered]@{ schema=1; test=$TestName; passed=$false; process_id=$Process.Id; executable=$ExpectedExecutable; mode='native-sample'; window=$null; responsiveness=@() }
   try {
     $deadline = [DateTime]::UtcNow.AddSeconds(25)
     $window = $null

@@ -24,6 +24,7 @@ fn main() {
         .arg("../../native/macos/PickleAudio.swift")
         .arg("../../native/macos/PickleInvocation.swift")
         .arg("../../native/macos/PickleWindow.swift")
+        .arg("../../native/macos/PickleLaunch.swift")
         .arg("-o")
         .arg(out.join("libPickleBridge.a"))
         .status()
@@ -56,6 +57,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../native/macos/PickleAudio.swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleInvocation.swift");
     println!("cargo:rerun-if-changed=../../native/macos/PickleWindow.swift");
+    println!("cargo:rerun-if-changed=../../native/macos/PickleLaunch.swift");
     for framework in [
         "AppKit",
         "ApplicationServices",

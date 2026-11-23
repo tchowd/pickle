@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 #[error("{0}")]
 pub struct PlatformError(pub String);
 
+pub const READER_FAILURE_TITLE: &str = "Pickle could not open the reader";
+pub const READER_FAILURE_MESSAGE: &str = "Restart Pickle. If the problem continues, restart your computer and check for operating system and graphics-driver updates.";
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SelectionBounds {
     pub x: f64,
@@ -75,6 +78,8 @@ pub struct CapturedPage {
     pub truncated: bool,
 }
 mod transcription;
+#[cfg(target_os = "windows")]
+mod windows_child_job;
 pub use transcription::{
     LocalTranscriberConfig, PreparedLocalTranscriber, configure_local_transcriber,
     install_local_transcriber, local_transcriber_config, prepare_local_transcriber, transcribe_wav,

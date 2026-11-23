@@ -9,6 +9,7 @@ mod diagnostics;
 mod geometry_store;
 mod instance;
 mod invocation_ui;
+mod lifecycle;
 mod local_connection;
 mod maintenance;
 mod migration;
@@ -17,6 +18,7 @@ mod release_verify;
 #[cfg(test)]
 mod review_tests;
 mod scenes;
+mod service_runtime;
 mod shell;
 mod storage;
 #[cfg(test)]
@@ -74,6 +76,7 @@ fn main() {
     let sample = arguments.iter().any(|arg| arg == "--sample");
     let background = arguments.iter().any(|arg| arg == "--background");
     let headless = scenes::isolated_startup(&arguments);
+    let interactive_failure = lifecycle::interactive_failure(&arguments, headless);
     let mut instance = if headless {
         None
     } else {
@@ -116,7 +119,20 @@ fn main() {
             }
         }
     };
-    let services = Arc::new(Services::new(repository, &initial.settings));
+    let (services, runtime_owner) = match Services::new(repository, &initial.settings) {
+        Ok(started) => started,
+        Err(_) => {
+            // No app jobs or geometry worker exist yet. Keep the lease through
+            // the dialog so installers still see this loaded executable.
+            eprintln!("Pickle could not start background services (E_RUNTIME_START).");
+            if interactive_failure {
+                let _ = pickle_platform::present_reader_failure();
+            }
+            drop(instance.take());
+            std::process::exit(1);
+        }
+    };
+    let services = Arc::new(services);
     let geometry_worker = services.repository.as_ref().and_then(|repository| {
         match geometry_store::Worker::start(repository.directory().to_owned()) {
             Ok(started) => {
@@ -216,6 +232,7 @@ fn main() {
             true
         });
     let app = if background { app.windowless() } else { app };
+    let health_handle = handle.clone();
     let app = app.on_ready(move |window| {
         #[cfg(target_os = "macos")]
         let drag_error = if headless {
@@ -237,14 +254,78 @@ fn main() {
             }
         });
     });
-    app.run();
-    services.shutdown.cancel();
-    if let Some(worker) = geometry_worker
-        && let Err(error) = worker.finish()
-    {
-        eprintln!("{error}");
+    // Rune otherwise exits the process directly, bypassing durable cleanup.
+    rune::orderly_exit();
+    let monitor = if headless {
+        Ok(None)
+    } else {
+        let probe = health_handle.clone();
+        let quit = health_handle;
+        lifecycle::WindowMonitor::start(
+            move || probe.window_error().is_some(),
+            move || {
+                quit.update(|state, tx| {
+                    state.cancel();
+                    tx.quit();
+                })
+            },
+        )
+        .map(Some)
+    };
+    let (run_failed, monitor) = match monitor {
+        Ok(monitor) => (app.try_run().is_err(), monitor),
+        Err(()) => {
+            drop(app);
+            (true, None)
+        }
+    };
+    let window_failed = monitor.is_some_and(lifecycle::WindowMonitor::finish);
+    let cleaned = lifecycle::cleanup(
+        || services.shutdown.cancel(),
+        || {
+            let stopped = runtime_owner.shutdown(lifecycle::CLEANUP_TIMEOUT);
+            // Whole-runtime completion is mandatory; the wrapper count is an
+            // additional consistency check, never evidence of completion alone.
+            stopped.finished && stopped.unfinished_blocking == 0
+        },
+        || match geometry_worker {
+            Some(worker) => {
+                lifecycle::finish_with_timeout(move || worker.finish(), lifecycle::CLEANUP_TIMEOUT)
+            }
+            None => Ok(Ok(())),
+        },
+    );
+    match lifecycle::exit_decision(
+        run_failed,
+        window_failed,
+        interactive_failure,
+        cleaned,
+        || {
+            let _ = pickle_platform::present_reader_failure();
+        },
+        || {
+            drop(instance.take());
+        },
+    ) {
+        lifecycle::Exit::Success => {}
+        lifecycle::Exit::UnsafeShutdown => {
+            // Keep the lease until process termination. A modal dialog here
+            // could leave unfinished writers alive indefinitely awaiting ACK.
+            eprintln!("Pickle could not finish shutdown safely (E_SHUTDOWN_TIMEOUT).");
+            std::process::exit(1);
+        }
+        lifecycle::Exit::WriteFailure => {
+            eprintln!("Pickle could not finish saving window preferences (E_SHUTDOWN_WRITE).");
+            std::process::exit(1);
+        }
+        lifecycle::Exit::ReaderFailure => {
+            eprintln!(
+                "{} (E_READER_FAILURE).",
+                pickle_platform::READER_FAILURE_TITLE
+            );
+            std::process::exit(1);
+        }
     }
-    drop(instance);
 }
 
 fn on_key(s: &mut AppState, event: &KeyEvent, tx: &mut Tx) -> bool {

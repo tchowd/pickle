@@ -6,6 +6,7 @@ use std::{
 };
 
 unsafe extern "C" {
+    fn pickle_present_reader_failure() -> i32;
     fn pickle_string_free(value: *mut c_char);
     fn pickle_capture_selection(exclusions: *const c_char) -> *mut c_char;
     fn pickle_permission_status() -> *mut c_char;
@@ -36,6 +37,18 @@ unsafe extern "C" {
         context: *mut c_void,
     ) -> *mut c_void;
     fn pickle_audio_release(handle: *mut c_void);
+}
+
+/// Main-thread, GPU-independent, fixed-content fatal error. Never opens a source
+/// or reads credentials. A missing interactive session returns an error.
+pub fn present_reader_failure() -> Result<(), PlatformError> {
+    if unsafe { pickle_present_reader_failure() } == 1 {
+        Ok(())
+    } else {
+        Err(PlatformError(
+            "The native error dialog is unavailable.".into(),
+        ))
+    }
 }
 
 fn cstring(value: &str) -> Result<CString, PlatformError> {

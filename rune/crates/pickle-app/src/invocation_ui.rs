@@ -247,7 +247,8 @@ mod tests {
             ..AppState::default()
         };
         let saved = state.settings.clone();
-        let services = std::sync::Arc::new(crate::controller::Services::new(None, &saved));
+        let (services, _runtime_owner) = crate::controller::Services::new(None, &saved).unwrap();
+        let services = std::sync::Arc::new(services);
         state.services = Some(services.clone());
         state.retry_invocation();
         // A saved-valid configuration reaches the missing-shell guard; using
