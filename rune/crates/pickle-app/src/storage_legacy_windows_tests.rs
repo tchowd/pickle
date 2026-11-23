@@ -13,6 +13,7 @@ const DIRECTORY: u32 = 0x10;
 const REPARSE_POINT: u32 = 0x400;
 const DACL_INFORMATION: u32 = 4;
 const DACL_CONTROL: u16 = 0x150c; // present/defaulted/auto-inherit/protected
+const SE_DACL_AUTO_INHERITED: u16 = 0x0400;
 
 #[repr(C)]
 struct Acl {
@@ -351,8 +352,10 @@ impl DaclSnapshot {
     fn apply(&self, file: &File, acl: *mut Acl) -> io::Result<()> {
         // Replace only the DACL. Protection is never changed by this fixture;
         // explicitly requesting UNPROTECTED would ask Windows to inherit ACEs
-        // from the parent and can set SE_DACL_AUTO_INHERITED. Neither protection
-        // transition belongs in this ACL-only mutation/restoration operation.
+        // from the parent. Neither protection transition belongs in this
+        // ACL-only mutation/restoration operation. SetSecurityInfo can still
+        // initialize the current inheritance model; fixture setup does that
+        // before taking the baseline used for exact restoration below.
         // https://learn.microsoft.com/windows/win32/secauthz/security-information
         // Keep the full DACL_CONTROL equality check when verifying restoration.
         // SAFETY: the ACL is borrowed for this call. The retained MAXIMUM_ALLOWED
@@ -375,6 +378,75 @@ impl DaclSnapshot {
         );
         status(code)
     }
+}
+
+fn initialize_empty_fixture(directory: &tempfile::TempDir) -> io::Result<DaclSnapshot> {
+    // SetSecurityInfo converts descriptors to the current inheritance model,
+    // which sets AUTO_INHERITED even when the ACL bytes do not change:
+    // https://learn.microsoft.com/windows/win32/secauthz/automatic-propagation-of-inheritable-aces
+    // Initialize ONLY this fresh empty owned directory, before any repository or
+    // children exist. The actual denial test restores this OS-initialized
+    // baseline exactly; it does not claim to restore raw legacy control bits.
+    trace("initialize-empty-enter", None, None);
+    let file = open_mutation(directory)?;
+    let observer = open_observer(directory.path())?;
+    let owned_identity = identity(&file)?;
+    let assert_empty_identity = || -> io::Result<()> {
+        let fresh = open_observer(directory.path())?;
+        if owned_identity.2 & DIRECTORY == 0
+            || owned_identity.2 & REPARSE_POINT != 0
+            || identity(&file)? != owned_identity
+            || identity(&observer)? != owned_identity
+            || identity(&fresh)? != owned_identity
+            || final_path(&file)? != fs::canonicalize(directory.path())?
+            || fs::read_dir(directory.path())?
+                .next()
+                .transpose()?
+                .is_some()
+        {
+            return Err(invalid(
+                "Initialization requires the exact empty owned non-reparse directory",
+            ));
+        }
+        Ok(())
+    };
+    assert_empty_identity()?;
+    let original = DaclSnapshot::read(&file)?;
+    if DaclSnapshot::read(&observer)? != original {
+        return Err(invalid("Empty fixture ACL observers disagree"));
+    }
+    original.apply(&file, original.pointer())?;
+    let initialized = DaclSnapshot::read(&file)?;
+    trace(
+        "initialize-control-pair",
+        None,
+        Some((u64::from(original.control) << 16) | u64::from(initialized.control)),
+    );
+    if initialized.words != original.words
+        || initialized.length != original.length
+        || initialized.control != original.control | SE_DACL_AUTO_INHERITED
+        || DaclSnapshot::read(&observer)? != initialized
+    {
+        return Err(invalid(
+            "Empty fixture initialization changed more than AUTO_INHERITED",
+        ));
+    }
+    assert_empty_identity()?;
+    // One additional round-trip must be fully stable. No retry, arbitrary
+    // normalization or control-bit masking is allowed here or during restore.
+    initialized.apply(&file, initialized.pointer())?;
+    let stable = DaclSnapshot::read(&file)?;
+    if stable != initialized || DaclSnapshot::read(&observer)? != initialized {
+        return Err(invalid("OS-initialized fixture ACL/control is not stable"));
+    }
+    assert_empty_identity()?;
+    drop((observer, file));
+    trace(
+        "initialize-stable-baseline",
+        None,
+        Some(u64::from(stable.control)),
+    );
+    Ok(stable)
 }
 
 struct RestoreAcl<'a> {
@@ -542,6 +614,7 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
     for bookmark in [false, true] {
         trace("case-start", None, Some(u64::from(bookmark)));
         let directory = tempfile::tempdir().unwrap();
+        let initialized = initialize_empty_fixture(&directory).unwrap();
         let repo = Repository::new(directory.path().into()).unwrap();
         let untouched = seed_other_store_and_settings(&repo, bookmark);
         let original = entry(1);
@@ -556,6 +629,10 @@ fn windows_denied_directory_create_preserves_archives_and_restores_exact_owned_a
         let children_before = child_acls(directory.path());
         let before_handle = open_observer(directory.path()).unwrap();
         let before = DaclSnapshot::read(&before_handle).unwrap();
+        assert!(
+            before == initialized,
+            "Setup must retain the initialized baseline"
+        );
         let before_identity = identity(&before_handle).unwrap();
         trace("setup-complete", None, None);
 
