@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 pub type Scene = (&'static str, fn(&mut AppState));
 pub const SCENES: &[Scene] = &[
     ("sample", sample),
+    ("answer-structure", answer_structure),
     ("choosing", choosing),
     ("settings", settings),
     ("history", empty_history),
@@ -114,6 +115,18 @@ fn completed(state: &mut AppState, text: &str, chart: Option<ValidatedChart>) {
 fn sample(state: &mut AppState) {
     fixture(state, SAMPLE);
     completed(state, SAMPLE_ANSWER, None);
+}
+
+fn answer_structure(state: &mut AppState) {
+    fixture(
+        state,
+        "A fixed passage for inspecting the original answer block structure.",
+    );
+    completed(
+        state,
+        "## Overview ##\nFirst line\nsecond line\n\n- Parent\n  continued\n    * Child\n- Sibling\n\n---\n> Quoted\n> text\n```\nlet x = 1\n```\n```\nstill streaming",
+        None,
+    );
 }
 fn choosing(state: &mut AppState) {
     fixture(state, SAMPLE);

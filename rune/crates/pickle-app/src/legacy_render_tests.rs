@@ -1,4 +1,4 @@
-//! The real app reader and pinned RuneKit renderer, not a Markdown AST oracle.
+//! The real app reader and canonical block renderer, not a Markdown AST oracle.
 //! No services, native window, system clipboard, GPU or personal data is used.
 use super::*;
 use pickle_core::{ConversationTurn, QualityStatus};
@@ -39,9 +39,9 @@ fn original_list_markers_render_as_one_two_ten_and_real_copy_keeps_them() {
         let answer = elements
             .iter()
             .find(|element| element.key.as_deref() == Some("answer"))
-            .expect("The production reader must mount RuneKit Markdown");
+            .expect("The production reader must mount the answer renderer");
         let subtree = format!("{}/", answer.path);
-        // RuneKit marks decorative numeric glyphs a11y_hidden. Inspect the
+        // Decorative numeric glyphs are a11y_hidden. Inspect the
         // actual laid-out text elements that paint them, scoped to this answer.
         let markers: Vec<_> = elements
             .iter()
@@ -60,7 +60,7 @@ fn original_list_markers_render_as_one_two_ten_and_real_copy_keeps_them() {
                 .map(|element| element.text.as_deref().unwrap())
                 .collect::<Vec<_>>(),
             ["1.", "2.", "10."],
-            "Pinned RuneKit must render each independent ordered-list start"
+            "The reader must render each literal ordered marker"
         );
         for marker in markers {
             assert!(marker.opacity > 0.99 && !marker.exiting);

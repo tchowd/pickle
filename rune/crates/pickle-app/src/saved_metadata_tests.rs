@@ -253,7 +253,7 @@ fn prose_and_unknown_chart_kinds_keep_markdown_display_and_plain_copy() {
                 let answer = node(&tree, "answer").unwrap();
                 let mut displayed = Vec::new();
                 text_labels(answer, &mut displayed);
-                assert_eq!(displayed, vec!["A formatted answer. Second line."]);
+                assert_eq!(displayed, vec!["A formatted answer.\nSecond line."]);
                 click(
                     &mut runtime,
                     if detail {

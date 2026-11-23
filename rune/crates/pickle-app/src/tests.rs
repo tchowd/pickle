@@ -360,6 +360,27 @@ mod reader_parity {
         let context_id = rt.state.context_state.id;
         let context_cancel = rt.state.context_state.cancel.clone();
         let revision = rt.state.revision;
+        // Preserved hard lines can make this six-turn fixture longer than the
+        // viewport. Reveal the real control before clicking its actual centre.
+        rt.update(|_, tx| tx.scroll_into_view("clear-follow-ups"));
+        for _ in 0..60 {
+            rt.frame(1.0 / 60.0);
+        }
+        let clear = rt
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("clear-follow-ups"))
+            .unwrap();
+        let (x, y) = rt.find("clear-follow-ups").unwrap();
+        assert!(
+            x >= clear.visible[0]
+                && x <= clear.visible[0] + clear.visible[2]
+                && y >= clear.visible[1]
+                && y <= clear.visible[1] + clear.visible[3],
+            "clear rect {:?} visible {:?} center {x},{y}",
+            clear.rect,
+            clear.visible
+        );
         click(&mut rt, "clear-follow-ups");
         assert!(rt.state.conversation.is_empty());
         assert_eq!(rt.state.snapshot, snapshot);

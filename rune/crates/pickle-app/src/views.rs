@@ -4,7 +4,8 @@ use rune::{
     Color, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, spacer, text, text_input,
     tok::{TextStyle, type_},
 };
-use rune_kit::{Markdown, MarkdownStyle};
+#[path = "answer_view.rs"]
+mod answer_view;
 
 #[cfg(test)]
 #[path = "legacy_render_tests.rs"]
@@ -410,7 +411,12 @@ fn reader(s: &AppState) -> El {
                 content = content.child(chart_view(chart));
             }
             if result.chart.is_none() {
-                content = content.child(answer(&result.text, s.settings.text_size, false));
+                content = content.child(answer(
+                    "reader-base",
+                    &result.text,
+                    s.settings.text_size,
+                    false,
+                ));
             }
             if let Some(label) = result.quality.visible_label() {
                 content = content.child(note(label));
@@ -445,7 +451,12 @@ fn reader(s: &AppState) -> El {
                             .font(TextStyle::new(15.0, 600.0))
                             .color(GREEN),
                     )
-                    .child(answer(&turn.answer, s.settings.text_size, false)),
+                    .child(answer(
+                        &format!("reader-turn-{i}"),
+                        &turn.answer,
+                        s.settings.text_size,
+                        false,
+                    )),
             );
             if let Some(label) = turn.quality.visible_label() {
                 content = content.child(note(label));
@@ -453,7 +464,7 @@ fn reader(s: &AppState) -> El {
         }
         content = content.child(activity(s).key(READER_STATUS));
         if !s.draft.is_empty() {
-            content = content.child(answer(&s.draft, s.settings.text_size, true));
+            content = content.child(answer("reader-draft", &s.draft, s.settings.text_size, true));
         }
         if (s.result.is_some() || !s.conversation.is_empty()) && !busy {
             content = content.child(
@@ -570,21 +581,15 @@ fn compose(s: &AppState) -> El {
         })
         .child(content)
 }
-fn answer(value: &str, size: f32, streaming: bool) -> El {
-    Markdown::new(pickle_core::safe_answer_markup(value))
-        .autolink(false)
-        .selectable(true)
-        .streaming(streaming)
-        .render(
-            &MarkdownStyle::neutral(true)
-                .text(INK)
-                .muted(MUTED)
-                .body_font(TextStyle::new(size, 400.0).lh(size * 1.55))
-                .selection(GREEN.alpha(0.22)),
-        )
-        .key(if streaming { "answer-draft" } else { "answer" })
-        .w_full()
+fn answer(identity: &str, value: &str, size: f32, streaming: bool) -> El {
+    answer_view::render(
+        format!("answer-document-{identity}"),
+        value,
+        size,
+        streaming,
+    )
 }
+
 fn activity(s: &AppState) -> El {
     match &s.activity {
         Activity::Idle => el(),
@@ -1107,7 +1112,12 @@ fn saved_answer(entry: &crate::storage::Entry, size: f32, preview: bool) -> El {
             .shrink()
             .selectable(true)
     } else {
-        answer(&value, size, false)
+        answer(
+            &format!("saved-{}-{preview}", entry.id),
+            &value,
+            size,
+            false,
+        )
     }
 }
 
