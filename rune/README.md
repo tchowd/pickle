@@ -2,7 +2,7 @@
 
 The Rust/Rune rebuild of Pickle for macOS and Windows. It lives beside the original Swift app while native compatibility and release validation continue.
 
-This is a **development build**. macOS execution has been exercised on the development Mac. Native Windows CI has passed workspace tests, rendering and application compilation, but a subsequent notice failure prevented installed-package verification in that run. See the [execution record](../docs/RUNE-IMPLEMENTATION-STATUS.md). Developer ID signing/notarization, Windows release signing, published update hosting, and the full compatibility matrix remain release work.
+This is a **development build**. macOS execution has been exercised on the development Mac. Native Windows CI has passed workspace tests, rendering, ordinary installer/runtime/lifecycle checks and signed identity installation; the complete signed-identity OCR/lifecycle run is still being validated. See the [execution record](../docs/RUNE-IMPLEMENTATION-STATUS.md). Developer ID signing/notarization, Windows production signing, published update hosting, and the full compatibility matrix remain release work.
 
 ## Build and run
 
@@ -63,6 +63,8 @@ The preferred complete Windows installer uses NSIS with a signed external identi
 5. Choose Simplify, Explain more, or Visualize. The first request to a destination explains what is shared and requires explicit continuation.
 
 On Mac, selection invocation initially uses **Control + Option**, pressed together and released. On Windows it initially uses **Ctrl + Alt + P**. Settings offers a configurable conventional shortcut, the optional Mac gesture, and an opt-in automatic chooser. On Mac, turn off the modifier gesture to use the conventional shortcut. A conflicting shortcut preserves the previous registration. Grant Pickle Rune Accessibility permission yourself if you want cross-app capture. Selection availability depends on what each source app exposes; manual paste remains available.
+
+If initial shortcut registration fails, Settings shows **Retry shortcut** after the system condition is resolved. It retries the saved configuration without saving draft fields. Pasting stays available, and unrelated connection settings can still be saved. Development bundles use ad hoc signatures by default; a rebuilt binary may require refreshing its existing privacy grants for the exact current bundle.
 
 Automatic chooser previews preserve your current reading session until you choose an action. **Pin** keeps the reader on top and suppresses automatic previews. Settings also exposes reading levels, text size, opacity and green-accent intensity. Reader window geometry is stored separately from connection settings and clamped to a current display when restored.
 

@@ -10,6 +10,10 @@ pub(crate) fn ocr_fixture_matches(text: &str) -> bool {
         .any(|word| word.eq_ignore_ascii_case("PICKLE"))
 }
 
+// Native CI recognizes this desktop-sized fixture exactly; the former 96px glyphs
+// yielded empty text despite valid pixels, formats, stride, DPI and English language.
+pub(crate) const OCR_FIXTURE_FONT_HEIGHT: i32 = 48;
+
 /// Diagnostics for the owned fixed-word runtime probe only. Never pass captured user text here.
 pub(crate) fn ocr_fixture_diagnostic(
     recognized: &str,
@@ -30,7 +34,7 @@ pub(crate) fn ocr_fixture_diagnostic(
         "height": height,
         "dark_pixels": dark_pixels,
         "font": "Segoe UI",
-        "font_height": 96,
+        "font_height": OCR_FIXTURE_FONT_HEIGHT,
     })
 }
 
@@ -42,6 +46,9 @@ mod tests {
         let diagnostic = ocr_fixture_diagnostic("P1CKLE\n\"\\", "en-US", 768, 180, 240);
         assert_eq!(diagnostic["matched"], false);
         assert_eq!(diagnostic["recognized_text"], "P1CKLE\n\"\\");
+        assert_eq!(diagnostic["font_height"], 48);
+        assert_eq!(diagnostic["width"], 768);
+        assert_eq!(diagnostic["height"], 180);
         let serialized = diagnostic.to_string();
         assert!(!serialized.contains('\n'));
         assert_eq!(

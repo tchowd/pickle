@@ -17,6 +17,8 @@ This is a source-and-execution snapshot, not a certification. At `334c6140a468e7
 
 Earlier Windows-only lint/lock-fixture errors and the `0c53edc` notice checksum failure were fixed. Reviewed license bytes now survive Windows checkout, and multi-command notice tests fail immediately. Headless screenshots and native window responsiveness validate different paths from real cross-app capture; neither closes the complete native compatibility matrix.
 
+The follow-up comparison at `4a99cdf` recognized exact `PICKLE` at 48 pixels while all 96-pixel variants returned empty text with valid round-trip pixels/metadata. The controlled baseline is being corrected to 48 pixels, retaining the exact matcher and production OCR path; complete signed lifecycle validation still needs a rerun. The new local Mac bundle at `4a99cdf` also passed strict native configuration of both invocation modes with both GUI permissions true; physical delivery/capture has not yet been established for that artifact. Exact hashes and test boundaries are in the native record.
+
 ## 2. Actual application structure
 
 The original Swift app remains beside the new [`rune/`](../rune/) workspace. The implementation is divided as proposed:

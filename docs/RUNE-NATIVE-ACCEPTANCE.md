@@ -110,4 +110,23 @@ The fixed OCR call created an engine and completed `RecognizeAsync`/`GetResults`
 
 The prepared follow-up retains the original exact baseline check and nonzero failure, while collecting bounded failure-only comparisons: original/premultiplied/Gray8/explicit-DPI SoftwareBitmap metadata and round-trip pixels, plus a 48-pixel fixed-word sample. An explicit test-harness environment variable requests create-new PNGs of only these generated fixtures. Source/window OCR never reads that variable or writes these diagnostics. The total verification deadline is 16 seconds; normal source recognition retains its existing deadline. Microsoft accepts SoftwareBitmap input, and its official example uses premultiplied BGRA; no violation of an `Ignore`-alpha contract has been established, so production normalization has not been changed merely on that hypothesis. See [the official sample](https://github.com/microsoft/Windows-universal-samples/blob/main/Samples/OCR/cs/OcrFileImage.xaml.cs) and [the deep-copy API contract](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.imaging.softwarebitmap.createcopyfrombuffer).
 
+## Controlled comparison at `4a99cdf5c0701352d7a51fb9c52fdce05ba453f6`
+
+The optimized Windows job in [run 45095620488](https://github.com/tchowd/pickle/actions/runs/45095620488) retained the expected overall failure while collecting the comparison evidence. Original BGRA/Ignore, BGRA/Premultiplied, Gray8 and explicit-96-DPI variants all returned empty text from the 96-pixel fixture. Each round-tripped to the CPU pixels exactly, with correct dimensions, stride and DPI. The same canvas, literal word, font family and recognizer produced exact **PICKLE** at 48 pixels (1,268 dark pixels). Both owned PNGs were inspected. This isolates sensitivity to the synthetic fixture's text size in this environment; it does not establish a universal font-size limit or complete page-OCR coverage.
+
+The smoke baseline is therefore being changed to 48 pixels, preserving the 768×180 canvas, production BGRA/Ignore path and exact case-insensitive word matcher. The larger case remains diagnostic only. No comparison result can substitute for the baseline result. The corrected baseline and remaining signed identity/lifecycle steps still require a successful native CI rerun. Large text and real source-window capture remain separate acceptance cases.
+
+## Local registration verification at `4a99cdf5c0701352d7a51fb9c52fdce05ba453f6`
+
+The old app was quit normally and its absence verified. The new optimized bundle built successfully, passed signature/payload/version/capability/system-library inspection, and launched through a refreshed Finder entry for the exact current path.
+
+- Executable SHA-256: `9241ee98be0eccd1998ae306ed3e56f32e2fa74ebd8d0884e5a448b975903974`.
+- ZIP SHA-256: `8383a18a69881248cfa412dd8130a7bb7f6bd5add2d0b7a04a93be69d91817d8`.
+- The GUI diagnostics exposed the exact commit. The existing Pickle-only privacy entries were refreshed for this rebuilt binary, and the relaunched GUI reported Accessibility and screen capture **true**.
+- Turning off the modifier gesture successfully registered the conventional shortcut through the new strict path; turning it back on successfully staged its required native observers. No retry/error state appeared. This verifies accepted native configuration and rules out the earlier silent absent-shell/nil-observer paths for these calls; it does not establish actual keyboard event delivery.
+- Saved state was independently checked as OCR off, original modifier gesture on, automatic chooser off. No inference or capture action was submitted during this registration check.
+- A separate read-only `IsSecureEventInputEnabled()` probe returned false before the new launch. That is not historical evidence about the earlier failed gesture.
+
+Apple's current [NSEvent contract](https://developer.apple.com/documentation/appkit/nsevent/addglobalmonitorforevents(matching:handler:)) requires Accessibility trust for key monitoring. [Apple DTS, May 2026](https://developer.apple.com/forums/thread/828052?page=1), states that Accessibility grants event listening as well as posting; no evidence justified requesting a separate Input Monitoring grant. Neither accepted registration nor these permissions prove delivery of a physical gesture.
+
 For the earlier Mac CI success and artifact hashes, see the [implementation status](RUNE-IMPLEMENTATION-STATUS.md). Do not combine evidence from different commits into one claimed release pass.

@@ -1,6 +1,6 @@
 //! Content-free installed-package OCR probe. The only recognized pixels are a
 //! fixed word drawn into an owned memory DIB; no desktop/window DC is obtained.
-use super::PlatformError;
+use super::{PlatformError, windows_capabilities::OCR_FIXTURE_FONT_HEIGHT};
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
@@ -79,7 +79,7 @@ fn verify_on_mta(cancel: &CancellationToken) -> Result<(), PlatformError> {
     let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|_| error(
         "The Windows OCR recognizer is unavailable. An installed OCR language matching the current user's language preferences is required; this probe does not install languages."))?;
     let fixture = fixture_image()?;
-    write_owned_fixture_artifact(&fixture, 96);
+    write_owned_fixture_artifact(&fixture, OCR_FIXTURE_FONT_HEIGHT);
     let bitmap = super::windows_context::ocr_software_bitmap(&fixture, BitmapAlphaMode::Ignore)
         .map_err(|_| error("The fixed OCR SoftwareBitmap could not be constructed."))?;
     let text = super::windows_context::recognize_software_bitmap(
@@ -112,7 +112,13 @@ fn verify_on_mta(cancel: &CancellationToken) -> Result<(), PlatformError> {
             dark_pixels
         )
     );
-    emit_bitmap_diagnostic("production-bgra-ignore", &bitmap, &fixture, 96, Some(&text));
+    emit_bitmap_diagnostic(
+        "production-bgra-ignore",
+        &bitmap,
+        &fixture,
+        OCR_FIXTURE_FONT_HEIGHT,
+        Some(&text),
+    );
     if !super::windows_capabilities::ocr_fixture_matches(&text) {
         compare_owned_fixture(&bitmap, &fixture, &engine, cancel);
         let _ = bitmap.Close();
@@ -131,7 +137,7 @@ fn write_owned_fixture_artifact(fixture: &image::RgbaImage, font_height: i32) {
         return;
     };
     let mut path = std::path::PathBuf::from(path);
-    if font_height != 96 {
+    if font_height != OCR_FIXTURE_FONT_HEIGHT {
         let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
             return;
         };
@@ -260,7 +266,13 @@ fn compare_owned_fixture(
                 engine,
                 Duration::from_secs(2),
             );
-            emit_bitmap_diagnostic(label, &bitmap, fixture, 96, result.as_deref().ok());
+            emit_bitmap_diagnostic(
+                label,
+                &bitmap,
+                fixture,
+                OCR_FIXTURE_FONT_HEIGHT,
+                result.as_deref().ok(),
+            );
             let _ = bitmap.Close();
             result.map(|_| ())
         })();
@@ -273,11 +285,11 @@ fn compare_owned_fixture(
     }
     if !cancel.is_cancelled() {
         let result = (|| -> Result<(), PlatformError> {
-            let fixture = fixture_image_with_font(48)?;
-            write_owned_fixture_artifact(&fixture, 48);
+            let fixture = fixture_image_with_font(96)?;
+            write_owned_fixture_artifact(&fixture, 96);
             let bitmap =
                 super::windows_context::ocr_software_bitmap(&fixture, BitmapAlphaMode::Ignore)
-                    .map_err(|_| error("The font48 comparison bitmap could not be constructed."))?;
+                    .map_err(|_| error("The font96 comparison bitmap could not be constructed."))?;
             let result = super::windows_context::recognize_software_bitmap(
                 &bitmap,
                 cancel,
@@ -285,28 +297,29 @@ fn compare_owned_fixture(
                 Duration::from_secs(2),
             );
             emit_bitmap_diagnostic(
-                "bgra-ignore-font48",
+                "bgra-ignore-font96",
                 &bitmap,
                 &fixture,
-                48,
+                96,
                 result.as_deref().ok(),
             );
             let _ = bitmap.Close();
             result
                 .map(|_| ())
-                .map_err(|_| error("The font48 comparison did not complete."))
+                .map_err(|_| error("The font96 comparison did not complete."))
         })();
         if result.is_err() {
             eprintln!(
                 "{}",
-                serde_json::json!({"schema":1,"test":"windows-ocr-fixed-comparison-error","variant":"bgra-ignore-font48"})
+                serde_json::json!({"schema":1,"test":"windows-ocr-fixed-comparison-error","variant":"bgra-ignore-font96"})
             );
         }
     }
 }
 
 fn fixture_image() -> Result<image::RgbaImage, PlatformError> {
-    fixture_image_with_font(96)
+    // Keep the owned canvas at 768x180; only the controlled GDI font is 48px.
+    fixture_image_with_font(OCR_FIXTURE_FONT_HEIGHT)
 }
 
 fn fixture_image_with_font(font_height: i32) -> Result<image::RgbaImage, PlatformError> {
@@ -432,13 +445,25 @@ fn fixture_image_with_font(font_height: i32) -> Result<image::RgbaImage, Platfor
 mod tests {
     use super::*;
     #[test]
-    fn smaller_font_comparison_keeps_the_same_owned_canvas_and_text() {
-        let original = fixture_image().unwrap();
-        let smaller = fixture_image_with_font(48).unwrap();
-        assert_eq!(original.dimensions(), smaller.dimensions());
+    fn baseline_is_48px_and_large_comparison_keeps_the_same_owned_canvas() {
+        assert_eq!(OCR_FIXTURE_FONT_HEIGHT, 48);
+        let baseline = fixture_image().unwrap();
+        let larger = fixture_image_with_font(96).unwrap();
+        assert_eq!(baseline.dimensions(), (768, 180));
+        assert_eq!(baseline.dimensions(), larger.dimensions());
         let dark = |image: &image::RgbaImage| image.pixels().filter(|pixel| pixel[0] < 32).count();
-        assert!(dark(&smaller) > 0);
-        assert!(dark(&smaller) < dark(&original));
+        assert!(dark(&baseline) > 0);
+        assert!(dark(&baseline) < dark(&larger));
+        let ink_rows: Vec<u32> = baseline
+            .enumerate_pixels()
+            .filter(|(_, _, pixel)| pixel[0] < 32)
+            .map(|(_, y, _)| y)
+            .collect();
+        let ink_height = ink_rows.iter().max().unwrap() - ink_rows.iter().min().unwrap() + 1;
+        assert!(
+            (16..=48).contains(&ink_height),
+            "Expected desktop-sized 48px glyphs, got {ink_height} ink rows"
+        );
     }
     #[test]
     fn probe_fixture_is_an_owned_bounded_black_and_white_canvas() {
