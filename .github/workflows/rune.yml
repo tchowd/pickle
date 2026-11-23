@@ -1,9 +1,9 @@
 name: Rune desktop
 on:
   push:
-    paths: ['rune/**', 'browser-extension/**', 'Tests/BrowserExtensionTests/**', 'scripts/browser-host.py', 'scripts/local-ai/**', '.github/workflows/rune.yml']
+    paths: ['rune/**', 'browser-extension/**', 'Tests/BrowserExtensionTests/**', 'scripts/browser-host.py', 'scripts/local-ai/**', '.github/workflows/rune.yml', '.gitattributes']
   pull_request:
-    paths: ['rune/**', 'browser-extension/**', 'Tests/BrowserExtensionTests/**', 'scripts/browser-host.py', 'scripts/local-ai/**', '.github/workflows/rune.yml']
+    paths: ['rune/**', 'browser-extension/**', 'Tests/BrowserExtensionTests/**', 'scripts/browser-host.py', 'scripts/local-ai/**', '.github/workflows/rune.yml', '.gitattributes']
   workflow_dispatch:
 permissions:
   contents: read
@@ -48,6 +48,7 @@ jobs:
           cargo clippy --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked --all-targets -- -D warnings
           cargo test --manifest-path tools/icon-builder/Cargo.toml --target-dir target/icon-builder --locked
       - name: Test dependency notices
+        shell: bash
         run: |
           python packaging/test_notices.py
           python packaging/test_windows_runtime.py
@@ -66,6 +67,8 @@ jobs:
         run: |
           mkdir -p artifacts
           cargo run --locked -p pickle-app -- --scene sample --snap artifacts/reader.png --tree artifacts/reader-tree.json
+          cargo run --locked -p pickle-app -- --scene choosing --snap artifacts/chooser.png --tree artifacts/chooser-tree.json
+          cargo run --locked -p pickle-app -- --scene settings --snap artifacts/settings.png --tree artifacts/settings-tree.json
           cargo run --locked -p pickle-app -- --scene chart-bar --snap artifacts/chart-bar.png --tree artifacts/chart-bar-tree.json
           cargo run --locked -p pickle-app -- --scene chart-flow --snap artifacts/chart-flow.png --tree artifacts/chart-flow-tree.json
           cargo run --locked -p pickle-app -- --scene streaming --snap artifacts/streaming.png --tree artifacts/streaming-tree.json
@@ -101,5 +104,58 @@ jobs:
             rune/artifacts/*tree.json
             rune/artifacts/notices-*/
             rune/artifacts/*capabilities.json
+            rune/artifacts/*version.txt
             rune/artifacts/identity-ocr-result.json
             rune/artifacts/windows-runtime-report.json
+  optimized-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: rune
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.0'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rune
+          key: optimized-package
+          cache-on-failure: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Package and inspect optimized Mac build
+        if: runner.os == 'macOS'
+        run: |
+          bash scripts/build-macos.sh release
+          bash scripts/test-macos-package.sh
+      - name: Package and exercise optimized Windows build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          ./scripts/build-windows.ps1 -Configuration release -Installer
+          ./scripts/test-windows-package.ps1 -Configuration release
+          ./scripts/test-signed-identity-ci.ps1 -Configuration release
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pickle-rune-optimized-${{ runner.os }}
+          if-no-files-found: warn
+          path: |
+            rune/artifacts/*.zip
+            rune/artifacts/*setup.exe
+            rune/artifacts/notices-*/
+            rune/artifacts/*capabilities.json
+            rune/artifacts/*version.txt
+            rune/artifacts/*native-smoke*
+            rune/artifacts/*native-*.log
+            rune/artifacts/identity-ocr-result.json
+            rune/artifacts/windows-runtime-report.json
+            rune/artifacts/macos-package-report.json
