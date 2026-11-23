@@ -18,6 +18,10 @@ mod context_lifecycle_tests;
 #[path = "answer_reference_tests.rs"]
 mod answer_reference_tests;
 
+#[cfg(test)]
+#[path = "term_matching_tests.rs"]
+mod term_matching_tests;
+
 #[path = "library_controller.rs"]
 pub(crate) mod library_controller;
 
@@ -623,15 +627,7 @@ impl AppState {
         let Some(snapshot) = self.display_snapshot() else {
             return;
         };
-        let folded = |value: &str| {
-            value
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase()
-        };
-        let needle = folded(term);
-        let matches = |value: &str| folded(value).contains(&needle);
+        let matches = |value: &str| contains_source_term(value, term);
         let answer_matches = |value: &str| matches(value) || matches(&answer_plain_text(value));
         if !matches(&snapshot.text)
             && !(self.auto_preview.is_none()

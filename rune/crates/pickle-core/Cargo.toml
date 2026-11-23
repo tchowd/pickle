@@ -16,3 +16,6 @@ async-trait.workspace = true
 regex.workspace = true
 url.workspace = true
 pulldown-cmark = { version = "0.13", default-features = false }
+unicode-segmentation = "=1.13.3"
+icu_normalizer = { version = "=2.4.0", default-features = false, features = ["compiled_data"] }
+unicase = "=2.10.0"

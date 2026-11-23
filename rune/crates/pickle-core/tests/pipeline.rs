@@ -523,3 +523,59 @@ async fn invalid_chart_payload_fails_instead_of_becoming_completed() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn long_version_flow_can_generate_from_only_schema_permitted_literal_quotes() {
+    struct SchemaBoundWriter;
+    #[async_trait]
+    impl GenerativeProvider for SchemaBoundWriter {
+        fn is_remote(&self) -> bool {
+            false
+        }
+        async fn generate(
+            &self,
+            prompt: GenerationPrompt,
+            _: UnboundedSender<PipelineEvent>,
+            _: CancellationToken,
+        ) -> Result<Generation> {
+            let schema = prompt.schema.as_ref().unwrap();
+            let quote = schema["properties"]["edges"]["items"]["properties"]["evidence"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .find(|quote| quote.contains("v1.2") && quote.contains("v2.0"))
+                .ok_or_else(|| {
+                    PickleError::message("No permitted quote contains the source relationship.")
+                })?;
+            let body: serde_json::Value = serde_json::from_str(&prompt.user).unwrap();
+            assert!(body["source"].as_str().unwrap().contains(quote));
+            Ok(Generation::new(serde_json::json!({"type":"flow_diagram","nodes":[{"id":"old","label":"v1.2"},{"id":"new","label":"v2.0"}],"edges":[{"from":"old","to":"new","evidence":quote,"condition":""}]}).to_string(),"schema-bound fixture"))
+        }
+    }
+    let source = format!(
+        "{}The service migrates from v1.2 to v2.0.",
+        "Background. ".repeat(110)
+    );
+    let mut request = RequestInput::new(
+        SelectionSnapshot::new(source, "Fixture", "fixture"),
+        ReadingAction::Chart,
+    );
+    request.chart_choice = Some(ChartKind::Flow);
+    let (events, _) = unbounded_channel();
+    let outcome = Pipeline::new(Arc::new(SchemaBoundWriter), None, false)
+        .run(request, events, CancellationToken::new())
+        .await
+        .unwrap();
+    let PipelineOutcome::Result(result) = outcome else {
+        panic!("Expected a validated source flow")
+    };
+    assert_eq!(result.quality, QualityStatus::ChartValidated);
+    assert_eq!(result.chart.as_ref().unwrap().kind(), ChartKind::Flow);
+    assert!(result.text.contains("v1.2 → v2.0"));
+    assert!(
+        result
+            .text
+            .contains("Source: The service migrates from v1.2 to v2.0.")
+    );
+}

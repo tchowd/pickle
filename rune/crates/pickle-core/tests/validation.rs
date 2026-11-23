@@ -37,6 +37,57 @@ fn numeric_evidence_is_unicode_safe_and_excludes_examples() {
     assert!(numeric_evidence("$10 kg and $20%").is_empty());
 }
 #[test]
+fn unicode_word_boundaries_cannot_turn_identifiers_into_chart_quantities() {
+    // Foundation's original \w guards reject all these word characters on
+    // either side of a numeric token, including non-ASCII marks/connectors.
+    for character in ['\u{301}', '\u{93e}', '\u{203f}', '\u{200c}', '\u{200d}'] {
+        for source in [
+            format!("The identifiers are v{character}10users and v{character}20users."),
+            format!("The identifiers are $10{character}x and $20{character}x."),
+            format!("The identifiers are 10%{character}x and 20%{character}x."),
+        ] {
+            assert!(numeric_evidence(&source).is_empty(), "{source:?}");
+        }
+    }
+    // This exact graph was accepted before the boundary fix. The IDs still
+    // point at the same source positions, but neither substring is evidence.
+    let source = "The identifiers are v\u{301}10users and v\u{301}20users.";
+    let candidate = bars(source, &["n22", "n36"]);
+    assert!(validate_chart(&candidate, ChartKind::Bar, source).is_err());
+    assert_eq!(
+        chart_schema(ChartKind::Bar, source)["properties"]["bars"]["items"]["properties"]["evidenceID"]
+            ["enum"],
+        json!([]),
+    );
+}
+
+#[test]
+fn independent_quantities_surrounded_by_unicode_keep_values_and_source_ids() {
+    for source in [
+        "測定値は「10users」と「20users」。",
+        "🫛 Café: 10users — 結果: 20users.",
+    ] {
+        let values = numeric_evidence(source);
+        assert_eq!(
+            values.iter().map(|value| value.value).collect::<Vec<_>>(),
+            vec![10.0, 20.0]
+        );
+        assert!(values.iter().all(|value| value.unit == "users"));
+        for value in &values {
+            let offset = source.find(&value.quote).unwrap();
+            assert_eq!(
+                value.id,
+                format!("n{}", source[..offset].encode_utf16().count())
+            );
+        }
+        let candidate = bars(source, &[&values[0].id, &values[1].id]);
+        assert_eq!(
+            validate_chart(&candidate, ChartKind::Bar, source).unwrap(),
+            ValidatedChart::Bar(values)
+        );
+    }
+}
+#[test]
 fn bars_resolve_only_source_ids() {
     let source = "$10 and $15";
     let values = numeric_evidence(source);
@@ -106,6 +157,78 @@ fn flow_edges_and_conditions_require_literal_evidence() {
             source
         )
         .is_err()
+    );
+}
+
+#[test]
+fn long_flow_evidence_keeps_versions_decimals_and_unicode_sentences_literal() {
+    // These expected boundaries were compared with Foundation .bySentences.
+    for (passage, expected) in [
+        (
+            "The service migrates from v1.2 to v2.0.",
+            vec!["The service migrates from v1.2 to v2.0."],
+        ),
+        (
+            "The dose falls from 1.5 kg to 0.5 kg.",
+            vec!["The dose falls from 1.5 kg to 0.5 kg."],
+        ),
+        (
+            "受付したら検証する。次に保存する。",
+            vec!["受付したら検証する。", "次に保存する。"],
+        ),
+        ("First step\n\nNext step", vec!["First step", "Next step"]),
+        (
+            "Dr. Smith receives it, then forwards it.",
+            vec!["Dr.", "Smith receives it, then forwards it."],
+        ),
+        (
+            "The U.S. service receives requests, then saves them.",
+            vec!["The U.S. service receives requests, then saves them."],
+        ),
+        (
+            "Use e.g. staging before production.",
+            vec!["Use e.g. staging before production."],
+        ),
+    ] {
+        let prefix = "Background. ".repeat(110);
+        let source = format!("{prefix}{passage}");
+        let quotes = flow_evidence(&source);
+        assert_eq!(&quotes[110..], expected, "{passage}");
+        assert!(quotes.iter().all(|quote| !quote.is_empty()
+            && quote.chars().count() <= 1200
+            && source.contains(quote)));
+    }
+}
+
+#[test]
+fn flow_evidence_preserves_whole_short_sources_and_refuses_oversize_sentences() {
+    for source in [
+        " First sentence.\n\nSecond sentence. ".to_owned(),
+        "🫛".repeat(1200),
+    ] {
+        assert_eq!(flow_evidence(&source), vec![source.clone()]);
+    }
+    assert!(flow_evidence(&"🫛".repeat(1201)).is_empty());
+    let source = format!("{}.\nShort source.", "x".repeat(1201));
+    assert_eq!(flow_evidence(&source), vec!["Short source."]);
+}
+
+#[test]
+fn long_version_relationship_has_schema_permitted_evidence_and_validates() {
+    let quote = "The service migrates from v1.2 to v2.0.";
+    let source = format!("{}{quote}", "Background. ".repeat(110));
+    let schema = chart_schema(ChartKind::Flow, &source);
+    let allowed = schema["properties"]["edges"]["items"]["properties"]["evidence"]["enum"]
+        .as_array()
+        .unwrap();
+    assert!(allowed.iter().any(|value| value == quote));
+    let mut candidate = json!({"type":"flow_diagram","nodes":[{"id":"old","label":"v1.2"},{"id":"new","label":"v2.0"}],"edges":[{"from":"old","to":"new","evidence":quote,"condition":""}]});
+    let validated = validate_chart(&candidate.to_string(), ChartKind::Flow, &source).unwrap();
+    assert!(matches!(validated, ValidatedChart::Flow { .. }));
+    candidate["edges"][0]["evidence"] = json!("The service migrates from v1.2 directly to v2.0.");
+    assert!(
+        validate_chart(&candidate.to_string(), ChartKind::Flow, &source).is_err(),
+        "Sentence segmentation must not authorize an invented quote"
     );
 }
 #[test]

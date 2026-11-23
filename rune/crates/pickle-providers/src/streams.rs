@@ -76,6 +76,51 @@ pub(crate) async fn read_lines(
     lines.finish(line)
 }
 
+/// Known optional fields may be absent or null, as in the Swift decoders.
+/// Unknown extension fields remain accepted; malformed known containers do not.
+fn optional_field(value: &Value, key: &str, valid: fn(&Value) -> bool) -> bool {
+    value
+        .get(key)
+        .is_none_or(|value| value.is_null() || valid(value))
+}
+
+fn valid_sse_shape(chunk: &Value) -> bool {
+    chunk.is_object()
+        && optional_field(chunk, "response", Value::is_string)
+        && optional_field(chunk, "model", Value::is_string)
+        && optional_field(chunk, "usage", Value::is_object)
+        && optional_field(chunk, "choices", Value::is_array)
+        && chunk
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_none_or(|choices| {
+                choices.iter().all(|choice| {
+                    choice.is_object()
+                        && optional_field(choice, "delta", Value::is_object)
+                        && optional_field(choice, "finish_reason", Value::is_string)
+                        && choice
+                            .get("delta")
+                            .is_none_or(|delta| optional_field(delta, "content", Value::is_string))
+                })
+            })
+}
+
+fn valid_ollama_shape(chunk: &Value) -> bool {
+    chunk.is_object()
+        && optional_field(chunk, "model", Value::is_string)
+        && optional_field(chunk, "message", Value::is_object)
+        && optional_field(chunk, "done_reason", Value::is_string)
+        && chunk
+            .get("message")
+            .is_none_or(|message| optional_field(message, "content", Value::is_string))
+        && ["load_duration", "eval_duration", "total_duration"]
+            .iter()
+            .all(|key| optional_field(chunk, key, Value::is_number))
+        && ["eval_count", "prompt_eval_count"]
+            .iter()
+            .all(|key| optional_field(chunk, key, Value::is_i64))
+}
+
 #[derive(Default)]
 pub(crate) struct Sse {
     data: String,
@@ -113,20 +158,7 @@ impl Sse {
         }
         let chunk: Value = serde_json::from_str(&data)
             .map_err(|_| error("The answer stream contained an invalid event. Please retry."))?;
-        if !chunk.is_object()
-            || chunk
-                .get("response")
-                .is_some_and(|value| !value.is_null() && !value.is_string())
-            || chunk
-                .get("model")
-                .is_some_and(|value| !value.is_null() && !value.is_string())
-            || chunk
-                .get("choices")
-                .is_some_and(|value| !value.is_null() && !value.is_array())
-            || chunk
-                .pointer("/choices/0/delta/content")
-                .is_some_and(|value| !value.is_null() && !value.is_string())
-        {
+        if !valid_sse_shape(&chunk) {
             return Err(error(
                 "The answer stream contained an invalid event. Please retry.",
             ));
@@ -221,11 +253,8 @@ impl Ndjson {
         }
         let chunk: Value = serde_json::from_str(line)
             .map_err(|_| error("The Local server returned an invalid answer."))?;
-        if chunk
-            .pointer("/message/content")
-            .is_some_and(|value| !value.is_string())
-        {
-            return Err(error("The Local server returned invalid answer text."));
+        if !valid_ollama_shape(&chunk) {
+            return Err(error("The Local server returned an invalid answer."));
         }
         if chunk.get("error").is_some_and(|v| !v.is_null()) {
             return Err(error("The Local server could not complete the answer."));

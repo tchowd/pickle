@@ -2896,6 +2896,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "icu_normalizer",
  "pulldown-cmark",
  "regex",
  "serde",
@@ -2903,6 +2904,8 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "unicase",
+ "unicode-segmentation",
  "url",
  "uuid",
 ]

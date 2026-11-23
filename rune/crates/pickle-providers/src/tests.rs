@@ -2,14 +2,14 @@ use std::{
     collections::BTreeMap,
     io::{Read, Write},
     net::TcpListener,
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
 use pickle_core::{
-    DecisionClient, DecisionQuestion, GenerationPrompt, GenerativeProvider, PipelineEvent,
-    ReadingAction, RequestInput, SelectionSnapshot, WebReference,
+    DecisionClient, DecisionQuestion, GenerationPrompt, GenerativeProvider, Pipeline,
+    PipelineEvent, ReadingAction, RequestInput, SelectionSnapshot, WebReference,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::unbounded_channel;
@@ -459,6 +459,178 @@ async fn local_generation_verifies_metadata_before_streaming() {
     assert_eq!(request.body["options"]["num_ctx"], 8192);
     assert_eq!(request.body["options"]["num_predict"], 1024);
     assert_eq!(request.body["keep_alive"], "2m");
+}
+
+#[tokio::test]
+async fn malformed_nested_stream_envelopes_never_complete_partial_http_answers() {
+    let input = || {
+        RequestInput::new(
+            SelectionSnapshot::new("Treatment may help some people.", "Fixture", "fixture"),
+            ReadingAction::Simplify,
+        )
+    };
+    for local in [true, false] {
+        let malformed = if local {
+            vec![
+                json!({"done":true,"message":false}),
+                json!({"done":true,"message":["malformed-private-marker"]}),
+                json!({"done":true,"model":{ "private":"malformed-private-marker"}}),
+                json!({"done":true,"done_reason":false}),
+                json!({"done":true,"eval_count":"malformed-private-marker"}),
+                json!({"done":true,"load_duration":"malformed-private-marker"}),
+            ]
+        } else {
+            vec![
+                json!({"choices":[false]}),
+                json!({"choices":[{"delta":false}]}),
+                json!({"choices":[{"delta":["malformed-private-marker"]}]}),
+                json!({"choices":[{},false]}),
+                json!({"choices":[{"finish_reason":false}]}),
+                json!({"usage":[8,2]}),
+            ]
+        };
+        for terminal in malformed {
+            let mut response = if local {
+                Reply::stream(&format!(
+                    "{}\n{terminal}\n",
+                    json!({"done":false,"message":{"content":"Treatment may"}})
+                ))
+            } else {
+                Reply::stream(&format!(
+                    "data: {{\"response\":\"Treatment may\"}}\n\ndata: {terminal}\n\ndata: [DONE]\n\n"
+                ))
+            };
+            let replies = if local {
+                response.mime = "application/x-ndjson";
+                vec![
+                    Reply::json(json!({"details":{"format":"gguf"},"capabilities":["completion"]})),
+                    response,
+                ]
+            } else {
+                vec![response]
+            };
+            let (base, captured) = server(replies);
+            let provider: Arc<dyn GenerativeProvider> = if local {
+                Arc::new(OllamaProvider::new(LocalAIConfiguration {
+                    address: base.to_string(),
+                    model: "fixture-local-model".into(),
+                    token: String::new(),
+                    same_device: true,
+                }))
+            } else {
+                Arc::new(
+                    CloudflareProvider::new(ACCOUNT, "fixture-key", "@cf/meta/fixture")
+                        .with_test_base(base),
+                )
+            };
+            let (events, mut received) = unbounded_channel();
+            let outcome = Pipeline::new(provider, None, local)
+                .run(input(), events, CancellationToken::new())
+                .await;
+            let error = match outcome {
+                Err(error) => error,
+                Ok(_) => panic!("Malformed terminal completed a partial answer: {terminal}"),
+            };
+            assert!(!error.to_string().contains("malformed-private-marker"));
+            let mut partial_was_received = false;
+            while let Ok(event) = received.try_recv() {
+                if let PipelineEvent::Draft(text) = event {
+                    assert_eq!(text, "Treatment may");
+                    partial_was_received = true;
+                }
+            }
+            assert!(
+                partial_was_received,
+                "The fixture must reach stream decoding."
+            );
+            if local {
+                assert_eq!(captured.recv().unwrap().path, "/api/show");
+                assert_eq!(captured.recv().unwrap().path, "/api/chat");
+            } else {
+                assert!(captured.recv().unwrap().path.ends_with("/@cf/meta/fixture"));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optional_stream_fields_and_non_content_events_preserve_http_completion() {
+    for local in [true, false] {
+        let mut response = if local {
+            let chunks = [
+                json!({"done":false,"message":null,"model":null,"done_reason":null,"load_duration":null,"eval_count":null}),
+                json!({"done":false,"message":{"content":null,"role":"assistant"},"future_metadata":{"anything":[1,true]}}),
+                json!({"done":false,"message":{}}),
+                json!({"done":false,"message":{"content":"Café may help."}}),
+                json!({"done":true,"message":{"content":null},"done_reason":"stop","model":"resolved-local","eval_count":2,"prompt_eval_count":8,"load_duration":1_000_000,"eval_duration":2_000_000}),
+            ];
+            Reply::stream(&format!(
+                "{}\n",
+                chunks
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))
+        } else {
+            Reply::stream(concat!(
+                ": heartbeat\n\n",
+                "data: {\"response\":null,\"choices\":null,\"model\":null,\"usage\":null}\n\n",
+                "data: {\"choices\":[{\"delta\":null,\"finish_reason\":null}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":null,\"role\":\"assistant\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Café may help.\"}}],\"future_metadata\":{\"anything\":[1,true]}}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":2},\"model\":\"resolved-cloud\"}\n\n",
+                "data: [DONE]\n\n"
+            ))
+        };
+        let replies = if local {
+            response.mime = "application/x-ndjson";
+            vec![
+                Reply::json(json!({"details":{"format":"gguf"},"capabilities":["completion"]})),
+                response,
+            ]
+        } else {
+            vec![response]
+        };
+        let (base, _) = server(replies);
+        let provider: Arc<dyn GenerativeProvider> = if local {
+            Arc::new(OllamaProvider::new(LocalAIConfiguration {
+                address: base.to_string(),
+                model: "fixture-local-model".into(),
+                token: String::new(),
+                same_device: true,
+            }))
+        } else {
+            Arc::new(
+                CloudflareProvider::new(ACCOUNT, "fixture-key", "@cf/meta/fixture")
+                    .with_test_base(base),
+            )
+        };
+        let (events, _) = unbounded_channel();
+        let result = provider
+            .generate(prompt(), events, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(result.text, "Café may help.");
+        assert_eq!(
+            result.model,
+            if local {
+                "resolved-local"
+            } else {
+                "resolved-cloud"
+            }
+        );
+        let usage = result.usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(8));
+        assert_eq!(usage.output_tokens, Some(2));
+        if local {
+            let timing = result.timing.unwrap();
+            assert_eq!(timing.output_tokens, 2);
+            assert_eq!(timing.load_seconds, 0.001);
+            assert_eq!(timing.generation_seconds, 0.002);
+        }
+    }
 }
 
 #[tokio::test]

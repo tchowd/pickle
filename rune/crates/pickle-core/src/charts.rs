@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ChartKind {
@@ -132,17 +133,13 @@ pub fn numeric_evidence(source: &str) -> Vec<NumericEvidence> {
         .filter_map(|c| {
             let m = c.get(0)?;
             let previous = source[..m.start()].chars().next_back();
-            if previous.is_some_and(|ch| ch.is_alphanumeric() || "_.,".contains(ch)) {
+            if previous.is_some_and(|ch| is_word_character(ch) || ".,".contains(ch)) {
                 return None;
             }
             let token = m.as_str().trim_end();
             let token_end = m.start() + token.len();
             let after = &source[token_end..];
-            if after
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
-            {
+            if after.chars().next().is_some_and(is_word_character) {
                 return None;
             }
             let mut following = after.chars();
@@ -209,6 +206,15 @@ pub fn numeric_evidence(source: &str) -> Vec<NumericEvidence> {
             })
         })
         .collect()
+}
+
+// Match the Unicode `\w` boundary used by the original Foundation parser.
+// Combining marks, connector punctuation and join controls are parts of words
+// too: splitting there can turn a technical identifier into chart evidence.
+fn is_word_character(ch: char) -> bool {
+    static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A\w\z").unwrap());
+    let mut bytes = [0; 4];
+    WORD.is_match(ch.encode_utf8(&mut bytes))
 }
 
 fn ordered_step_sequence() -> &'static Regex {
@@ -594,7 +600,9 @@ pub fn flow_evidence(source: &str) -> Vec<String> {
         return vec![source.into()];
     }
     source
-        .split_inclusive(['.', '!', '?', '\n'])
+        // Sentence boundaries keep decimal/version punctuation within its
+        // literal source quote, while also recognizing Unicode terminators.
+        .split_sentence_bounds()
         .map(str::trim)
         .filter(|s| !s.is_empty() && s.chars().count() <= 1200)
         .map(str::to_owned)
