@@ -9,7 +9,8 @@ use std::{
 
 use pickle_core::{
     DecisionClient, DecisionQuestion, GenerationPrompt, GenerativeProvider, Pipeline,
-    PipelineEvent, ReadingAction, RequestInput, SelectionSnapshot, Usage, WebReference,
+    PipelineEvent, PipelineOutcome, ReadingAction, RequestInput, SelectionSnapshot, Usage,
+    WebReference,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::unbounded_channel;
@@ -65,6 +66,34 @@ struct Captured {
     path: String,
     headers: String,
     body: Value,
+}
+
+fn captured_header<'a>(request: &'a Captured, name: &str) -> Option<&'a str> {
+    let mut values = request.headers.lines().skip(1).filter_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name).then_some(value.trim())
+    });
+    let value = values.next();
+    assert!(values.next().is_none(), "Duplicate fixture header: {name}");
+    value
+}
+
+fn assert_native_json_post(request: &Captured, path: &str) {
+    assert_eq!(
+        request.headers.lines().next(),
+        Some(format!("POST {path} HTTP/1.1").as_str())
+    );
+    assert_eq!(request.path, path);
+    // This is the public fixed token from the original Swift fixtures, sent
+    // exclusively to the owned loopback HTTP listener.
+    assert_eq!(
+        captured_header(request, "Authorization"),
+        Some("Bearer test-token")
+    );
+    assert_eq!(
+        captured_header(request, "Content-Type"),
+        Some("application/json")
+    );
 }
 
 /// A real local HTTP fixture. It receives actual reqwest requests but never contacts a provider.
@@ -557,6 +586,142 @@ async fn jev_completed_envelope_validates_answers_and_native_contract() {
     assert_eq!(request.body["model"], "typesafe/jev");
     assert_eq!(request.body["input"]["questions"]["sample"]["type"], "noul");
     assert!(JevClient::decode(json!({"success":true,"result":{"state":"Running"}})).is_err());
+}
+
+#[tokio::test]
+async fn legacy_jev_native_http_contract_preserves_method_authorization_and_input() {
+    // Exact response from testJevUsesCloudflareNativeEvaluationContract.
+    const RESPONSE: &str = r#"{"result":{"model":"jev-1.13.0","answers":{"flag":{"type":"noul","noul":0.9}},"usage":{"input_tokens":10,"output_tokens":1}},"success":true}"#;
+    let (base, captured) = server(vec![Reply::json(serde_json::from_str(RESPONSE).unwrap())]);
+    let account = "a".repeat(32);
+    let client = JevClient::new(&account, "test-token").with_test_base(base);
+    let state = BTreeMap::from([("source".into(), "Sample".into())]);
+    let questions = BTreeMap::from([("flag".into(), DecisionQuestion::noul("Question?"))]);
+    let result = client
+        .evaluate(state.clone(), questions.clone(), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(result.model, "jev-1.13.0");
+    assert_eq!(result.answers["flag"].noul, Some(0.9));
+    let usage = result.usage.unwrap();
+    assert_eq!(usage.input_tokens, Some(10));
+    assert_eq!(usage.output_tokens, Some(1));
+    let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_native_json_post(&request, &format!("/accounts/{account}/ai/run"));
+    assert_eq!(request.body["model"], "typesafe/jev");
+    assert_eq!(request.body["input"]["state"], json!({"source":"Sample"}));
+    assert_eq!(request.body["input"]["questions"]["flag"]["type"], "noul");
+    assert_eq!(
+        request.body,
+        json!({"model":"typesafe/jev","input":{"state":state,"questions":questions}})
+    );
+    assert!(request.body.get("messages").is_none());
+    assert!(request.body["input"].get("messages").is_none());
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+#[tokio::test]
+async fn legacy_buffered_llama_http_preserves_reported_model_and_usage() {
+    // Exact response from testLlamaNativeEnvelopeAndReportedModelUsage. Run
+    // both Generation (where usage lives) and the actual Pipeline with it.
+    const RESPONSE: &str = r#"{"success":true,"result":{"response":"Sample response","model":"resolved-model","usage":{"prompt_tokens":67,"completion_tokens":25}}}"#;
+    const DEFAULT: &str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    assert_eq!(CloudflareProvider::DEFAULT_MODEL, DEFAULT);
+    let (base, captured) = server(vec![
+        Reply::json(serde_json::from_str(RESPONSE).unwrap()),
+        Reply::json(serde_json::from_str(RESPONSE).unwrap()),
+    ]);
+    let account = "a".repeat(32);
+    let provider =
+        CloudflareProvider::new(&account, "test-token", CloudflareProvider::DEFAULT_MODEL)
+            .with_streaming(false)
+            .with_test_base(base);
+    let input = RequestInput::new(
+        SelectionSnapshot::new("Sample", "Test", "test"),
+        ReadingAction::Simplify,
+    );
+    let expected_prompt = pickle_core::make_prompt(&input, None, None).unwrap();
+    let (tx, mut drafts) = unbounded_channel();
+    let generated = provider
+        .generate(expected_prompt.clone(), tx, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(generated.text, "Sample response");
+    assert_eq!(generated.model, "resolved-model");
+    let usage = generated.usage.unwrap();
+    assert_eq!(usage.input_tokens, Some(67));
+    assert_eq!(usage.output_tokens, Some(25));
+    assert!(drafts.try_recv().is_err());
+    let pipeline = Pipeline::new(Arc::new(provider), None, false);
+    let (tx, _) = unbounded_channel();
+    let outcome = pipeline
+        .run(input, tx, CancellationToken::new())
+        .await
+        .unwrap();
+    let PipelineOutcome::Result(result) = outcome else {
+        panic!("Expected the original buffered prose result")
+    };
+    assert_eq!(result.text, "Sample response");
+    assert_eq!(result.model, "resolved-model");
+    assert!(result.chart.is_none());
+    for _ in 0..2 {
+        let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_native_json_post(&request, &format!("/accounts/{account}/ai/run/{DEFAULT}"));
+        assert_eq!(request.body["stream"], false);
+        assert_eq!(request.body["max_tokens"].as_u64(), Some(1800));
+        assert!(request.body.get("response_format").is_none());
+        assert_eq!(
+            request.body["messages"],
+            json!([
+                {"role":"system","content":expected_prompt.system},
+                {"role":"user","content":expected_prompt.user},
+            ])
+        );
+    }
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+#[tokio::test]
+async fn legacy_small_writing_model_buffered_prose_http_preserves_selected_endpoint() {
+    // Exact model, response, and source from testSmallWritingModelIsPreservedForProse.
+    const MODEL: &str = "@cf/meta/llama-3.2-1b-instruct";
+    const RESPONSE: &str = r#"{"success":true,"result":{"response":"A short explanation."}}"#;
+    let (base, captured) = server(vec![Reply::json(serde_json::from_str(RESPONSE).unwrap())]);
+    let account = "a".repeat(32);
+    let provider = CloudflareProvider::new(&account, "test-token", MODEL)
+        .with_streaming(false)
+        .with_test_base(base);
+    let pipeline = Pipeline::new(Arc::new(provider), None, false);
+    let input = RequestInput::new(
+        SelectionSnapshot::new("Rainwater is collected in a tank.", "Test", "test"),
+        ReadingAction::Simplify,
+    );
+    let (tx, _) = unbounded_channel();
+    let outcome = pipeline
+        .run(input, tx, CancellationToken::new())
+        .await
+        .unwrap();
+    let PipelineOutcome::Result(result) = outcome else {
+        panic!("Expected the original small-model prose result")
+    };
+    assert_eq!(result.text, "A short explanation.");
+    assert_eq!(result.model, MODEL);
+    assert!(result.chart.is_none());
+    let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_native_json_post(&request, &format!("/accounts/{account}/ai/run/{MODEL}"));
+    assert_eq!(request.body["stream"], false);
+    assert_eq!(request.body["max_tokens"].as_u64(), Some(1800));
+    assert!(request.body.get("response_format").is_none());
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
 }
 
 #[tokio::test]

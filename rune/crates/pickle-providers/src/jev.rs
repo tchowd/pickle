@@ -98,3 +98,23 @@ impl DecisionClient for JevClient {
         Ok(response)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_jev_destination_remains_the_https_cloudflare_native_api() {
+        // The HTTP fixture overrides base with loopback. Independently assert
+        // the production constructor's host, scheme and native API prefix.
+        let client = JevClient::new("a".repeat(32), "test-token");
+        assert_eq!(
+            client.base.as_str(),
+            "https://api.cloudflare.com/client/v4/"
+        );
+        assert_eq!(client.base.host_str(), Some("api.cloudflare.com"));
+        assert_eq!(client.base.scheme(), "https");
+        assert!(client.base.username().is_empty());
+        assert!(client.base.password().is_none());
+    }
+}

@@ -144,3 +144,34 @@ impl GenerativeProvider for CloudflareProvider {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_cloudflare_destinations_preserve_https_host_and_model_paths() {
+        const DEFAULT: &str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+        const SMALL: &str = "@cf/meta/llama-3.2-1b-instruct";
+        let account = "a".repeat(32);
+        for (configured, structured, expected_model) in [
+            (DEFAULT, false, DEFAULT),
+            (SMALL, false, SMALL),
+            (SMALL, true, DEFAULT),
+        ] {
+            // This calls the actual production endpoint builder without the
+            // loopback override and makes no HTTP/provider request.
+            let provider = CloudflareProvider::new(&account, "test-token", configured);
+            let (url, selected) = provider.endpoint(structured).unwrap();
+            assert_eq!(
+                url.as_str(),
+                format!(
+                    "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{expected_model}"
+                )
+            );
+            assert_eq!(selected, expected_model);
+            assert!(url.username().is_empty());
+            assert!(url.password().is_none());
+        }
+    }
+}
