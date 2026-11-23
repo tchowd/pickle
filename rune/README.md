@@ -183,6 +183,8 @@ Before public release, complete both native compatibility matrices, signing/nota
 
 ### Development reading checks
 
+The controlled Windows reading fixture now also requires **Save → ordinary quit → normal relaunch → Saved detail → ordinary quit** for its fixed accepted answer. It temporarily isolates bookmark/history stores after a guarded backup, validates the app-written entry, and requires unchanged archive bytes and provider request counts before restoring the original retained profile. Unexpected archive changes preserve the recovery backup and fail the check. Portable guard/predicate tests pass; native execution of this added restart check remains pending in the acceptance record. Its Local/no-context entry has no quality/reference metadata, so it does not establish positive metadata persistence.
+
 The opt-in [synthetic Local benchmark](crates/pickle-providers/examples/README.md) runs the real pipeline on fixed passages, without reading application data or downloading models. It separates returned results from manual factual review; [recorded cases](benchmarks/local-reading/2026-11-23/README.md) retain known small-model failures. Thinking-capable text models request the server's no-thinking/lowest-supported mode; this does not verify their answers.
 
 To package a candidate without replacing the running development bundle, use `bash scripts/build-macos.sh release artifacts/quality-candidate`. The optional output directory holds its own notices, stage, prior bundle and ZIP; omitted output keeps the existing `artifacts` default.

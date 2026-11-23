@@ -84,9 +84,102 @@ function Write-PickleReadingAtomic([string]$Path,[byte[]]$Bytes) {
   finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary } }
 }
 
+function Get-PickleReadingHash([byte[]]$Bytes) {
+  return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes))
+}
+
+function Read-PickleReadingSavedEntry([string]$Path,$Contract,[string]$FixtureExecutable,[DateTimeOffset]$NotBefore) {
+  $bytes=Read-PickleReadingBytes $Path 32768
+  $expected=@('id','recorded_at','app_name','app_id','action','question','passage','answer','quality','chart','reference')
+  # JsonDocument preserves string types across PowerShell 7 versions (newer
+  # ConvertFrom-Json releases otherwise coerce ISO timestamp strings to dates).
+  $document=[System.Text.Json.JsonDocument]::Parse([Text.UTF8Encoding]::new($false,$true).GetString($bytes))
+  try {
+    $root=$document.RootElement
+    if ($root.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { throw 'The owned saved archive was not an object.' }
+    $properties=@($root.EnumerateObject());$keys=@($properties.Name)
+    $version=0L
+    if ($keys.Count -ne 2 -or @($keys | Where-Object { $_ -cnotin @('version','data') }).Count -or @($keys | Select-Object -Unique).Count -ne 2 -or $root.GetProperty('version').ValueKind -ne [System.Text.Json.JsonValueKind]::Number -or !$root.GetProperty('version').TryGetInt64([ref]$version) -or $version -ne 1) { throw 'The owned saved archive version or fields differed.' }
+    $rows=$root.GetProperty('data')
+    if ($rows.ValueKind -ne [System.Text.Json.JsonValueKind]::Array -or $rows.GetArrayLength() -ne 1) { throw 'The owned saved archive did not contain exactly one entry.' }
+    $row=$rows[0]
+    if ($row.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { throw 'The owned saved entry was not an object.' }
+    $fields=@($row.EnumerateObject());$keys=@($fields.Name)
+    if ($keys.Count -ne $expected.Count -or @($keys | Where-Object { $_ -cnotin $expected }).Count -or @($keys | Select-Object -Unique).Count -ne $expected.Count) { throw 'The owned saved entry fields differed.' }
+    $values=[ordered]@{}
+    foreach ($field in $fields) {
+      if ($field.Value.ValueKind -eq [System.Text.Json.JsonValueKind]::String) { $values[$field.Name]=$field.Value.GetString() }
+      elseif ($field.Value.ValueKind -eq [System.Text.Json.JsonValueKind]::Null) { $values[$field.Name]=$null }
+      else { throw 'The owned saved entry contained unexpected field types.' }
+    }
+    $entry=[pscustomobject]$values
+  } finally { $document.Dispose() }
+  foreach ($key in @('id','recorded_at','app_name','app_id','action','passage','answer')) {
+    if ($entry.$key -isnot [string]) { throw 'The owned saved entry contained a nontext field.' }
+  }
+  $id=[guid]::Empty
+  $date=[DateTimeOffset]::MinValue
+  if (![guid]::TryParseExact($entry.id,'D',[ref]$id) -or $id -eq [guid]::Empty -or $id.ToString('D') -cne $entry.id -or $entry.id[14] -cne '4' -or $entry.id[19] -cnotin @('8','9','a','b') -or $entry.recorded_at -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|\+00:00)$' -or ![DateTimeOffset]::TryParse($entry.recorded_at,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$date) -or $date -lt $NotBefore.AddSeconds(-2) -or $date -gt [DateTimeOffset]::UtcNow.AddSeconds(2)) { throw 'The owned saved entry identity or recording time was invalid.' }
+  if ($entry.passage -cne $Contract.selected -or $entry.answer -cne $Contract.answer -or $entry.action -cne 'Simplify' -or $entry.app_name -cne [IO.Path]::GetFileNameWithoutExtension($FixtureExecutable) -or !$entry.app_id.StartsWith('windows:',[StringComparison]::Ordinal) -or $entry.app_id -cne $entry.app_id.ToLowerInvariant()) { throw 'The saved entry did not match the accepted owned answer.' }
+  $observed=Get-PickleReadingCanonicalExecutable $entry.app_id.Substring(8)
+  $fixture=Get-PickleReadingCanonicalExecutable $FixtureExecutable
+  if (![string]::Equals($observed,$fixture,[StringComparison]::OrdinalIgnoreCase)) { throw 'The saved source executable was not the owned fixture.' }
+  foreach ($key in @('question','quality','chart','reference')) {
+    if ($null -ne $entry.$key) { throw 'The Local Simplify fixture unexpectedly persisted optional metadata.' }
+  }
+  return [pscustomobject]@{Entry=$entry;Bytes=$bytes;Hash=(Get-PickleReadingHash $bytes)}
+}
+
+function Initialize-PickleReadingArchives($Snapshot,$Contract,[string]$FixtureExecutable) {
+  # Original archives stay only in the private verified backup. The app and
+  # native driver may see only empty/synthetic stores throughout both launches.
+  $owned=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+  $Snapshot | Add-Member -NotePropertyName OwnedArchives -NotePropertyValue $owned
+  $Snapshot | Add-Member -NotePropertyName FixtureContract -NotePropertyValue $Contract
+  $Snapshot | Add-Member -NotePropertyName FixtureExecutable -NotePropertyValue $FixtureExecutable
+  $Snapshot | Add-Member -NotePropertyName SaveNotBefore -NotePropertyValue ([DateTimeOffset]::UtcNow)
+  $Snapshot | Add-Member -NotePropertyName SaveAdmitted -NotePropertyValue $false
+  $empty=[Text.UTF8Encoding]::new($false).GetBytes('{"version":1,"data":[]}')
+  foreach ($name in @('bookmarks.json','history.json')) {
+    $owned.Add($name,[pscustomobject]@{SeedHash=(Get-PickleReadingHash $empty);Seeded=$false;SavedHash=$null})
+  }
+  foreach ($name in @('bookmarks.json','history.json')) {
+    $path=Join-Path $Snapshot.Directory $name
+    if (Test-Path -LiteralPath $path) {
+      $before=Read-PickleReadingBytes $path 64MB
+      if (!$Snapshot.Hashes.ContainsKey($name) -or (Get-PickleReadingHash $before) -cne $Snapshot.Hashes[$name]) { throw 'An archive changed after backup; no owned archive replacement was admitted.' }
+    } elseif ($Snapshot.Hashes.ContainsKey($name)) { throw 'An archive disappeared after backup.' }
+  }
+  foreach ($name in @('bookmarks.json','history.json')) {
+    $path=Join-Path $Snapshot.Directory $name
+    Write-PickleReadingAtomic $path $empty
+    $owned[$name].Seeded=$true
+  }
+}
+
+function Assert-PickleReadingOwnedArchives($Snapshot) {
+  if (!$Snapshot.PSObject.Properties['OwnedArchives']) { return }
+  foreach ($owned in $Snapshot.OwnedArchives.GetEnumerator()) {
+    $name=$owned.Key;$guard=$owned.Value;$path=Join-Path $Snapshot.Directory $name
+    if (!(Test-Path -LiteralPath $path)) {
+      if (!$guard.Seeded -and !$Snapshot.Hashes.ContainsKey($name)) { continue }
+      throw 'An owned archive disappeared; profile restoration was refused.'
+    }
+    $maximum=if ($guard.Seeded) { 32768 } else { 64MB }
+    $hash=Get-PickleReadingHash (Read-PickleReadingBytes $path $maximum)
+    if ($guard.SavedHash -and $hash -cne $guard.SavedHash) { throw 'The saved archive changed after verification; profile restoration was refused.' }
+    if ($hash -ceq $guard.SeedHash) { continue }
+    if (!$guard.Seeded -and $Snapshot.Hashes.ContainsKey($name) -and $hash -ceq $Snapshot.Hashes[$name]) { continue }
+    if ($name -cne 'bookmarks.json' -or !$Snapshot.SaveAdmitted) { throw 'An archive contains unexpected data; profile restoration was refused.' }
+    $saved=Read-PickleReadingSavedEntry $path $Snapshot.FixtureContract $Snapshot.FixtureExecutable $Snapshot.SaveNotBefore
+    if ($saved.Hash -cne $hash) { throw 'The saved archive changed during validation; profile restoration was refused.' }
+  }
+}
+
 function Restore-PickleReadingProfile($Snapshot,[scriptblock]$IsIdle) {
   if (!(& $IsIdle)) { throw 'The owned app must be dead and its lease idle before restoring any profile bytes.' }
   $current=Get-PickleReadingFiles $Snapshot.Directory
+  Assert-PickleReadingOwnedArchives $Snapshot
   $verified=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
   $remaining=64MB
   foreach ($entry in $Snapshot.Hashes.GetEnumerator()) {
@@ -95,10 +188,14 @@ function Restore-PickleReadingProfile($Snapshot,[scriptblock]$IsIdle) {
     if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)) -cne $entry.Value) { throw 'The owned profile backup changed; no restoration mutation was performed.' }
     $verified.Add($entry.Key,$bytes)
   }
+  # Verify current owned outputs again after reading the private backup and
+  # before the first restoration mutation, including originally existing files.
+  Assert-PickleReadingOwnedArchives $Snapshot
   # Only the known app outputs may be new. Preserve unexpected files and fail
   # restoration instead of deleting another actor's newly introduced data.
   foreach ($entry in $current.GetEnumerator()) {
-    if (!$Snapshot.Hashes.ContainsKey($entry.Key) -and $entry.Key -cnotin @('settings.json','window.json')) { throw 'Unexpected new profile data was preserved; restoration cannot be certified.' }
+    $ownedArchive=$Snapshot.PSObject.Properties['OwnedArchives'] -and $Snapshot.OwnedArchives.ContainsKey($entry.Key)
+    if (!$Snapshot.Hashes.ContainsKey($entry.Key) -and !$ownedArchive -and $entry.Key -cnotin @('settings.json','window.json')) { throw 'Unexpected new profile data was preserved; restoration cannot be certified.' }
   }
   foreach ($entry in $current.GetEnumerator()) {
     if (!$Snapshot.Hashes.ContainsKey($entry.Key)) { Remove-Item -LiteralPath $entry.Value.FullName }
@@ -314,8 +411,8 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
   $work=Join-Path ([IO.Path]::GetTempPath()) ('pickle-reading-'+[guid]::NewGuid().ToString('N'))
   Assert-PickleReadingDirectory $work | Out-Null
   New-Item -ItemType Directory -Path $work | Out-Null
-  $evidence=[ordered]@{schema=1;test='windows-installed-reading-workflow';passed=$false;configuration=$Configuration;driver=$null;server=$null;fixture=$null;application_pid=$null;ordinary_exit=$false;lease_released=$false;control_removed=$false;profile_restored=$false;owned_children_stopped=$false;owned_processes=[ordered]@{};cleanup_categories=@()}
-  $applicationProcess=$null;$fixture=$null;$server=$null;$driver=$null;$snapshot=$null;$failure=$null;$stage='prepare'
+  $evidence=[ordered]@{schema=1;test='windows-installed-reading-workflow';passed=$false;configuration=$Configuration;driver=$null;restart_driver=$null;server=$null;fixture=$null;application_pid=$null;restart_application_pid=$null;ordinary_exit=$false;lease_released=$false;control_removed=$false;restart_ordinary_exit=$false;restart_lease_released=$false;restart_control_removed=$false;saved_archive_verified=$false;saved_archive_unchanged=$false;profile_restored=$false;owned_children_stopped=$false;owned_processes=[ordered]@{};cleanup_categories=@()}
+  $applicationProcess=$null;$restartApplication=$null;$fixture=$null;$server=$null;$driver=$null;$restartDriver=$null;$snapshot=$null;$failure=$null;$stage='prepare'
   try {
     # If the supervising Core owner must be terminated, leave only the private
     # recovery location in artifacts, never the saved profile contents.
@@ -328,6 +425,8 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     [IO.File]::WriteAllText($contractPath,($contract | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
     $stage='compile-owned-fixture'
     $fixtureExe=Build-PickleReadingFixture $work
+    $stage='isolate-owned-archives'
+    Initialize-PickleReadingArchives $snapshot $contract $fixtureExe
     $stage='start-owned-provider'
     $python=(Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $provider=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'windows-reading-provider.py'))
@@ -347,10 +446,11 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $evidence.application_pid=$applicationProcess.Id
     Invoke-PickleReadingIdentityBarrier { Assert-PickleReadingChild $applicationProcess $Application } ([DateTime]::UtcNow.AddSeconds(10))
     $driver=Start-PickleReadingChild $fixtureExe @('drive','--contract',$contractPath,'--application-pid',([string]$applicationProcess.Id),'--fixture-pid',([string]$fixture.Id),'--fixture-hwnd',([string]$fixtureInfo.hwnd),'--server-state',$serverState,'--evidence',$driverEvidence)
+    $snapshot.SaveAdmitted=$true
     if (!$driver.WaitForExit(90000) -or $driver.ExitCode -ne 0) { throw 'Owned reading driver failed or exceeded 90 seconds.' }
     $evidence.driver=Read-PickleReadingJson $driverEvidence
-    if ($evidence.driver.passed -ne $true) { throw 'Owned reading driver did not attest its checks.' }
-    foreach ($attestation in @('initial_compose_ready','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','completed_answer_verified','source_retained_verified','ordinary_quit_verified')) {
+    if ($evidence.driver.schema -ne 1 -or $evidence.driver.test -cne 'windows-server-installed-selection-reading' -or $evidence.driver.pid -ne $driver.Id -or $evidence.driver.passed -ne $true) { throw 'Owned reading driver did not attest its checks.' }
+    foreach ($attestation in @('initial_compose_ready','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','completed_answer_verified','source_retained_verified','saved_answer_verified','ordinary_quit_verified')) {
       if ($evidence.driver.$attestation -ne $true) { throw 'Owned reading driver omitted a required attestation.' }
     }
     if ($evidence.driver.application_pid -ne $applicationProcess.Id -or $evidence.driver.fixture_pid -ne $fixture.Id -or $evidence.driver.app_exit_code -ne 0 -or $evidence.driver.shortcut_events_inserted -ne 6) { throw 'Owned driver process identity, shortcut delivery or ordinary exit evidence differed.' }
@@ -361,6 +461,39 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $evidence.lease_released=$true
     if ((Test-Path -LiteralPath (Join-Path $DataDirectory 'instance.json')) -or (Test-Path -LiteralPath (Join-Path $DataDirectory 'BrowserBridge/connection.json'))) { throw 'The normally quit app retained a private control descriptor.' }
     $evidence.control_removed=$true
+    $stage='verify-owned-saved-archive'
+    $savedPath=Join-Path $DataDirectory 'bookmarks.json'
+    $saved=Read-PickleReadingSavedEntry $savedPath $contract $fixtureExe $snapshot.SaveNotBefore
+    $snapshot.OwnedArchives['bookmarks.json'].SavedHash=$saved.Hash
+    Assert-PickleReadingOwnedArchives $snapshot
+    $evidence.saved_archive_verified=$true
+    $evidence.saved_entry_id_sha256=Get-PickleReadingHash ([Text.Encoding]::UTF8.GetBytes($saved.Entry.id))
+    $privateEntry=Join-Path $work 'saved-entry.json'
+    [IO.File]::WriteAllText($privateEntry,($saved.Entry | ConvertTo-Json -Depth 5 -Compress),[Text.UTF8Encoding]::new($false))
+    $stage='restart-installed-reader'
+    $restartApplication=Start-PickleReadingChild $Application @()
+    $evidence.restart_application_pid=$restartApplication.Id
+    Invoke-PickleReadingIdentityBarrier { Assert-PickleReadingChild $restartApplication $Application } ([DateTime]::UtcNow.AddSeconds(10))
+    $restartEvidence=Join-Path $work 'saved-driver-evidence.json'
+    $restartDriver=Start-PickleReadingChild $fixtureExe @('drive-saved','--contract',$contractPath,'--application-pid',([string]$restartApplication.Id),'--application-path',([IO.Path]::GetFullPath($Application)),'--application-start-ticks',([string]$restartApplication.StartTime.ToUniversalTime().Ticks),'--saved-entry',$privateEntry,'--evidence',$restartEvidence)
+    $stage='drive-restarted-saved-detail'
+    if (!$restartDriver.WaitForExit(90000) -or $restartDriver.ExitCode -ne 0) { throw 'The owned saved-answer driver failed or exceeded 90 seconds.' }
+    $evidence.restart_driver=Read-PickleReadingJson $restartEvidence
+    if ($evidence.restart_driver.schema -ne 1 -or $evidence.restart_driver.test -cne 'windows-server-installed-saved-reading' -or $evidence.restart_driver.pid -ne $restartDriver.Id -or $evidence.restart_driver.passed -ne $true -or $evidence.restart_driver.application_pid -ne $restartApplication.Id -or $evidence.restart_driver.app_exit_code -ne 0 -or $evidence.restart_driver.saved_entry_id_sha256 -cne $evidence.saved_entry_id_sha256.ToLowerInvariant() -or $evidence.restart_driver.source_sha256 -cne (Get-PickleReadingHash ([Text.Encoding]::UTF8.GetBytes($contract.selected))).ToLowerInvariant() -or $evidence.restart_driver.answer_sha256 -cne (Get-PickleReadingHash ([Text.Encoding]::UTF8.GetBytes($contract.answer))).ToLowerInvariant()) { throw 'The saved-answer driver omitted its exact owned-entry or process proof.' }
+    foreach ($attestation in @('application_identity_verified','saved_entry_verified','saved_detail_verified','saved_metadata_absence_verified','ordinary_quit_verified')) {
+      if ($evidence.restart_driver.$attestation -ne $true) { throw 'The saved-answer driver omitted a required restart attestation.' }
+    }
+    if (!$restartApplication.WaitForExit(10000) -or $restartApplication.ExitCode -ne 0) { throw 'The restarted installed app did not quit normally.' }
+    $evidence.restart_ordinary_exit=$true
+    if ((Invoke-PickleReadingLease $Application) -ne 0) { throw 'The restarted installed app left its lease active.' }
+    $evidence.restart_lease_released=$true
+    if ((Test-Path -LiteralPath (Join-Path $DataDirectory 'instance.json')) -or (Test-Path -LiteralPath (Join-Path $DataDirectory 'BrowserBridge/connection.json'))) { throw 'The restarted app retained a private control descriptor.' }
+    $evidence.restart_control_removed=$true
+    $stage='verify-restarted-archive'
+    $reopened=Read-PickleReadingSavedEntry $savedPath $contract $fixtureExe $snapshot.SaveNotBefore
+    if ($reopened.Hash -cne $saved.Hash) { throw 'The saved archive bytes changed during ordinary restart and reading.' }
+    Assert-PickleReadingOwnedArchives $snapshot
+    $evidence.saved_archive_unchanged=$true
     $evidence.server=Read-PickleReadingJson $serverState
     if ($evidence.server.total_requests -ne 2 -or $evidence.server.show_count -ne 1 -or $evidence.server.chat_count -ne 1 -or $evidence.server.source_verified -ne $true -or $evidence.server.rejected -ne $false) { throw 'Owned provider did not attest the exact source and request contract.' }
   } catch {
@@ -373,10 +506,14 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
       Save-PickleReadingProcessState $evidence 'server' $server $python -BeforeCleanup
       Save-PickleReadingProcessState $evidence 'driver' $driver $fixtureExe -BeforeCleanup
       Save-PickleReadingProcessState $evidence 'application' $applicationProcess $Application -BeforeCleanup
+      Save-PickleReadingProcessState $evidence 'restart_driver' $restartDriver $fixtureExe -BeforeCleanup
+      Save-PickleReadingProcessState $evidence 'restart_application' $restartApplication $Application -BeforeCleanup
       # Keep every process object until cleanup; never kill by name or a PID
       # reopened from an external source. A successful path uses normal quits.
       if ($null -ne $driver -and !$driver.HasExited) { Add-PickleReadingCleanupFailure $evidence ([ref]$failure) 'driver-forced-stop';$evidence.owned_processes.driver.forced_cleanup=$true;$driver.Kill();if (!$driver.WaitForExit(10000)) { throw 'Owned driver remained alive.' } }
       if ($null -ne $applicationProcess -and !$applicationProcess.HasExited) { Add-PickleReadingCleanupFailure $evidence ([ref]$failure) 'application-forced-stop';$evidence.owned_processes.application.forced_cleanup=$true;$applicationProcess.Kill();if (!$applicationProcess.WaitForExit(10000)) { throw 'Owned app remained alive.' } }
+      if ($null -ne $restartDriver -and !$restartDriver.HasExited) { Add-PickleReadingCleanupFailure $evidence ([ref]$failure) 'restart-driver-forced-stop';$evidence.owned_processes.restart_driver.forced_cleanup=$true;$restartDriver.Kill();if (!$restartDriver.WaitForExit(10000)) { throw 'Owned saved driver remained alive.' } }
+      if ($null -ne $restartApplication -and !$restartApplication.HasExited) { Add-PickleReadingCleanupFailure $evidence ([ref]$failure) 'restart-application-forced-stop';$evidence.owned_processes.restart_application.forced_cleanup=$true;$restartApplication.Kill();if (!$restartApplication.WaitForExit(10000)) { throw 'Owned restarted app remained alive.' } }
       if ($null -ne $fixture -and !$fixture.HasExited) {
         if (!$fixture.CloseMainWindow() -or !$fixture.WaitForExit(5000)) { Add-PickleReadingCleanupFailure $evidence ([ref]$failure) 'fixture-forced-stop';$evidence.owned_processes.fixture.forced_cleanup=$true;$fixture.Kill();if (!$fixture.WaitForExit(10000)) { throw 'Owned source fixture remained alive.' } }
       }
@@ -389,22 +526,25 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
       $evidence.owned_children_stopped=$true
       if ($snapshot) {
         $stage='restore-profile'
-        Restore-PickleReadingProfile $snapshot { (($null -eq $applicationProcess -or $applicationProcess.HasExited) -and (Invoke-PickleReadingLease $Application) -eq 0) }
+        Restore-PickleReadingProfile $snapshot { (($null -eq $applicationProcess -or $applicationProcess.HasExited) -and ($null -eq $restartApplication -or $restartApplication.HasExited) -and (Invoke-PickleReadingLease $Application) -eq 0) }
         $evidence.profile_restored=$true
       }
       if ($failure) { $evidence.failure=$failure }
-      else { $evidence.passed=$evidence.ordinary_exit -and $evidence.lease_released -and $evidence.control_removed -and $evidence.profile_restored -and $evidence.owned_children_stopped }
+      else { $evidence.passed=$evidence.ordinary_exit -and $evidence.lease_released -and $evidence.control_removed -and $evidence.restart_ordinary_exit -and $evidence.restart_lease_released -and $evidence.restart_control_removed -and $evidence.saved_archive_verified -and $evidence.saved_archive_unchanged -and $evidence.profile_restored -and $evidence.owned_children_stopped }
     } catch {
       $evidence.passed=$false;$evidence.cleanup_failure='Owned processes or profile could not be restored safely; private backup retained.'
       if (!$failure) { $failure='Installed reading cleanup or profile restoration failed.' }
     } finally {
       # Failure evidence is deliberately limited to fixed fixture/driver metadata.
       if (!$evidence.driver -and (Test-Path -LiteralPath (Join-Path $work 'driver-evidence.json') -PathType Leaf)) { try { $evidence.driver=Read-PickleReadingJson (Join-Path $work 'driver-evidence.json') } catch {} }
+      if (!$evidence.restart_driver -and (Test-Path -LiteralPath (Join-Path $work 'saved-driver-evidence.json') -PathType Leaf)) { try { $evidence.restart_driver=Read-PickleReadingJson (Join-Path $work 'saved-driver-evidence.json') } catch {} }
       if (!$evidence.server -and (Test-Path -LiteralPath (Join-Path $work 'server-state.json') -PathType Leaf)) { try { $evidence.server=Read-PickleReadingJson (Join-Path $work 'server-state.json') } catch {} }
       Save-PickleReadingProcessState $evidence 'fixture' $fixture $fixtureExe
       Save-PickleReadingProcessState $evidence 'server' $server $python
       Save-PickleReadingProcessState $evidence 'driver' $driver $fixtureExe
       Save-PickleReadingProcessState $evidence 'application' $applicationProcess $Application
+      Save-PickleReadingProcessState $evidence 'restart_driver' $restartDriver $fixtureExe
+      Save-PickleReadingProcessState $evidence 'restart_application' $restartApplication $Application
       $sourceFailure=Join-Path $work 'fixture-ready.json.failure.json'
       if ($null -ne $fixture -and (Test-Path -LiteralPath $sourceFailure -PathType Leaf)) {
         try {
@@ -418,7 +558,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
       else { $evidence.Remove('recovery_directory') }
       if ($failure -and !$evidence.failure) { $evidence.failure=$failure }
       $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
-      foreach ($child in @($driver,$applicationProcess,$fixture,$server)) { if ($null -ne $child) { $child.Dispose() } }
+      foreach ($child in @($driver,$restartDriver,$applicationProcess,$restartApplication,$fixture,$server)) { if ($null -ne $child) { $child.Dispose() } }
       if ($evidence.profile_restored -and $evidence.owned_children_stopped) { Remove-Item -LiteralPath $work -Recurse -Force }
     }
   }

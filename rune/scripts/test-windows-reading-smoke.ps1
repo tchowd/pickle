@@ -115,6 +115,91 @@ try {
   $many=Join-Path $data 'many';New-Item -ItemType Directory -Path $many | Out-Null
   try { foreach ($n in 1..513) { [IO.File]::WriteAllText((Join-Path $many "$n.txt"),'') };Assert-ReadingRefused { Get-PickleReadingFiles $data } }
   finally { Remove-Item -LiteralPath $many -Recurse }
+  # Both originally present and originally absent archives must be restored
+  # only after their current bytes are proven to be our exact test outputs.
+  foreach ($originalArchives in @($false,$true)) {
+    $case=Join-Path $root ('saved-'+[guid]::NewGuid().ToString('N'))
+    $profile=Join-Path $case 'data';New-Item -ItemType Directory -Path $profile -Force | Out-Null
+    $caseSettings=Join-Path $profile 'settings.json'
+    [IO.File]::WriteAllText($caseSettings,'Original fixture preferences.')
+    $bookmarks=Join-Path $profile 'bookmarks.json';$caseHistory=Join-Path $profile 'history.json'
+    if ($originalArchives) {
+      [IO.File]::WriteAllText($bookmarks,'Original bookmark bytes, never rendered.')
+      [IO.File]::WriteAllText($caseHistory,'Original history bytes, never rendered.')
+    }
+    $fixturePath=Join-Path $case 'ReadingFixture.exe'
+    [IO.File]::WriteAllText($fixturePath,'Owned path fixture only; never executed.')
+    $contract=[ordered]@{selected='Café controlled selected passage.';answer='The controlled answer retains Café.'}
+    $savedSnapshot=Save-PickleReadingProfile $profile (Join-Path $case 'backup')
+    Initialize-PickleReadingArchives $savedSnapshot $contract $fixturePath
+    if ($savedSnapshot.OwnedArchives.Count -ne 2 -or [IO.File]::ReadAllText($bookmarks) -cne '{"version":1,"data":[]}' -or [IO.File]::ReadAllText($caseHistory) -cne '{"version":1,"data":[]}') { throw 'Original archives were not isolated before any saved-answer UI.' }
+    Assert-PickleReadingOwnedArchives $savedSnapshot
+    [IO.File]::WriteAllText($caseSettings,'Temporary fixture preferences.')
+    $recorded=if ($originalArchives) { [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffffff',[Globalization.CultureInfo]::InvariantCulture)+'00+00:00' } else { [DateTimeOffset]::UtcNow.ToString('o') }
+    $entry=[ordered]@{id=[guid]::NewGuid().ToString('D');recorded_at=$recorded;app_name='ReadingFixture';app_id=('windows:'+$fixturePath.ToLowerInvariant());action='Simplify';question=$null;passage=$contract.selected;answer=$contract.answer;quality=$null;chart=$null;reference=$null}
+    $archive=[ordered]@{version=1;data=@($entry)}
+    $validSaved=[Text.UTF8Encoding]::new($false).GetBytes(($archive | ConvertTo-Json -Depth 8 -Compress))
+    Write-PickleReadingAtomic $bookmarks $validSaved
+    Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+    if ([IO.File]::ReadAllText($caseSettings) -cne 'Temporary fixture preferences.') { throw 'Unadmitted Save output caused partial restoration.' }
+    $savedSnapshot.SaveAdmitted=$true
+    $actual=Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore
+    if ($actual.Entry.id -cne $entry.id -or $actual.Entry.recorded_at -cne $recorded -or $actual.Entry.passage -cne $contract.selected -or $actual.Entry.answer -cne $contract.answer -or $actual.Hash -cne (Get-PickleReadingHash $validSaved)) { throw 'The actual saved Entry or full seven/nine-digit timestamp was not preserved exactly.' }
+    $savedSnapshot.OwnedArchives['bookmarks.json'].SavedHash=$actual.Hash
+    Assert-PickleReadingOwnedArchives $savedSnapshot
+    foreach ($change in @(
+      @{key='passage';value='BEFORE unrelated source'},
+      @{key='answer';value='Different accepted answer'},
+      @{key='action';value='Follow-up'},
+      @{key='quality';value='Unexpected quality label'},
+      @{key='question';value='Unexpected question'},
+      @{key='chart';value='bar_chart'},
+      @{key='reference';value=@{url='https://example.invalid/';title='Unexpected reference';kind='article'}},
+      @{key='app_id';value=('windows:'+(Join-Path $case 'different.exe').ToLowerInvariant())},
+      @{key='app_name';value='Another source'},
+      @{key='recorded_at';value='2000-01-01T00:00:00Z'},
+      @{key='id';value='invalid-id'},
+      @{key='unexpected';value='Extra data'}
+    )) {
+      $changed=[ordered]@{};foreach ($key in $entry.Keys) { $changed[$key]=$entry[$key] };$changed[$change.key]=$change.value
+      $bad=[Text.UTF8Encoding]::new($false).GetBytes((@{version=1;data=@($changed)} | ConvertTo-Json -Depth 8 -Compress))
+      Write-PickleReadingAtomic $bookmarks $bad
+      Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore }
+      Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+      if ((Get-PickleReadingHash ([IO.File]::ReadAllBytes($bookmarks))) -cne (Get-PickleReadingHash $bad) -or [IO.File]::ReadAllText($caseSettings) -cne 'Temporary fixture preferences.') { throw 'Archive refusal mutated an existing or newly created profile file.' }
+    }
+    foreach ($badArchive in @(@{version=2;data=@($entry)},@{version=1;data=@($entry,$entry)},@{version=1;data=@()},@{version=1;data=@($entry);extra=$true})) {
+      Write-PickleReadingAtomic $bookmarks ([Text.UTF8Encoding]::new($false).GetBytes(($badArchive | ConvertTo-Json -Depth 8 -Compress)))
+      Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+    }
+    $encoded=[Text.Encoding]::UTF8.GetString($validSaved)
+    foreach ($badJson in @($encoded.Replace('"version":1,','"version":1,"version":1,'),$encoded.Replace('"version":1,','"version":1.0,'),$encoded.Replace('"action":"Simplify"','"action":"Simplify","action":"Simplify"'))) {
+      Write-PickleReadingAtomic $bookmarks ([Text.Encoding]::UTF8.GetBytes($badJson))
+      Assert-ReadingRefused { Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore }
+    }
+    Write-PickleReadingAtomic $bookmarks $validSaved
+    # A second valid-looking record must not replace the entry already verified
+    # after ordinary quit, even though its fixed source/answer are identical.
+    $changedId=[ordered]@{};foreach ($key in $entry.Keys) { $changedId[$key]=$entry[$key] };$changedId.id=[guid]::NewGuid().ToString('D')
+    Write-PickleReadingAtomic $bookmarks ([Text.UTF8Encoding]::new($false).GetBytes((@{version=1;data=@($changedId)} | ConvertTo-Json -Depth 8 -Compress)))
+    $null=Read-PickleReadingSavedEntry $bookmarks $contract $fixturePath $savedSnapshot.SaveNotBefore
+    Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+    Write-PickleReadingAtomic $bookmarks ([Text.Encoding]::UTF8.GetBytes('{"version":1,"data":[]}'))
+    Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+    Write-PickleReadingAtomic $bookmarks $validSaved
+    [IO.File]::WriteAllText($caseHistory,'Unexpected concurrent history content.')
+    Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+    if ([IO.File]::ReadAllText($caseHistory) -cne 'Unexpected concurrent history content.' -or [IO.File]::ReadAllText($caseSettings) -cne 'Temporary fixture preferences.') { throw 'Concurrent history refusal failed to preserve every file.' }
+    Write-PickleReadingAtomic $caseHistory ([Text.Encoding]::UTF8.GetBytes('{"version":1,"data":[]}'))
+    Remove-Item -LiteralPath $bookmarks
+    Assert-ReadingRefused { Restore-PickleReadingProfile $savedSnapshot { $true } }
+    Write-PickleReadingAtomic $bookmarks $validSaved
+    Restore-PickleReadingProfile $savedSnapshot { $true }
+    if ([IO.File]::ReadAllText($caseSettings) -cne 'Original fixture preferences.') { throw 'Saved workflow failed to restore original preferences.' }
+    if ($originalArchives) {
+      if ([IO.File]::ReadAllText($bookmarks) -cne 'Original bookmark bytes, never rendered.' -or [IO.File]::ReadAllText($caseHistory) -cne 'Original history bytes, never rendered.') { throw 'Existing original archives were not restored byte exactly.' }
+    } elseif ((Test-Path -LiteralPath $bookmarks) -or (Test-Path -LiteralPath $caseHistory)) { throw 'Only verified synthetic new archives should have been removed.' }
+  }
   if ($IsWindows) {
     # Assign only a dedicated subprocess; the native declaration itself is safe
     # to compile in this parent without invoking any kernel entry point.
@@ -161,4 +246,4 @@ Start-Sleep -Seconds 120
     Assert-ReadingRefused { Assert-PickleInstalledReadingWorkflow '/absent-app' '/absent-profile' '/absent-evidence' 'debug' }
   }
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }
-Write-Host 'Reading fixtures passed: bounded HTTP/source contract, guarded byte-exact restoration, tamper/link/count/size refusals; no native app or GUI launched.'
+Write-Host 'Reading fixtures passed: bounded HTTP/source contract, owned Save/restart archive guards, byte-exact restoration, tamper/schema/link/count/size refusals; no native app or GUI launched.'

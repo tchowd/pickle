@@ -49,6 +49,20 @@ public static class ReadingFixturePredicates {
     public static string NormalizeDocument(string value) {
         return value.Replace("\r\n","\n").Replace('\r','\n').TrimEnd('\n');
     }
+    public static bool SavedEntry(Dictionary<string,object> entry,string selected,string answer) {
+        string[] keys={"id","recorded_at","app_name","app_id","action","question","passage","answer","quality","chart","reference"};
+        if (entry==null || entry.Count!=keys.Length || keys.Any(key=>!entry.ContainsKey(key))) return false;
+        foreach (string key in new[]{"id","recorded_at","app_name","app_id","action","passage","answer"})
+            if (!(entry[key] is string)) return false;
+        Guid id; DateTimeOffset recorded;
+        return Guid.TryParseExact((string)entry["id"],"D",out id) && id!=Guid.Empty &&
+            DateTimeOffset.TryParse((string)entry["recorded_at"],System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind,out recorded) &&
+            (string)entry["app_name"]=="ReadingFixture" && ((string)entry["app_id"]).StartsWith("windows:",StringComparison.Ordinal) &&
+            ((string)entry["app_id"]).Length>8 && ((string)entry["app_id"]).Length<=1000 &&
+            (string)entry["action"]=="Simplify" && (string)entry["passage"]==selected && (string)entry["answer"]==answer &&
+            new[]{"question","quality","chart","reference"}.All(key=>entry[key]==null);
+    }
     public static void SelfTest() {
         const string chosen="Caf\u00e9 selected passage.";
         if (!Contract("BEFORE",chosen,"AFTER","A controlled answer.")) throw new Exception("contract");
@@ -63,6 +77,22 @@ public static class ReadingFixturePredicates {
             throw new Exception("document");
         if (ErrorKind(new InvalidOperationException("synthetic text must not become a diagnostic")) != "invalid-operation")
             throw new Exception("error-kind");
+        var saved=new Dictionary<string,object> {{"id","123e4567-e89b-42d3-a456-426614174000"},
+            {"recorded_at","2026-11-23T12:00:00Z"},{"app_name","ReadingFixture"},{"app_id",@"windows:c:\owned\ReadingFixture.exe"},
+            {"action","Simplify"},{"question",null},{"passage",chosen},{"answer","A controlled answer."},
+            {"quality",null},{"chart",null},{"reference",null}};
+        if (!SavedEntry(saved,chosen,"A controlled answer.")) throw new Exception("saved-entry");
+        foreach (string timestamp in new[]{"2026-11-23T12:00:00.123456700+00:00","2026-11-23T12:00:00.1234567Z"}) {
+            var precise=new Dictionary<string,object>(saved); precise["recorded_at"]=timestamp;
+            if (!SavedEntry(precise,chosen,"A controlled answer.")) throw new Exception("saved-entry-fractional-time");
+            if ((string)precise["recorded_at"]!=timestamp) throw new Exception("saved-entry-timestamp-mutated");
+        }
+        foreach (string key in new[]{"id","recorded_at","app_name","app_id","action","question","passage","answer","quality","chart","reference"}) {
+            var bad=new Dictionary<string,object>(saved); bad[key]="unexpected";
+            if (SavedEntry(bad,chosen,"A controlled answer.")) throw new Exception("saved-entry-negative");
+        }
+        var missing=new Dictionary<string,object>(saved); missing.Remove("quality");
+        if (SavedEntry(missing,chosen,"A controlled answer.")) throw new Exception("saved-entry-missing");
     }
 }
 
@@ -92,14 +122,15 @@ public static class ReadingFixtureProgram {
                 ReadingFixturePredicates.SelfTest(); Console.WriteLine("Reading fixture predicates passed; no UI."); return 0;
             }
             if (args.Length<1) Fail("invalid-arguments");
-            bool fixture=args[0]=="fixture", drive=args[0]=="drive";
+            bool fixture=args[0]=="fixture", drive=args[0]=="drive", saved=args[0]=="drive-saved";
             fixtureMode=fixture;
-            if (!fixture && !drive) Fail("invalid-mode");
+            if (!fixture && !drive && !saved) Fail("invalid-mode");
             string[] names=fixture ? new[]{"--contract","--ready"} :
+                saved ? new[]{"--contract","--application-pid","--application-path","--application-start-ticks","--saved-entry","--evidence"} :
                 new[]{"--contract","--application-pid","--fixture-pid","--fixture-hwnd","--server-state","--evidence"};
             Dictionary<string,string> options=Options(args,names);
             evidencePath=fixture ? options["--ready"]+".failure.json" : options["--evidence"];
-            evidence=new Dictionary<string,object> {{"schema",1},{"test",fixture ? "windows-owned-selection-source" : "windows-server-installed-selection-reading"},
+            evidence=new Dictionary<string,object> {{"schema",1},{"test",fixture ? "windows-owned-selection-source" : saved ? "windows-server-installed-saved-reading" : "windows-server-installed-selection-reading"},
                 {"passed",false},{"pid",Process.GetCurrentProcess().Id}};
             stage="contract-read";
             Contract contract=ReadContract(options["--contract"]);
@@ -108,7 +139,7 @@ public static class ReadingFixtureProgram {
             }
             evidence["source_length"]=contract.Selected.Length; evidence["source_sha256"]=Hash(contract.Selected);
             overall=DateTime.UtcNow.AddSeconds(75);
-            Drive(contract,options);
+            if (saved) DriveSaved(contract,options); else Drive(contract,options);
             evidence["passed"]=true; evidence["stage"]="complete"; return 0;
         } catch (ReadingFixtureFailure error) {
             RecordError(error,error.Code);
@@ -369,6 +400,95 @@ public static class ReadingFixtureProgram {
         },5,"post-answer-source-mismatch");
         evidence["source_retained_verified"]=true;
     }
+    static void SaveAnswer(IntPtr app,int appPid,Process application) {
+        stage="save-answer";
+        // Source recheck deliberately scrolled upward with the Copy button
+        // focused. Ordinary End returns that same reader viewport to actions.
+        Focus(app,appPid); Native.End(app,appPid);
+        AutomationElement save=null;
+        Wait(()=> {
+            if (application.HasExited) Fail("application-exited-before-save");
+            save=Find(Root(app,appPid),"save-answer",appPid);
+            return save!=null && save.Current.IsEnabled && !save.Current.IsOffscreen;
+        },5,"save-answer-unavailable");
+        Invoke(save,appPid);
+        Wait(()=> {
+            if (application.HasExited) Fail("application-exited-during-save");
+            return Texts(Root(app,appPid),appPid).Contains("Answer saved on this device.");
+        },10,"saved-answer-acknowledgement-unavailable");
+        evidence["saved_answer_verified"]=true;
+    }
+    static void CheckRestartIdentity(Process application,string path,string ticks) {
+        long expected;
+        if (!Int64.TryParse(ticks,NumberStyles.None,CultureInfo.InvariantCulture,out expected) || expected<=0)
+            Fail("invalid-application-start-ticks");
+        if (!Path.IsPathRooted(path) || !File.Exists(path)) Fail("invalid-application-path");
+        if (application.HasExited || application.StartTime.ToUniversalTime().Ticks!=expected ||
+            !String.Equals(Path.GetFullPath(application.MainModule.FileName),Path.GetFullPath(path),StringComparison.OrdinalIgnoreCase))
+            Fail("saved-application-identity-mismatch");
+    }
+    static bool LibraryReady(AutomationElement root,int pid) {
+        if (Find(root,"library-error",pid)!=null || Find(root,"library-search-error",pid)!=null)
+            Fail("saved-library-error");
+        return Find(root,"library-busy",pid)==null && Find(root,"library-search-pending",pid)==null;
+    }
+    static bool MetadataAbsent(AutomationElement root,int pid,string id) {
+        return new[]{"entry-quality-","entry-request-","entry-reference-","entry-chart-kind-"}
+            .All(prefix=>Find(root,prefix+id,pid)==null);
+    }
+    static void DriveSaved(Contract contract,Dictionary<string,string> options) {
+        stage="saved-entry-read";
+        var entry=ReadJson(options["--saved-entry"]);
+        if (!ReadingFixturePredicates.SavedEntry(entry,contract.Selected,contract.Answer)) Fail("saved-entry-contract-mismatch");
+        string id=(string)entry["id"];
+        evidence["saved_entry_verified"]=true; evidence["saved_entry_id_sha256"]=Hash(id);
+        evidence["answer_sha256"]=Hash(contract.Answer);
+        int appPid=Pid(options["--application-pid"]);
+        if (appPid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
+        evidence["application_pid"]=appPid;
+        using (var application=Process.GetProcessById(appPid)) {
+            IntPtr retained=application.Handle;
+            stage="saved-application-identity";
+            CheckRestartIdentity(application,options["--application-path"],options["--application-start-ticks"]);
+            evidence["application_identity_verified"]=true;
+            IntPtr app=IntPtr.Zero; AutomationElement root=null;
+            Wait(()=> {
+                if (application.HasExited) Fail("application-exited-before-saved-ready");
+                app=Native.ApplicationWindow(appPid);
+                if (app==IntPtr.Zero) return false;
+                root=Root(app,appPid);
+                return Find(root,"open-saved",appPid)!=null;
+            },15,"saved-reader-window-unavailable");
+            stage="open-saved";
+            Invoke(Find(root,"open-saved",appPid),appPid);
+            AutomationElement read=null;
+            Wait(()=> {
+                root=Root(app,appPid);
+                if (!LibraryReady(root,appPid)) return false;
+                read=Find(root,"read-"+id,appPid);
+                return read!=null && read.Current.IsEnabled;
+            },10,"saved-entry-card-unavailable");
+            if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-card-metadata");
+            stage="saved-detail";
+            Invoke(read,appPid);
+            Wait(()=> {
+                if (application.HasExited) Fail("application-exited-during-saved-detail");
+                root=Root(app,appPid);
+                if (!LibraryReady(root,appPid) || Find(root,"entry-back",appPid)==null || Find(root,"copy-saved-detail",appPid)==null) return false;
+                var answer=Find(root,"answer",appPid);
+                return answer!=null && Texts(answer,appPid).SequenceEqual(new[]{contract.Answer}) &&
+                    Texts(root,appPid).Count(text=>text==contract.Selected)==1;
+            },10,"saved-detail-content-mismatch");
+            if (!MetadataAbsent(root,appPid,id)) Fail("unexpected-saved-detail-metadata");
+            evidence["saved_detail_verified"]=true; evidence["saved_metadata_absence_verified"]=true;
+            CheckRestartIdentity(application,options["--application-path"],options["--application-start-ticks"]);
+            stage="ordinary-quit";
+            Focus(app,appPid); Native.Chord(app,appPid,0x51,false);
+            Wait(()=>application.HasExited,10,"saved-application-did-not-quit");
+            if (application.ExitCode!=0) Fail("saved-application-quit-nonzero");
+            evidence["ordinary_quit_verified"]=true; evidence["app_exit_code"]=application.ExitCode;
+        }
+    }
     static void Drive(Contract contract,Dictionary<string,string> options) {
         int appPid=Pid(options["--application-pid"]), fixturePid=Pid(options["--fixture-pid"]);
         if (appPid==fixturePid || appPid==Process.GetCurrentProcess().Id || fixturePid==Process.GetCurrentProcess().Id) Fail("pid-scope-invalid");
@@ -422,6 +542,8 @@ public static class ReadingFixtureProgram {
             },20,"completed-answer-unavailable");
             Server(options["--server-state"],true); evidence["provider_source_verified"]=true; evidence["completed_answer_verified"]=true;
             RecheckSource(contract,app,appPid,application);
+            SaveAnswer(app,appPid,application);
+            Server(options["--server-state"],true);
             stage="ordinary-quit";
             Focus(app,appPid); Native.Chord(app,appPid,0x51,false);
             Wait(()=>application.HasExited,10,"application-did-not-quit");
@@ -468,6 +590,16 @@ public static class ReadingFixtureProgram {
             down.Data.Keyboard.Flags=1; up.Data.Keyboard.Flags=3; // EXTENDEDKEY, plus KEYUP.
             Input[] inputs={down,up};
             if (SendInput(2,inputs,Marshal.SizeOf(typeof(Input)))!=2) {
+                SendInput(1,new[]{up},Marshal.SizeOf(typeof(Input))); Fail("input-insertion-incomplete");
+            }
+        }
+        public static void End(IntPtr hwnd,int pid) {
+            if (!Owned(hwnd,pid) || GetForegroundWindow()!=hwnd) Fail("input-target-not-owned");
+            foreach (int key in new[]{0x11,0x12,0x10,0x5b,0x5c,0x23})
+                if ((GetAsyncKeyState(key)&0x8000)!=0) Fail("input-key-already-held");
+            Input down=Key(0x23,false), up=Key(0x23,true);
+            down.Data.Keyboard.Flags=1; up.Data.Keyboard.Flags=3;
+            if (SendInput(2,new[]{down,up},Marshal.SizeOf(typeof(Input)))!=2) {
                 SendInput(1,new[]{up},Marshal.SizeOf(typeof(Input))); Fail("input-insertion-incomplete");
             }
         }
