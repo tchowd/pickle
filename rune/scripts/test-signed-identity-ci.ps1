@@ -17,6 +17,16 @@ if ($PSEdition -eq 'Core') {
   if ($LASTEXITCODE -ne 0) { throw "Signed identity CI failed in Windows PowerShell with status $LASTEXITCODE." }
   return
 }
+# Appx deployment validates machine trust, not just the current user's store.
+# https://learn.microsoft.com/windows/msix/package/create-certificate-package-signing
+# Require the disposable runner's existing elevated token; never request elevation.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+try {
+  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+  if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'The disposable hosted Windows runner must already be elevated for its test-only machine TrustedPeople certificate.'
+  }
+} finally { $identity.Dispose() }
 Set-Location (Join-Path $PSScriptRoot '..')
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PickleRune'
 if (Test-Path -LiteralPath $uninstallKey) { throw 'The hosted runner already contains an installed Pickle. Refusing to change it.' }
@@ -27,6 +37,7 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ('pickle-identity-ci-' + $id)
 $install = Join-Path $work 'installation'
 New-Item -ItemType Directory -Path $work | Out-Null
 $certificate = $null
+$trustStores = @()
 $stage = $null
 $baseline = @{}
 foreach ($file in @('PickleRune-setup.exe','PickleRune-windows.zip')) {
@@ -44,7 +55,16 @@ try {
     -HashAlgorithm SHA256 -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy NonExportable -NotAfter (Get-Date).AddDays(1)
   $publicCertificate = Join-Path $work 'public-test-certificate.cer'
   Export-Certificate -Cert $certificate -FilePath $publicCertificate | Out-Null
-  Import-Certificate -FilePath $publicCertificate -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople' | Out-Null
+  # TrustedPeople grants peer trust to this exact code-signing leaf. Do not put
+  # a non-CA leaf into Root, and do not weaken the production SignTool /pa check.
+  $trustStore = 'Cert:\LocalMachine\TrustedPeople'
+  $trustPath = Join-Path $trustStore $certificate.Thumbprint
+  if (Test-Path -LiteralPath $trustPath) { throw 'The new test certificate unexpectedly already exists in machine trust. It was preserved.' }
+  # Record before import so finally cleans up even if Import-Certificate partly
+  # succeeds and then throws. Never remove an entry that existed before this run.
+  $trustStores += $trustStore
+  Import-Certificate -FilePath $publicCertificate -CertStoreLocation $trustStore | Out-Null
+  if (!(Test-Path -LiteralPath $trustPath)) { throw 'The exact disposable certificate was not imported into machine TrustedPeople.' }
   & ./scripts/build-identity.ps1 -Configuration $Configuration -PackageName $name -Publisher $certificate.Subject `
     -PublisherDisplayName 'Pickle CI test only' -Version '0.1.0.0' -CertificateThumbprint $certificate.Thumbprint -Installer
   $stage = Get-ChildItem artifacts/windows-* -Directory | Where-Object {
@@ -76,12 +96,13 @@ finally {
   finally {
     $cleanupErrors = @()
     if ($certificate) {
-      foreach ($store in @('Cert:\CurrentUser\TrustedPeople','Cert:\CurrentUser\My')) {
+      foreach ($store in ($trustStores + @('Cert:\CurrentUser\My'))) {
         $path = Join-Path $store $certificate.Thumbprint
         try {
           if (Test-Path -LiteralPath $path) {
             if ($store -eq 'Cert:\CurrentUser\My') { Remove-Item -Path $path -DeleteKey -ErrorAction Stop }
             else { Remove-Item -Path $path -ErrorAction Stop }
+            if (Test-Path -LiteralPath $path) { throw 'The exact disposable certificate remains after removal.' }
           }
         } catch { $cleanupErrors += "Could not remove this test certificate from $store`: $_" }
       }
