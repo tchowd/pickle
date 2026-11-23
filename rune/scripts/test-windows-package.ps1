@@ -117,6 +117,17 @@ Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "
 $readingEvidence=Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json"
 Invoke-PickleReadingCore $application $supportRoot $readingEvidence $Configuration -RequireWindowCapture:$hasIdentity
 Assert-PicklePackageReadingEvidence (Read-PickleReadingJson $readingEvidence) $hasIdentity $Configuration
+. (Join-Path $PSScriptRoot 'windows-extension-smoke.ps1')
+if (Test-PickleExtensionSetupGate $Configuration $hasIdentity $PSEdition ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) $env:GITHUB_ACTIONS $env:RUNNER_ENVIRONMENT) {
+  # Real Stable setup discovery only, with no Pickle window alive. Each browser
+  # gets its own PowerShell 7 owner/job; native-host delivery remains unverified.
+  & (Join-Path $PSScriptRoot 'test-windows-extension-smoke.ps1')
+  $extensionFailures=[Collections.Generic.List[string]]::new()
+  foreach ($browser in @('chrome','edge')) {
+    if (!(Invoke-PickleExtensionCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-native-smoke.json"))) { $extensionFailures.Add($browser) }
+  }
+  if ($extensionFailures.Count) { throw 'One or more Stable extension setup stages failed; both safe-cleanup reports were retained and full delivery remains unverified.' }
+}
 if ($hasIdentity) {
   # The installed user workflow above is the package capture gate. Retain the
   # isolated self-launch diagnostic's portable collector/protocol regressions;
