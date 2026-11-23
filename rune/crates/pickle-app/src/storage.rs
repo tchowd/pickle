@@ -7,6 +7,39 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const MAX_ARCHIVE_BYTES: usize = 32_000_000;
+
+/// Count encoded bytes, including JSON escapes, before touching durable data.
+struct ArchiveEncoder {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+impl ArchiveEncoder {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        }
+    }
+}
+impl Write for ArchiveEncoder {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(std::io::Error::other(
+                "The local archive byte limit was exceeded.",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -394,7 +427,7 @@ impl Repository {
             .metadata()
             .map_err(|_| "Could not inspect local storage.")?
             .len()
-            > 32_000_000
+            > MAX_ARCHIVE_BYTES as u64
         {
             return Err(format!(
                 "{name} is too large. Existing data has not been changed."
@@ -414,8 +447,14 @@ impl Repository {
             version: u32,
             data: &'a T,
         }
-        let encoded = serde_json::to_vec_pretty(&Borrowed { version: 1, data })
-            .map_err(|_| "Could not encode local data.")?;
+        let mut encoded = ArchiveEncoder::new(MAX_ARCHIVE_BYTES);
+        serde_json::to_writer_pretty(&mut encoded, &Borrowed { version: 1, data }).map_err(|_| {
+            if encoded.exceeded {
+                "This local file would exceed the 32 MB limit. Existing data has not been changed. Remove some saved answers before saving more."
+            } else {
+                "Could not encode local data."
+            }
+        })?;
         let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)
             .map_err(|_| "Could not stage local data.")?;
         #[cfg(unix)]
@@ -427,7 +466,7 @@ impl Repository {
                 .map_err(|_| "Could not protect local data.")?;
         }
         temporary
-            .write_all(&encoded)
+            .write_all(&encoded.bytes)
             .and_then(|_| temporary.as_file().sync_all())
             .map_err(|_| "Could not save local data. Existing data has not been changed.")?;
         temporary
@@ -751,6 +790,65 @@ mod tests {
             Repository::new(location).unwrap().history().unwrap().len(),
             8
         );
+    }
+
+    #[test]
+    fn encoded_history_limit_refuses_append_without_stranding_a_readable_archive() {
+        let large_entry = |i| {
+            let mut record = entry(i);
+            record.id = format!("budget-{i:04}");
+            record.passage = format!("{}{:04}", "\\".repeat(11_996), i);
+            record.answer = "\\".repeat(12_000);
+            record
+        };
+        let encoded = |records: &[Entry]| {
+            serde_json::to_vec_pretty(&Archive {
+                version: 1,
+                data: records,
+            })
+            .unwrap()
+        };
+        let one = encoded(&[large_entry(0)]).len();
+        let per_entry = encoded(&[large_entry(0), large_entry(1)]).len() - one;
+        let count = 1 + (MAX_ARCHIVE_BYTES - one) / per_entry;
+        assert!(count < 1000);
+        let records: Vec<_> = (0..count).map(large_entry).collect();
+        let original = encoded(&records);
+        assert!(original.len() <= MAX_ARCHIVE_BYTES);
+        assert!(original.len() + per_entry > MAX_ARCHIVE_BYTES);
+        let directory = tempfile::tempdir().unwrap();
+        let repo = Repository::new(directory.path().into()).unwrap();
+        let path = directory.path().join("history.json");
+        fs::write(&path, &original).unwrap();
+        assert_eq!(repo.history().unwrap().len(), count);
+
+        assert!(
+            repo.append(false, large_entry(count)).is_err(),
+            "An accepted append must never create an archive that the next read rejects."
+        );
+        assert!(fs::read(&path).unwrap() == original);
+        assert_eq!(repo.history().unwrap().len(), count);
+        repo.remove_all_if_matches(false, &records).unwrap();
+        repo.append(false, large_entry(count)).unwrap();
+        assert_eq!(repo.history().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn archive_encoding_budget_counts_escaped_and_unicode_bytes_at_the_boundary() {
+        for (text, exact_bytes) in [("\n\n", 6), ("é", 4)] {
+            let mut exact = ArchiveEncoder::new(exact_bytes);
+            serde_json::to_writer_pretty(&mut exact, text).unwrap();
+            assert_eq!(exact.bytes.len(), exact_bytes);
+            assert!(!exact.exceeded);
+            assert_eq!(
+                serde_json::from_slice::<String>(&exact.bytes).unwrap(),
+                text
+            );
+            let mut too_small = ArchiveEncoder::new(exact_bytes - 1);
+            assert!(serde_json::to_writer_pretty(&mut too_small, text).is_err());
+            assert!(too_small.exceeded);
+            assert!(too_small.bytes.len() < exact_bytes);
+        }
     }
     #[test]
     fn local_endpoints_are_scoped_and_history_is_opt_in() {
