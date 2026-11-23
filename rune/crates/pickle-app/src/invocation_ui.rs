@@ -71,6 +71,7 @@ impl AppState {
             width: b.width,
             height: b.height,
         });
+        self.cancel_remove_all();
         self.stop_reader_follow();
         self.auto_preview = Some(AutoPreview {
             capture,
@@ -334,6 +335,23 @@ mod tests {
         assert_eq!(state.panel, Panel::Expanded);
         assert_eq!(state.display_snapshot().unwrap().id, id);
         assert!(!state.show_auto_capture(capture("A different passage.")));
+    }
+
+    #[test]
+    fn accepted_automatic_preview_cancels_library_deletion_without_restoring_it() {
+        let mut state = AppState {
+            route: Route::Library(true),
+            library_delete_confirmation: Some(true),
+            ..AppState::default()
+        };
+        assert!(!state.show_auto_capture(capture("A controlled selection.")));
+        assert_eq!(state.library_delete_confirmation, Some(true));
+        state.settings.automatic_menu = true;
+        assert!(state.show_auto_capture(capture("A controlled selection.")));
+        assert!(state.library_delete_confirmation.is_none());
+        state.dismiss_auto_preview();
+        assert_eq!(state.route, Route::Library(true));
+        assert!(state.library_delete_confirmation.is_none());
     }
     #[test]
     fn accepted_automatic_preview_stops_following_after_dismissal() {

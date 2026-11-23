@@ -18,6 +18,9 @@ mod context_lifecycle_tests;
 #[path = "answer_reference_tests.rs"]
 mod answer_reference_tests;
 
+#[path = "library_controller.rs"]
+pub(crate) mod library_controller;
+
 /// Pointer metadata belongs to accepted answers, not to mutable source context.
 /// Explicit Save exposes only the base answer or the latest follow-up.
 #[derive(Default)]
@@ -172,6 +175,9 @@ pub struct AppState {
     pub update_attempt: uuid::Uuid,
     pub library_page: usize,
     pub library_selected: Option<String>,
+    pub library_errors: [Option<String>; 2],
+    pub library_delete_confirmation: Option<bool>,
+    pub library_state: library_controller::LibraryState,
     pub source_expanded: bool,
     pub image_cache: Option<rune::ImageCache>,
     pub pinned: bool,
@@ -237,6 +243,9 @@ impl Default for AppState {
             update_attempt: uuid::Uuid::new_v4(),
             library_page: 0,
             library_selected: None,
+            library_errors: [None, None],
+            library_delete_confirmation: None,
+            library_state: library_controller::LibraryState::default(),
             source_expanded: false,
             image_cache: None,
             pinned: false,
@@ -402,6 +411,7 @@ impl AppState {
         self.draft.clear();
     }
     pub fn reset(&mut self) {
+        self.cancel_remove_all();
         self.cancel();
         self.snapshot = None;
         self.result = None;
@@ -491,6 +501,7 @@ impl AppState {
         }
         self.cancel();
         self.context_state.clear();
+        self.cancel_remove_all();
         self.capture_target = None;
         self.context.clear();
         self.demo = false;
@@ -672,6 +683,7 @@ impl AppState {
         }
         self.cancel_request();
         if activate {
+            self.cancel_remove_all();
             self.route = Route::Reader;
             self.panel = Panel::Expanded;
             self.expand(tx, 680.0);
@@ -773,7 +785,6 @@ impl AppState {
         let demo = self.demo;
         let record = settings.history_enabled && !demo;
         let input_for_record = input.clone();
-        let worker_services = services.clone();
         services.runtime.spawn(async move {
             let prepared = make_pipeline(&settings, demo).await;
             let pipeline = match prepared { Ok(p) => p, Err(error) => { handle.update(move |s, _| if s.is_current(id) { if let Some(services) = &s.services { services.busy.store(false, Ordering::Release); } s.activity = Activity::Failed(error); }); return; } };
@@ -801,13 +812,7 @@ impl AppState {
                         if should_record_result(&result, record, s.settings.history_enabled) {
                             let mut entry = make_entry(&input_for_record.snapshot, &result, &pending);
                             entry.reference = reference_pointer(input_for_record.reference.as_ref());
-                            if let Some(repo) = worker_services.repository.clone() {
-                                let h = s.handle.clone();
-                                worker_services.runtime.spawn_blocking(move || {
-                                    let saved = repo.append(false, entry).and_then(|_| repo.history());
-                                    if let Some(h) = h { h.update(move |s, _| match saved { Ok(entries) => s.entries = entries, Err(error) => s.notice = Some(error) }); }
-                                });
-                            }
+                            s.record_history_entry(entry);
                         }
                         s.complete_reading_result_with_reference(id, &pending, result, reference_pointer(input_for_record.reference.as_ref()));
                     }
@@ -1250,22 +1255,7 @@ impl AppState {
         let Some(entry) = self.current_answer_entry() else {
             return;
         };
-        let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
-            return;
-        };
-        let Some(repo) = services.repository.clone() else {
-            return;
-        };
-        services.runtime.spawn_blocking(move || {
-            let result = repo.append(true, entry).and_then(|_| repo.bookmarks());
-            handle.update(move |s, _| match result {
-                Ok(entries) => {
-                    s.bookmarks = entries;
-                    s.notice = Some("Answer saved on this device.".into());
-                }
-                Err(error) => s.notice = Some(error),
-            });
-        });
+        self.append_saved_entry(entry);
     }
     pub(crate) fn current_answer_entry(&self) -> Option<Entry> {
         let snapshot = self.snapshot.as_ref()?;
@@ -1292,31 +1282,7 @@ impl AppState {
         Some(entry)
     }
     pub fn remove_entry(&mut self, bookmark: bool, id: String) {
-        let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
-            return;
-        };
-        let Some(repo) = services.repository.clone() else {
-            return;
-        };
-        services.runtime.spawn_blocking(move || {
-            let result = repo.remove(bookmark, &id).and_then(|_| {
-                if bookmark {
-                    repo.bookmarks()
-                } else {
-                    repo.history()
-                }
-            });
-            handle.update(move |s, _| match result {
-                Ok(entries) => {
-                    if bookmark {
-                        s.bookmarks = entries;
-                    } else {
-                        s.entries = entries;
-                    }
-                }
-                Err(error) => s.notice = Some(error),
-            });
-        });
+        self.remove_library_entry(bookmark, id);
     }
     pub fn answer(&self) -> &str {
         self.conversation
@@ -1326,38 +1292,17 @@ impl AppState {
             .unwrap_or("")
     }
     pub fn import_legacy(&mut self) {
+        self.import_library_legacy();
+    }
+    fn import_library_paths(&mut self) -> Option<crate::migration::LegacyPaths> {
         let Some(paths) = crate::migration::default_legacy_paths() else {
             self.notice = Some(
                 "Legacy import is available on macOS, where the original app stored its data."
                     .into(),
             );
-            return;
+            return None;
         };
-        let (Some(services), Some(handle)) = (self.services.clone(), self.handle.clone()) else {
-            return;
-        };
-        let Some(repo) = services.repository.clone() else {
-            return;
-        };
-        services.runtime.spawn_blocking(move || {
-            let result =
-                crate::migration::import_legacy(&repo, Some(&paths.preferences), &paths.history);
-            let entries = repo.history();
-            let bookmarks = repo.bookmarks();
-            handle.update(move |s, _| {
-                s.notice = Some(
-                    result
-                        .map(|report| report.to_string())
-                        .unwrap_or_else(|e| e),
-                );
-                if let Ok(entries) = entries {
-                    s.entries = entries;
-                }
-                if let Ok(bookmarks) = bookmarks {
-                    s.bookmarks = bookmarks;
-                }
-            });
-        });
+        Some(paths)
     }
 }
 fn save_settings_transaction(

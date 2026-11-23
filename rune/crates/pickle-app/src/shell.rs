@@ -75,6 +75,7 @@ pub fn setup(s: &mut AppState, waker: rune::Waker) {
                         if automatic {
                             return;
                         }
+                        s.cancel_remove_all();
                         s.notice = Some(error.to_string());
                         s.route = Route::Reader;
                     }
@@ -97,6 +98,7 @@ pub fn setup(s: &mut AppState, waker: rune::Waker) {
         h.update(move |s, tx| {
             match event {
                 PlatformEvent::Quit => {
+                    s.cancel_remove_all();
                     s.prepare_window_close();
                     s.cancel();
                     if let Some(services) = &s.services {
@@ -106,6 +108,7 @@ pub fn setup(s: &mut AppState, waker: rune::Waker) {
                     return;
                 }
                 PlatformEvent::Dismiss => {
+                    s.cancel_remove_all();
                     s.prepare_window_close();
                     s.cancel();
                     tx.close_window();
@@ -116,14 +119,18 @@ pub fn setup(s: &mut AppState, waker: rune::Waker) {
                     return;
                 }
                 PlatformEvent::Settings => {
+                    s.cancel_remove_all();
                     s.dismiss_auto_preview();
                     s.stop_reader_follow();
                     s.route = Route::Settings;
                     s.expand(tx, 720.0);
                 }
                 PlatformEvent::History => {
+                    s.cancel_remove_all();
                     s.dismiss_auto_preview();
                     s.stop_reader_follow();
+                    s.library_selected = None;
+                    s.library_page = 0;
                     s.route = Route::Library(false);
                     s.expand(tx, 680.0);
                 }

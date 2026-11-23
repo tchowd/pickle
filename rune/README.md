@@ -121,6 +121,7 @@ The browser-specific native host is a bundled Rust executable; users do not need
 - Search and reading saved answers are local and do not replace the working source or submit AI requests.
 - Reference records retain URL/title/type pointers, not full reference bodies, screenshots, OCR, audio, prompts, or credentials.
 - Local files use a versioned schema, atomic replacement, and a cross-process write lock. Malformed or unsupported archives block replacement writes.
+- Each library has a separate **Delete all** confirmation. It clears that entire store, including entries outside the current search or page, while retaining the other store and settings. Cancel keeps all entries. Unreadable archives offer **Show archive file** and **Try again**; repair or move the protected file yourself before retrying. Deletion never resets an unreadable archive.
 
 Settings offers **Import original Pickle history** on macOS. It reads the original knowledge-base JSON and explicit bookmark data, preserves chart/reference metadata, deduplicates imports, and leaves source files untouched. It does not import credentials or privacy consent. The new app uses a separate development identity and storage location.
 
@@ -138,7 +139,7 @@ cargo run --locked -p pickle-app -- --scene choosing --snap artifacts/chooser.pn
 cargo run --locked -p pickle-app -- --scene settings --snap artifacts/settings.png
 ```
 
-Twenty-one isolated scenes include `chart-bar`, `chart-flow`, `streaming`, `reviewing`, `repairing`, `consent-local`, `consent-online`, `permission-denied`, `history-empty`, `history-damaged`, `saved-quality`, `saved-quality-detail`, `saved-metadata`, `saved-metadata-detail`, and `error`. `scripts/check.sh` renders eleven representative states. Saved scenes seed only fixed synthetic entries to show historical warnings, questions, source pointers and chart text-alternative annotations in cards/details. Fixture startup never loads archives, acquires the normal instance lease, or supplies live provider/vault services; native permission, export and reveal actions are guarded. Rendering still needs a supported graphics adapter/backend. State/layout tests and local HTTP fixtures are distinct from actual OS capture, focus, permissions, and screen-reader tests.
+Twenty-two isolated scenes include `chart-bar`, `chart-flow`, `streaming`, `reviewing`, `repairing`, `consent-local`, `consent-online`, `permission-denied`, `history-empty`, `history-damaged`, `saved-quality`, `saved-quality-detail`, `saved-metadata`, `saved-metadata-detail`, `saved-delete-confirm`, and `error`. `scripts/check.sh` renders thirteen representative states. Saved scenes seed only fixed synthetic entries to show historical warnings, questions, source pointers, chart text-alternative annotations and deletion confirmation. Fixture startup never loads archives, acquires the normal instance lease, or supplies live provider/vault services; native permission, export and reveal actions are guarded. Rendering still needs a supported graphics adapter/backend. State/layout tests and local HTTP fixtures are distinct from actual OS capture, focus, permissions, and screen-reader tests.
 
 ```sh
 cargo run --locked -p pickle-app -- --capabilities

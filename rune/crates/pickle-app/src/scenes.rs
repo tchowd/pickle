@@ -32,6 +32,7 @@ pub const SCENES: &[Scene] = &[
     ("saved-quality-detail", saved_quality_detail),
     ("saved-metadata", saved_metadata),
     ("saved-metadata-detail", saved_metadata_detail),
+    ("saved-delete-confirm", saved_delete_confirmation),
 ];
 
 /// Normalize common flag spellings before Rune parses value pairs. Classify
@@ -218,7 +219,7 @@ fn empty_history(state: &mut AppState) {
 }
 fn damaged_history(state: &mut AppState) {
     empty_history(state);
-    state.notice = Some("Fixture: history.json is damaged. Existing data has not been changed. Move the file aside before trying again.".into());
+    state.library_errors[0] = Some("Fixture: history.json is damaged. Existing data has not been changed. Repair or move the file aside before trying again.".into());
 }
 
 const SAVED_QUALITY_REASON: &str =
@@ -243,6 +244,11 @@ fn saved_quality(state: &mut AppState) {
 fn saved_quality_detail(state: &mut AppState) {
     saved_quality(state);
     state.library_selected = Some(uuid::Uuid::from_u128(5).to_string());
+}
+
+fn saved_delete_confirmation(state: &mut AppState) {
+    saved_quality(state);
+    state.library_delete_confirmation = Some(true);
 }
 
 const SAVED_REQUEST: &str = "How do the two batches compare?";
@@ -328,7 +334,10 @@ mod tests {
             );
             assert!(state.window_geometry_worker.is_none());
             assert!(state.entries.is_empty());
-            if matches!(*name, "saved-quality" | "saved-quality-detail") {
+            if matches!(
+                *name,
+                "saved-quality" | "saved-quality-detail" | "saved-delete-confirm"
+            ) {
                 assert_eq!(state.bookmarks.len(), 1);
                 let entry = &state.bookmarks[0];
                 assert_eq!(entry.id, uuid::Uuid::from_u128(5).to_string());
@@ -439,6 +448,14 @@ mod tests {
             semantic_text(&damaged.accessibility_json())
                 .contains("Existing data has not been changed")
         );
+        assert!(damaged.find("library-retry").is_some());
+        assert!(damaged.find("library-show-archive").is_some());
+        assert!(!damaged.state.native_enabled);
+        let confirmation = runtime(saved_delete_confirmation);
+        assert!(confirmation.find("library-delete-confirmation").is_some());
+        assert!(confirmation.find("library-confirm-delete-all").is_some());
+        assert!(confirmation.find("library-cancel-delete-all").is_some());
+        assert_eq!(confirmation.state.bookmarks.len(), 1);
     }
 
     #[test]

@@ -10,6 +10,9 @@ use rune_kit::{Markdown, MarkdownStyle};
 #[path = "reader_scroll_tests.rs"]
 mod reader_scroll_tests;
 #[cfg(test)]
+#[path = "saved_library_tests.rs"]
+mod saved_library_tests;
+#[cfg(test)]
 #[path = "saved_metadata_tests.rs"]
 mod saved_metadata_tests;
 #[cfg(test)]
@@ -227,15 +230,13 @@ pub fn view(s: &AppState, _: &mut Cx<AppState>) -> El {
         .child(action(s, "open-saved", "Saved", false, |s, tx| {
             s.dismiss_auto_preview();
             s.stop_reader_follow();
-            s.route = Route::Library(true);
-            s.library_selected = None;
-            s.library_page = 0;
+            navigate_library(s, Route::Library(true));
             s.expand(tx, 680.0);
         }))
         .child(action(s, "open-settings", "Settings", false, |s, tx| {
             s.dismiss_auto_preview();
             s.stop_reader_follow();
-            s.route = Route::Settings;
+            navigate_library(s, Route::Settings);
             s.expand(tx, 720.0);
         }))
         .child(
@@ -589,7 +590,7 @@ fn activity(s: &AppState) -> El {
         Activity::Failed(error) => col().w_full().gap(12.0).padding(14.0).radius(10.0).fill(SURFACE)
             .child(text(error).font(TextStyle::new(14.0, 400.0).lh(21.0)).color(WARNING))
             .child(row().gap(8.0).child(action(s, "retry-error", "Retry", true, |s, tx| if let Some(p) = s.last.clone() { s.start_user_request(p, tx); }))
-                .child(action(s, "error-settings", "Connection settings", false, |s, _| { s.stop_reader_follow(); s.route = Route::Settings; }))),
+                .child(action(s, "error-settings", "Connection settings", false, |s, _| { s.stop_reader_follow(); navigate_library(s, Route::Settings); }))),
         Activity::Consent(_) => {
             let destination = if s.settings.mode == "Online" { if s.settings.jev_enabled { "Cloudflare for writing, and TypeSafe Jev through Cloudflare for answer checks".to_owned() } else { "Cloudflare for writing".into() } }
                 else { format!("your configured Ollama server at {}{}", s.settings.local_address, if s.settings.same_device { " on this device" } else { " (which may run on another computer)" }) };
@@ -739,7 +740,7 @@ fn settings(s: &AppState) -> El {
                 .child(spacer())
                 .child(action(s, "back-reader", "Back", false, |s, _| {
                     s.stop_reader_follow();
-                    s.route = Route::Reader
+                    navigate_library(s, Route::Reader)
                 })),
         )
         .child(
@@ -827,7 +828,7 @@ fn settings(s: &AppState) -> El {
             .child(note("Import saved answers and knowledge-base history from the original Mac app. Original files, credentials, and privacy consents are preserved."))
             .child(action(s, "import-legacy", "Import original Pickle history", false, |s, _| s.import_legacy()).disabled(!cfg!(target_os = "macos"))))
         .child(row().gap(8.0).child(action(s, "save-settings", "Save settings", true, |s, _| s.save_settings()))
-            .child(action(s, "open-history", "Knowledge base", false, |s, _| { s.stop_reader_follow(); s.route = Route::Library(false); }))
+            .child(action(s, "open-history", "Knowledge base", false, |s, _| { s.stop_reader_follow(); navigate_library(s, Route::Library(false)); }))
             .child(action(s, "pause", if s.paused { "Resume" } else { "Pause" }, false, |s, _| s.toggle_pause())));
     if let Some(notice) = &s.notice {
         content = content.child(note(notice));
@@ -1107,8 +1108,29 @@ fn saved_answer(entry: &crate::storage::Entry, size: f32, preview: bool) -> El {
     }
 }
 
+fn navigate_library(s: &mut AppState, route: Route) {
+    s.cancel_remove_all();
+    s.library_selected = None;
+    s.library_page = 0;
+    s.route = route;
+}
+
+fn library_destructive_blocked(s: &AppState, bookmark: bool) -> bool {
+    s.route != Route::Library(bookmark)
+        || s.library_busy(bookmark)
+        || s.library_error(bookmark).is_some()
+        || s.library_delete_confirmation.is_some()
+}
+
 fn library(s: &AppState, bookmark: bool) -> El {
     let entries = if bookmark { &s.bookmarks } else { &s.entries };
+    let store = if bookmark {
+        "Saved answers"
+    } else {
+        "Knowledge base"
+    };
+    let busy = s.library_busy(bookmark);
+    let destructive_blocked = library_destructive_blocked(s, bookmark);
     let mut content = col()
         .w_full()
         .gap(18.0)
@@ -1129,16 +1151,14 @@ fn library(s: &AppState, bookmark: bool) -> El {
                 .child(spacer())
                 .child(action(s, "library-back", "Back", false, |s, _| {
                     s.stop_reader_follow();
-                    s.route = Route::Reader
+                    navigate_library(s, Route::Reader)
                 })),
         )
         .child(
             row()
                 .gap(8.0)
                 .child(action(s, "library-bookmarks", "Saved", bookmark, |s, _| {
-                    s.route = Route::Library(true);
-                    s.library_selected = None;
-                    s.library_page = 0;
+                    navigate_library(s, Route::Library(true));
                 }))
                 .child(action(
                     s,
@@ -1146,12 +1166,59 @@ fn library(s: &AppState, bookmark: bool) -> El {
                     "Knowledge base",
                     !bookmark,
                     |s, _| {
-                        s.route = Route::Library(false);
-                        s.library_selected = None;
-                        s.library_page = 0;
+                        navigate_library(s, Route::Library(false));
                     },
-                )),
+                ))
+                .child(spacer())
+                .child(
+                    action(s, "library-delete-all", "Delete all", false, move |s, _| {
+                        let empty = if bookmark {
+                            s.bookmarks.is_empty()
+                        } else {
+                            s.entries.is_empty()
+                        };
+                        if !empty && !library_destructive_blocked(s, bookmark) {
+                            s.request_remove_all(bookmark);
+                        }
+                    })
+                    .label(format!("Delete all {store}"))
+                    .disabled(entries.is_empty() || destructive_blocked),
+                ),
         );
+    if busy {
+        content = content.child(note(format!("Updating {store}…")).key("library-busy"));
+    }
+    if let Some(error) = s.library_error(bookmark) {
+        content = content.child(col().key("library-error").w_full().gap(10.0).padding(14.0).radius(10.0).fill(SURFACE)
+            .child(note(format!("{store} archive needs attention.")).w_full().wrap_anywhere().color(WARNING))
+            .child(note("Changes are blocked until this archive can be read.").w_full().wrap_anywhere())
+            .child(note(error.to_owned()).key("library-error-message").w_full().wrap_anywhere().color(WARNING))
+            .child(note("Keep a backup, then repair or move the archive file before choosing Try again.").w_full().wrap_anywhere())
+            .child(row().gap(8.0)
+                .child(action(s,"library-show-archive","Show archive file",false,move |s,_| {
+                    if s.native_enabled {s.reveal_library(bookmark);}
+                }).disabled(!s.native_enabled || busy))
+                .child(action(s,"library-retry","Try again",false,move |s,_| {
+                    if !s.library_busy(bookmark) {
+                        s.cancel_remove_all();
+                        s.reload_library(bookmark);
+                    }
+                }).disabled(busy))));
+    }
+    if s.library_delete_confirmation == Some(bookmark) {
+        let count = entries.len();
+        content = content.child(col().key("library-delete-confirmation").w_full().gap(12.0).padding(14.0).radius(10.0).fill(SURFACE)
+            .child(paragraph(format!("Delete all {count} {} in {store}?",if count==1 {"answer"} else {"answers"})).key("library-delete-summary").w_full().wrap_anywhere())
+            .child(note("These device-local answers will be permanently deleted. This cannot be undone.").w_full().wrap_anywhere().color(WARNING))
+            .child(row().gap(8.0)
+                .child(action(s,"library-confirm-delete-all","Delete all permanently",false,move |s,_| {
+                    if s.route == Route::Library(bookmark)
+                        && s.library_delete_confirmation == Some(bookmark)
+                        && !s.library_busy(bookmark) && s.library_error(bookmark).is_none()
+                    {s.confirm_remove_all();}
+                }).disabled(busy || s.library_error(bookmark).is_some() || entries.is_empty()))
+                .child(action(s,"library-cancel-delete-all","Cancel",false,|s,_|s.cancel_remove_all()))));
+    }
     if let Some(entry) = s
         .library_selected
         .as_ref()
@@ -1160,7 +1227,8 @@ fn library(s: &AppState, bookmark: bool) -> El {
         let copied = saved_answer_plain_text(entry);
         content = content
             .child(action(s, "entry-back", "Back to results", false, |s, _| {
-                s.library_selected = None
+                s.cancel_remove_all();
+                s.library_selected = None;
             }))
             .child(note(format!("{} · {}", entry.app_name, entry.recorded_at)))
             .children(saved_metadata(entry))
@@ -1210,7 +1278,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
                     .child(search),
             ),
     );
-    if entries.is_empty() {
+    if entries.is_empty() && s.library_error(bookmark).is_none() && !busy {
         content = content.child(paragraph(if bookmark {
             "Choose Save beside an answer to keep it here."
         } else {
@@ -1258,15 +1326,25 @@ fn library(s: &AppState, bookmark: bool) -> El {
                             format!("read-{}", entry.id).as_str(),
                             "Read answer",
                             false,
-                            move |s, _| s.library_selected = Some(selected.clone()),
+                            move |s, _| {
+                                s.cancel_remove_all();
+                                s.library_selected = Some(selected.clone());
+                            },
                         ))
-                        .child(action(
-                            s,
-                            format!("remove-{}", entry.id).as_str(),
-                            "Remove",
-                            false,
-                            move |s, _| s.remove_entry(bookmark, id.clone()),
-                        )),
+                        .child(
+                            action(
+                                s,
+                                format!("remove-{}", entry.id).as_str(),
+                                "Remove",
+                                false,
+                                move |s, _| {
+                                    if !library_destructive_blocked(s, bookmark) {
+                                        s.remove_entry(bookmark, id.clone());
+                                    }
+                                },
+                            )
+                            .disabled(destructive_blocked),
+                        ),
                 ),
         );
     }

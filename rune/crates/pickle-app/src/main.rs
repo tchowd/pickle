@@ -110,11 +110,11 @@ fn main() {
                 }
                 match repo.history() {
                     Ok(entries) => initial.entries = entries,
-                    Err(error) => startup_error = Some(error),
+                    Err(error) => initial.library_errors[0] = Some(error),
                 }
                 match repo.bookmarks() {
                     Ok(entries) => initial.bookmarks = entries,
-                    Err(error) => startup_error = Some(error),
+                    Err(error) => initial.library_errors[1] = Some(error),
                 }
                 Some(Arc::new(repo))
             }

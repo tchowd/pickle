@@ -339,6 +339,31 @@ impl Repository {
         entries.retain(|entry| entry.id != id);
         self.write(name, &entries)
     }
+    #[cfg(test)]
+    pub fn remove_all(&self, bookmark: bool) -> Result<(), String> {
+        self.remove_all_inner(bookmark, None)
+    }
+    pub fn remove_all_if_matches(&self, bookmark: bool, expected: &[Entry]) -> Result<(), String> {
+        self.remove_all_inner(bookmark, Some(expected))
+    }
+    fn remove_all_inner(&self, bookmark: bool, expected: Option<&[Entry]>) -> Result<(), String> {
+        let _lock = self.lock()?;
+        let (name, capacity) = if bookmark {
+            ("bookmarks.json", 200)
+        } else {
+            ("history.json", 1000)
+        };
+        // Clearing is an ordinary archive mutation, never a recovery/reset path.
+        // Validate its current version, capacity and every entry under the lock.
+        let entries = self.entries(name, capacity)?;
+        if expected.is_some_and(|expected| entries != expected) {
+            return Err(
+                "These saved answers changed. Review the refreshed list before deleting all."
+                    .into(),
+            );
+        }
+        self.write(name, &Vec::<Entry>::new())
+    }
     fn lock(&self) -> Result<File, String> {
         let mut options = OpenOptions::new();
         options.create(true).read(true).write(true).truncate(false);
@@ -537,6 +562,172 @@ mod tests {
         )
         .unwrap();
         assert!(repo.save_settings(&Settings::default()).is_err());
+    }
+    #[test]
+    fn remove_all_reopens_empty_and_preserves_the_other_store_and_settings() {
+        for bookmark in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let repo = Repository::new(directory.path().into()).unwrap();
+            repo.save_settings(&Settings {
+                history_enabled: true,
+                ..Settings::default()
+            })
+            .unwrap();
+            repo.append(bookmark, entry(1)).unwrap();
+            repo.append(bookmark, entry(2)).unwrap();
+            repo.append(!bookmark, entry(3)).unwrap();
+            drop(repo);
+            let target = directory.path().join(if bookmark {
+                "bookmarks.json"
+            } else {
+                "history.json"
+            });
+            let other = directory.path().join(if bookmark {
+                "history.json"
+            } else {
+                "bookmarks.json"
+            });
+            let settings = directory.path().join("settings.json");
+            let retained_other = fs::read(&other).unwrap();
+            let retained_settings = fs::read(&settings).unwrap();
+            let reopened = Repository::new(directory.path().into()).unwrap();
+            reopened.remove_all(bookmark).unwrap();
+            drop(reopened);
+            let reopened = Repository::new(directory.path().into()).unwrap();
+            let (cleared, retained) = if bookmark {
+                (reopened.bookmarks().unwrap(), reopened.history().unwrap())
+            } else {
+                (reopened.history().unwrap(), reopened.bookmarks().unwrap())
+            };
+            assert!(cleared.is_empty());
+            assert_eq!(retained, vec![entry(3)]);
+            assert_eq!(fs::read(&other).unwrap(), retained_other);
+            assert_eq!(fs::read(&settings).unwrap(), retained_settings);
+            let empty_archive = fs::read(&target).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&empty_archive).unwrap(),
+                serde_json::json!({"version":1,"data":[]})
+            );
+            reopened.remove_all(bookmark).unwrap();
+            assert_eq!(fs::read(&target).unwrap(), empty_archive);
+        }
+    }
+    #[test]
+    fn remove_all_never_resets_malformed_newer_invalid_or_overcapacity_archives() {
+        for bookmark in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let repo = Repository::new(directory.path().into()).unwrap();
+            repo.save_settings(&Settings::default()).unwrap();
+            repo.append(!bookmark, entry(7)).unwrap();
+            let target = directory.path().join(if bookmark {
+                "bookmarks.json"
+            } else {
+                "history.json"
+            });
+            let other = directory.path().join(if bookmark {
+                "history.json"
+            } else {
+                "bookmarks.json"
+            });
+            let retained_other = fs::read(&other).unwrap();
+            let settings = directory.path().join("settings.json");
+            let retained_settings = fs::read(&settings).unwrap();
+            let mut invalid_entry = entry(1);
+            invalid_entry.passage = "x".repeat(12_001);
+            let capacity = if bookmark { 200 } else { 1000 };
+            let protected = [
+                b"damaged archive".to_vec(),
+                br#"{"version":1,"data":{}}"#.to_vec(),
+                serde_json::to_vec(&Archive {
+                    version: 2,
+                    data: vec![entry(1)],
+                })
+                .unwrap(),
+                serde_json::to_vec(&Archive {
+                    version: 1,
+                    data: vec![invalid_entry],
+                })
+                .unwrap(),
+                serde_json::to_vec(&Archive {
+                    version: 1,
+                    data: (0..=capacity).map(entry).collect::<Vec<_>>(),
+                })
+                .unwrap(),
+            ];
+            for bytes in protected {
+                fs::write(&target, &bytes).unwrap();
+                assert!(repo.remove_all(bookmark).is_err());
+                assert_eq!(fs::read(&target).unwrap(), bytes);
+                assert_eq!(fs::read(&other).unwrap(), retained_other);
+                assert_eq!(fs::read(&settings).unwrap(), retained_settings);
+                let reopened = Repository::new(directory.path().into()).unwrap();
+                assert!(if bookmark {
+                    reopened.bookmarks().is_err()
+                } else {
+                    reopened.history().is_err()
+                });
+            }
+        }
+    }
+    #[test]
+    fn remove_all_confirmation_refuses_new_or_changed_entries_until_reviewed_again() {
+        for bookmark in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let repo = Repository::new(directory.path().into()).unwrap();
+            repo.append(bookmark, entry(1)).unwrap();
+            repo.append(bookmark, entry(2)).unwrap();
+            let read = || {
+                if bookmark {
+                    repo.bookmarks().unwrap()
+                } else {
+                    repo.history().unwrap()
+                }
+            };
+            let expected = read();
+            let target = directory.path().join(if bookmark {
+                "bookmarks.json"
+            } else {
+                "history.json"
+            });
+            // A second repository records an unseen answer after confirmation
+            // opens. The stale snapshot must not delete that new record.
+            Repository::new(directory.path().into())
+                .unwrap()
+                .append(bookmark, entry(3))
+                .unwrap();
+            let with_new_record = fs::read(&target).unwrap();
+            assert!(repo.remove_all_if_matches(bookmark, &expected).is_err());
+            assert_eq!(fs::read(&target).unwrap(), with_new_record);
+            assert_eq!(read().len(), 3);
+
+            // Equality must cover the whole entry, beyond duplicate detection's
+            // passage/question/answer/action fields and the number of records.
+            let mut changed = expected.clone();
+            changed[0].quality = Some("A revised stored quality label".into());
+            fs::write(
+                &target,
+                serde_json::to_vec(&Archive {
+                    version: 1,
+                    data: &changed,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let changed_bytes = fs::read(&target).unwrap();
+            assert!(repo.remove_all_if_matches(bookmark, &expected).is_err());
+            assert_eq!(fs::read(&target).unwrap(), changed_bytes);
+            let reviewed_again = read();
+            assert_eq!(reviewed_again, changed);
+            repo.remove_all_if_matches(bookmark, &reviewed_again)
+                .unwrap();
+            drop(repo);
+            let reopened = Repository::new(directory.path().into()).unwrap();
+            assert!(if bookmark {
+                reopened.bookmarks().unwrap().is_empty()
+            } else {
+                reopened.history().unwrap().is_empty()
+            });
+        }
     }
     #[test]
     fn two_writers_reread_under_an_exclusive_lock() {
