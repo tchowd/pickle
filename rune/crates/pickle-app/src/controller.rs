@@ -11,6 +11,14 @@ use std::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "reading_worker.rs"]
+mod reading_worker;
+use reading_worker::{ReadingAttempt, ReadingUpdate, UpdateSink, run_prepared};
+
+#[cfg(test)]
+#[path = "reading_worker_tests.rs"]
+mod reading_worker_tests;
+
 #[cfg(test)]
 #[path = "context_lifecycle_tests.rs"]
 mod context_lifecycle_tests;
@@ -835,6 +843,36 @@ impl AppState {
             }
             return;
         };
+        let settings = self.settings.clone();
+        let demo = self.demo;
+        let record = settings.history_enabled && !demo;
+        let (attempt, cancel) = self.enter_running(input, pending, record);
+        let id = attempt.id;
+        let sink: UpdateSink = Arc::new(move |update| {
+            handle.update(move |state, _| {
+                state.apply_reading_update(update);
+            });
+        });
+        services.runtime.spawn(async move {
+            let prepared = make_pipeline(&settings, demo).await;
+            let pipeline = match prepared {
+                Ok(pipeline) => pipeline,
+                Err(message) => {
+                    sink(ReadingUpdate::PreparationFailed { id, message });
+                    return;
+                }
+            };
+            run_prepared(pipeline, attempt, cancel, sink).await;
+        });
+    }
+    /// Admission after validation/consent; start_reading already invalidated the
+    /// prior attempt. This does not prepare providers or access native services.
+    fn enter_running(
+        &mut self,
+        input: RequestInput,
+        pending: Pending,
+        record_at_start: bool,
+    ) -> (ReadingAttempt, CancellationToken) {
         let id = self.revision;
         let cancel = CancellationToken::new();
         self.activity = Activity::Running {
@@ -842,47 +880,75 @@ impl AppState {
             cancel: cancel.clone(),
             progress: "Preparing…".into(),
         };
-        services.busy.store(true, Ordering::Release);
-        let settings = self.settings.clone();
-        let demo = self.demo;
-        let record = settings.history_enabled && !demo;
-        let input_for_record = input.clone();
-        services.runtime.spawn(async move {
-            let prepared = make_pipeline(&settings, demo).await;
-            let pipeline = match prepared { Ok(p) => p, Err(error) => { handle.update(move |s, _| if s.is_current(id) { if let Some(services) = &s.services { services.busy.store(false, Ordering::Release); } s.activity = Activity::Failed(error); }); return; } };
-            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let mut latest_draft = None; let mut tick = tokio::time::interval(std::time::Duration::from_millis(80));
-            let work = pipeline.run(input, sender, cancel.clone()); tokio::pin!(work);
-            let outcome = loop {
-                tokio::select! {
-                    _ = cancel.cancelled() => return,
-                    event = receiver.recv() => match event {
-                        Some(PipelineEvent::Draft(draft)) => latest_draft = Some(draft),
-                        Some(PipelineEvent::Progress(progress)) => { let h = handle.clone(); h.update(move |s, _| if let Activity::Running { id: current, progress: label, .. } = &mut s.activity && *current == id { *label = progress; }); },
-                        None => {},
-                    },
-                    _ = tick.tick() => if let Some(draft) = latest_draft.take() { handle.update(move |s, _| if s.is_current(id) { s.draft = draft; }); },
-                    outcome = &mut work => break outcome,
+        if let Some(services) = &self.services {
+            services.busy.store(true, Ordering::Release);
+        }
+        (
+            ReadingAttempt {
+                id,
+                input,
+                pending,
+                record_at_start,
+            },
+            cancel,
+        )
+    }
+    fn apply_reading_update(&mut self, update: ReadingUpdate) -> bool {
+        // Progress previously checked only Running.id. Requiring the revision
+        // as well intentionally rejects inconsistent stale state; normal
+        // cancel/start transitions already keep both identities in agreement.
+        if !self.is_current(update.id()) {
+            return false;
+        }
+        match update {
+            ReadingUpdate::Progress { message, .. } => {
+                if let Activity::Running { progress, .. } = &mut self.activity {
+                    *progress = message;
                 }
-            };
-            handle.update(move |s, _| {
-                if !s.is_current(id) { return; }
-                if let Some(services) = &s.services { services.busy.store(false, Ordering::Release); }
-                s.draft.clear();
+            }
+            ReadingUpdate::Draft { text, .. } => self.draft = text,
+            ReadingUpdate::PreparationFailed { message, .. } => {
+                if let Some(services) = &self.services {
+                    services.busy.store(false, Ordering::Release);
+                }
+                self.activity = Activity::Failed(message);
+            }
+            ReadingUpdate::Finished(finished) => {
+                let reading_worker::FinishedReading { attempt, outcome } = *finished;
+                if let Some(services) = &self.services {
+                    services.busy.store(false, Ordering::Release);
+                }
+                self.draft.clear();
                 match outcome {
                     Ok(PipelineOutcome::Result(result)) => {
-                        if let Some(entry) = s.history_entry(id, &input_for_record, &result, &pending, record) {
-                            s.record_history_entry(entry);
+                        if let Some(entry) = self.history_entry(
+                            attempt.id,
+                            &attempt.input,
+                            &result,
+                            &attempt.pending,
+                            attempt.record_at_start,
+                        ) {
+                            self.record_history_entry(entry);
                         }
-                        s.complete_reading_result_with_reference(id, &pending, result, reference_pointer(input_for_record.reference.as_ref()));
+                        self.complete_reading_result_with_reference(
+                            attempt.id,
+                            &attempt.pending,
+                            result,
+                            reference_pointer(attempt.input.reference.as_ref()),
+                        );
                     }
-                    Ok(PipelineOutcome::NeedsContext(flags)) => s.activity = Activity::NeedsContext(pending, flags),
-                    Ok(PipelineOutcome::ChooseChart) => s.activity = Activity::ChooseChart(pending),
-                    Err(PickleError::Cancelled) => s.activity = Activity::Idle,
-                    Err(error) => s.activity = Activity::Failed(error.to_string()),
+                    Ok(PipelineOutcome::NeedsContext(flags)) => {
+                        self.activity = Activity::NeedsContext(attempt.pending, flags)
+                    }
+                    Ok(PipelineOutcome::ChooseChart) => {
+                        self.activity = Activity::ChooseChart(attempt.pending)
+                    }
+                    Err(PickleError::Cancelled) => self.activity = Activity::Idle,
+                    Err(error) => self.activity = Activity::Failed(error.to_string()),
                 }
-            });
-        });
+            }
+        }
+        true
     }
     fn is_current(&self, id: u64) -> bool {
         self.revision == id
