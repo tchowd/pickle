@@ -120,6 +120,16 @@ fn input(
     edit: fn(&mut AppState) -> &mut TextEdit,
     secure: bool,
 ) -> El {
+    input_with_submit(key, label, value, edit, secure, None)
+}
+fn input_with_submit(
+    key: &str,
+    label: &str,
+    value: &TextEdit,
+    edit: fn(&mut AppState) -> &mut TextEdit,
+    secure: bool,
+    submit: Option<fn(&mut AppState, &mut Tx)>,
+) -> El {
     let field = text_input(value, TextStyle::new(14.0, 400.0).lh(22.0))
         .key(key)
         .label(label)
@@ -127,6 +137,11 @@ fn input(
         .w_full()
         .color(INK)
         .on_edit(edit);
+    let field = if let Some(submit) = submit {
+        field.on_submit(submit)
+    } else {
+        field
+    };
     let field = if secure { field.secure() } else { field };
     col().w_full().gap(6.0).child(note(label)).child(
         el().w_full()
@@ -138,6 +153,15 @@ fn input(
             .border(1.0, HAIR)
             .child(field),
     )
+}
+fn submit_follow_up(s: &mut AppState, tx: &mut Tx) {
+    if matches!(
+        s.activity,
+        Activity::Running { .. } | Activity::WaitingContext
+    ) {
+        return;
+    }
+    s.follow_up(s.question.text.clone(), None, tx);
 }
 fn toggle(
     s: &AppState,
@@ -384,6 +408,8 @@ fn reader(s: &AppState) -> El {
                         .child(el().h(1.0).w_full().fill(HAIR))
                         .child(
                             text(turn.label.as_ref().unwrap_or(&turn.question))
+                                .wrap_anywhere()
+                                .shrink()
                                 .font(TextStyle::new(15.0, 600.0))
                                 .color(GREEN),
                         )
@@ -417,8 +443,8 @@ fn reader(s: &AppState) -> El {
                 .child(action(s, "shorter", "Shorter", false, |s, tx| s.follow_up("Make the explanation shorter without losing qualifications, uncertainty, or important details.".into(), Some("Shorter".into()), tx)))
                 .child(action(s, "more-detail", "More detail", false, |s, tx| s.follow_up("Explain this in more detail, distinguishing source facts from general background.".into(), Some("More detail".into()), tx)))
                 .child(action(s, "example", "Give an example", false, |s, tx| s.follow_up("Give a clearly labeled hypothetical example that illustrates this passage without inventing source-specific facts.".into(), Some("Give an example".into()), tx))));
-            content = content.child(input("follow-up", "Ask about this passage", &s.question, |s| &mut s.question, false))
-                .child(row().gap(8.0).child(action(s, "send-follow-up", "Ask", true, |s, tx| s.follow_up(s.question.text.clone(), None, tx)))
+            content = content.child(input_with_submit("follow-up", "Ask about this passage", &s.question, |s| &mut s.question, false, Some(submit_follow_up)))
+                .child(row().gap(8.0).child(action(s, "send-follow-up", "Ask", true, submit_follow_up))
                     .child(action(s, "explain-selection", "Explain selected words", false, |s, tx| {
                         if let Some(selection) = tx.text_selection() { let term = selection.text().to_owned(); s.follow_up(format!("Explain this term in the context of the passage: {term}"), Some(format!("Explain “{term}”")), tx); }
                         else { s.notice = Some("Select a word in the passage or answer, then choose Explain selected words.".into()); }
@@ -1267,5 +1293,235 @@ mod layout_regressions {
             .unwrap();
         assert!(item.rect[2] <= 410.0 && item.rect[0] + item.rect[2] <= 460.0);
         assert!(item.rect[3] > 42.0);
+    }
+}
+
+#[cfg(test)]
+mod follow_up_regressions {
+    use super::*;
+    use rune::{Env, Key, KeyEvent, Mods, Runtime};
+
+    fn reader() -> Runtime<AppState> {
+        let mut state = AppState::default();
+        state.sample_result();
+        state.demo = false;
+        let mut runtime = Runtime::new(state, view, (560.0, 1100.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime
+    }
+
+    fn click(runtime: &mut Runtime<AppState>, key: &str) {
+        for _ in 0..60 {
+            runtime.frame(1.0 / 60.0);
+        }
+        let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("Missing {key}"));
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+    }
+
+    fn enter(runtime: &mut Runtime<AppState>) {
+        runtime.key(KeyEvent {
+            key: Key::Enter,
+            mods: Mods::default(),
+        });
+        runtime.frame(0.0);
+    }
+
+    #[test]
+    fn long_follow_up_questions_and_labels_fit_the_minimum_reader_width() {
+        for (question, label) in [
+            ("What uncertainty remains? ".repeat(75), None),
+            ("q".repeat(pickle_core::limits::QUESTION), None),
+            ("Explain the selected term.".into(), Some("x".repeat(2000))),
+        ] {
+            assert!(question.len() <= pickle_core::limits::QUESTION);
+            let shown = label.as_ref().unwrap_or(&question).clone();
+            let mut state = AppState::default();
+            state.sample_result();
+            state.conversation.push(pickle_core::ConversationTurn {
+                question,
+                label,
+                answer: "A fixed, bounded answer.".into(),
+                quality: pickle_core::QualityStatus::NotChecked("Fixture".into()),
+            });
+            let mut runtime = Runtime::new(state, view, (480.0, 720.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            let item = runtime
+                .elements()
+                .into_iter()
+                .find(|element| element.text.as_deref() == Some(&shown))
+                .unwrap();
+            assert!(
+                item.rect[0] >= 20.0 && item.rect[0] + item.rect[2] <= 460.0,
+                "Follow-up text overflowed: {:?}",
+                item.rect
+            );
+            assert!(
+                item.rect[3] > 30.0,
+                "Long follow-up did not wrap: {:?}",
+                item.rect
+            );
+            for key in [
+                "copy-answer",
+                "save-answer",
+                "retry",
+                "shorter",
+                "more-detail",
+                "example",
+                "send-follow-up",
+            ] {
+                let (rect, _) = runtime.presented(key).unwrap();
+                assert!(
+                    rect[0] >= 20.0 && rect[0] + rect[2] <= 460.0,
+                    "{key} overflowed: {rect:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn follow_up_enter_and_ask_preserve_the_reading_and_request_the_same_consent() {
+        let question = "What does the passage leave uncertain?";
+        let mut pending_fields = None;
+        for submit_with_enter in [true, false] {
+            let mut runtime = reader();
+            let snapshot = runtime.state.snapshot.clone();
+            let result = serde_json::to_value(&runtime.state.result).unwrap();
+            click(&mut runtime, "follow-up");
+            runtime.paste(question);
+            if submit_with_enter {
+                enter(&mut runtime);
+            } else {
+                click(&mut runtime, "send-follow-up");
+            }
+            let Activity::Consent(pending) = &runtime.state.activity else {
+                panic!("A valid follow-up must request destination consent");
+            };
+            assert_eq!(pending.action, ReadingAction::FollowUp);
+            assert_eq!(pending.question, question);
+            let fields = (
+                pending.action,
+                pending.question.clone(),
+                pending.label.clone(),
+                pending.chart,
+                pending.limited,
+            );
+            if let Some(expected) = &pending_fields {
+                assert_eq!(&fields, expected);
+            } else {
+                pending_fields = Some(fields);
+            }
+            assert_eq!(runtime.state.snapshot, snapshot);
+            assert_eq!(serde_json::to_value(&runtime.state.result).unwrap(), result);
+            assert_eq!(runtime.state.question.text, question);
+            assert!(runtime.state.conversation.is_empty());
+            assert!(runtime.state.entries.is_empty());
+            assert!(runtime.state.services.is_none());
+            assert!(!runtime.state.native_enabled);
+        }
+    }
+
+    #[test]
+    fn whitespace_follow_up_enter_does_not_start_or_replace_a_reading() {
+        let mut runtime = reader();
+        let snapshot = runtime.state.snapshot.clone();
+        let result = serde_json::to_value(&runtime.state.result).unwrap();
+        let revision = runtime.state.revision;
+        click(&mut runtime, "follow-up");
+        runtime.paste("   ");
+        enter(&mut runtime);
+        assert!(matches!(runtime.state.activity, Activity::Idle));
+        assert!(runtime.state.last.is_none());
+        assert_eq!(runtime.state.revision, revision);
+        assert_eq!(runtime.state.snapshot, snapshot);
+        assert_eq!(serde_json::to_value(&runtime.state.result).unwrap(), result);
+        assert!(runtime.state.services.is_none());
+    }
+
+    #[test]
+    fn settings_enter_does_not_submit_an_existing_follow_up_question() {
+        let mut runtime = reader();
+        let snapshot = runtime.state.snapshot.clone();
+        runtime.update(|state, _| {
+            state.question = TextEdit::new("This question must stay unsent.");
+            state.route = Route::Settings;
+            state.local_model = TextEdit::new("");
+        });
+        click(&mut runtime, "local-model");
+        runtime.paste("fixture-model");
+        enter(&mut runtime);
+        assert_eq!(runtime.state.local_model.text, "fixture-model");
+        assert_eq!(
+            runtime.state.question.text,
+            "This question must stay unsent."
+        );
+        assert_eq!(runtime.state.route, Route::Settings);
+        assert!(matches!(runtime.state.activity, Activity::Idle));
+        assert!(runtime.state.last.is_none());
+        assert_eq!(runtime.state.snapshot, snapshot);
+        assert!(runtime.state.services.is_none());
+    }
+
+    #[test]
+    fn follow_up_enter_keeps_the_controller_pause_and_pending_settings_gates() {
+        for paused in [true, false] {
+            let mut runtime = reader();
+            runtime.update(|state, _| {
+                state.paused = paused;
+                state.settings_pending = !paused;
+            });
+            click(&mut runtime, "follow-up");
+            runtime.paste("What does this mean?");
+            enter(&mut runtime);
+            if paused {
+                assert!(
+                    matches!(&runtime.state.activity, Activity::Failed(error) if error.contains("paused"))
+                );
+            } else {
+                assert!(matches!(runtime.state.activity, Activity::Idle));
+                assert!(runtime.state.last.is_none());
+                assert!(
+                    runtime
+                        .state
+                        .notice
+                        .as_deref()
+                        .unwrap()
+                        .contains("finish saving")
+                );
+            }
+            assert!(runtime.state.services.is_none());
+            assert_eq!(
+                runtime.state.snapshot.as_ref().unwrap().text,
+                crate::controller::SAMPLE
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_follow_up_submit_cannot_cancel_a_busy_request() {
+        let mut runtime = reader();
+        runtime.update(|state, _| state.question = TextEdit::new("An unsent question."));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        runtime.update(|state, tx| {
+            state.activity = Activity::Running {
+                id: state.revision,
+                cancel: cancel.clone(),
+                progress: "Writing".into(),
+            };
+            // Exercise the shared callback even if a native submit was already
+            // queued when the reader removed the field and Ask button.
+            submit_follow_up(state, tx);
+        });
+        assert!(!cancel.is_cancelled());
+        assert!(matches!(runtime.state.activity, Activity::Running { .. }));
+        assert!(runtime.state.last.is_none());
+        runtime.update(|state, tx| {
+            state.activity = Activity::WaitingContext;
+            submit_follow_up(state, tx);
+        });
+        assert!(matches!(runtime.state.activity, Activity::WaitingContext));
+        assert!(runtime.state.last.is_none());
+        assert!(runtime.state.services.is_none());
     }
 }

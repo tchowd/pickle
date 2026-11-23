@@ -210,10 +210,9 @@ The user declined setting up a Windows machine or VM for interactive testing. No
 
 ## 9. Next sequence
 
-1. Finish full local checks and obtain both native CI results; preserve package artifacts and logs against the exact commit.
-2. Execute the updated installer/host lifecycle tests and independent helper/extraction CI steps; review failures against actual installed behavior.
-3. Run the two-platform native feasibility matrix with permissions explicitly granted or denied by the tester. Record failures rather than replacing device evidence with capability flags.
-4. Validate the integrated reading/appearance/window/invocation preferences on native devices, and explicitly document any release-scope differences before claiming full migration parity.
-5. Validate real configured AI, vision, OCR/browser/audio workflows and persistence/migration with controlled fixtures and supported models.
-6. Provision release signing and owned update hosting; run clean-machine install/update/rollback/uninstall and accessibility/performance acceptance.
-7. Reconcile this snapshot with recorded evidence and the plan's release checklist. Only then decide that the declared macOS and Windows release is ready to publish.
+1. Complete the current native keyboard QA batch. The installed `ac5688f` demonstration accepted and completed a follow-up through Ask, but Return did nothing. An input-level submit handler and long-question wrapping fix now pass six focused Runtime regressions; updated native execution and CI remain to be recorded. The shared browser-extension copy/setup guide has also been corrected for Rune on both platforms, retaining separate original Swift/Python instructions.
+2. Preserve passing checks and exact artifact provenance for every candidate. Full CI at `ac5688f`, including the isolated Windows finalizer protocol, is already recorded; green development CI is not a production publication decision.
+3. Record the intended Apple publisher/notarization profile, Windows publisher/package identity and owned update key/feed/artifact host. These owner inputs have not been selected; an identity existing on a machine is not authorization to use it for this product.
+4. Close the remaining controlled native reading/context, browser/audio, persistence/migration, keyboard/screen-reader and display acceptance cases on their advertised systems. The declined Windows machine/VM remains unprovisioned; its client matrix stays open until evidence or an explicit release-scope decision exists.
+5. Use the release helpers in controlled signing environments, then test the exact finalized bytes on clean supported machines for install/upgrade/rollback/uninstall, privacy, accessibility and performance. Preserve failures and known issues against the full plan.
+6. Obtain the release owner's approval of the declared support scope and publication artifacts, configure protected publishing/expiry monitoring, and publish only after the plan's acceptance gates are satisfied. No public release or owned production feed has been established.

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Pickle — page and video context",
   "version": "0.1.0",
-  "description": "Send this page or available video captions to Pickle on your Mac.",
+  "description": "Send this page or available video captions to Pickle.",
   "permissions": ["activeTab", "scripting", "nativeMessaging"],
   "action": {"default_popup": "popup.html"},
   "background": {"service_worker": "background.js"},
