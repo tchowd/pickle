@@ -127,7 +127,14 @@ fn fixture_parent() {
         .parse()
         .unwrap();
     assert_eq!(child.id().unwrap(), child_pid);
+    assert!(child.status_snapshot().unwrap().is_none());
+    assert!(child.job.is_some());
     assert!(child.contains_pid(child_pid).unwrap());
+    assert_eq!(
+        std::fs::canonicalize(child.member_executable(child_pid).unwrap()).unwrap(),
+        std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap()
+    );
+    assert!(child.member_executable(std::process::id()).is_err());
     assert!(child.contains_pid(grandchild_pid).unwrap());
     assert!(!child.contains_pid(std::process::id()).unwrap());
     let members = child.job_pids().unwrap();
@@ -314,9 +321,21 @@ fn natural_exit_retains_job_until_empty_and_reports_zero_without_terminating_chi
             assert!(total < 128 * 1024, "Owned test listing exceeded its bound");
         }
     });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.status_snapshot().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "Owned listing did not exit");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert_eq!(status.code(), Some(0));
+    assert!(child.job.is_some(), "A status snapshot must retain the job");
+    assert_eq!(child.status_snapshot().unwrap().unwrap().code(), Some(0));
+    assert!(child.job.is_some());
     assert!(
         child
-            .wait_for_exit(Duration::from_secs(5))
+            .wait_for_exit(deadline.saturating_duration_since(Instant::now()))
             .unwrap()
             .success()
     );

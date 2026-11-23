@@ -2,6 +2,7 @@
 // Framework C#5 references: System, System.Core, System.Drawing,
 // System.Windows.Forms, WindowsBase, UIAutomationClient/Types/Provider.
 using System;
+#if !PICKLE_PREDICATES
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -12,6 +13,22 @@ using System.Windows.Automation;
 using System.Windows.Automation.Provider;
 using System.Windows.Forms;
 using WpfRect = System.Windows.Rect;
+#endif
+
+// Fixed scalar diagnostics only. Saturation makes callback bursts bounded;
+// neither this wire frame nor its consumers contain provider strings.
+public static class DocumentFixtureDiagnosticCounts {
+    public static uint Pack(int first,int second,int third,int fourth) {
+        Func<int,uint> count=value=>(uint)Math.Max(0,Math.Min(255,value));
+        return count(first)|(count(second)<<8)|(count(third)<<16)|(count(fourth)<<24);
+    }
+    public static void SelfTest() {
+        if(Pack(1,2,3,4)!=0x04030201U || Pack(-1,256,Int32.MaxValue,0)!=0x00ffff00U)
+            throw new Exception("bounded-provider-diagnostic-counts");
+    }
+}
+
+#if !PICKLE_PREDICATES
 
 [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
 public struct FixturePropertyInfo {
@@ -35,9 +52,13 @@ public sealed class DocumentFixtureForm : Form {
     public Node MainDocument, FocusedNode;
     public int DocumentReads, NestedReads, EditReads, LinkReads, ForeignChildNavigations,
         UnanchoredForeignChildNavigations, RootChildNavigations;
+    public int ObjectRequests, FocusRequests, FocusReturns, SetFocusRequests, FocusPropertyRequests, NativeFocusRequests;
+    public bool ShownPublished;
     private int nextId = 100;
     [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr window);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern IntPtr GetFocus();
 
     public DocumentFixtureForm(string mode, string entered) {
         Mode=mode; Entered=entered;
@@ -130,6 +151,7 @@ public sealed class DocumentFixtureForm : Form {
         return node.Url;
     }
     public void FocusOwned() {
+        Interlocked.Increment(ref NativeFocusRequests);
         FocusedNode=Mode=="password" && Root.Children.Count>0 ? Root.Children[0] : Root;
         SetForegroundWindow(Handle);
         SetFocus(Handle);
@@ -141,6 +163,10 @@ public sealed class DocumentFixtureForm : Form {
     public void RecordRootChildNavigation() {
         Interlocked.Increment(ref RootChildNavigations);
     }
+    public void RecordFocusRequest() { Interlocked.Increment(ref FocusRequests); }
+    public void RecordFocusReturn() { Interlocked.Increment(ref FocusReturns); }
+    public void RecordSetFocusRequest() { Interlocked.Increment(ref SetFocusRequests); }
+    public void RecordFocusPropertyRequest() { Interlocked.Increment(ref FocusPropertyRequests); }
     private void InstallNativeAnchor() {
         string metadata=File.ReadAllText(Entered+".native-anchor");
         if (metadata.Length>128) throw new InvalidOperationException("anchor-metadata-size");
@@ -181,6 +207,7 @@ public sealed class DocumentFixtureForm : Form {
     }
     protected override void WndProc(ref Message message) {
         if (message.Msg==0x003D && message.LParam.ToInt64()==AutomationInteropProvider.RootObjectId) {
+            Interlocked.Increment(ref ObjectRequests);
             message.Result=AutomationInteropProvider.ReturnRawElementProvider(
                 Handle,message.WParam,message.LParam,Root);
             return;
@@ -212,6 +239,17 @@ public sealed class DocumentFixtureForm : Form {
             }
             if (command==8) {
                 message.Result=new IntPtr(RootChildNavigations);
+                return;
+            }
+            if (command==9) {
+                message.Result=new IntPtr((long)DocumentFixtureDiagnosticCounts.Pack(
+                    ObjectRequests,FocusRequests,FocusReturns,SetFocusRequests));
+                return;
+            }
+            if (command==10) {
+                uint flags=(ShownPublished ? 1U : 0U)|(GetForegroundWindow()==Handle ? 2U : 0U)|
+                    (GetFocus()==Handle ? 4U : 0U)|(FocusedNode!=null ? 8U : 0U);
+                message.Result=new IntPtr((long)(DocumentFixtureDiagnosticCounts.Pack(NativeFocusRequests,FocusPropertyRequests,0,0)|(flags<<16)));
                 return;
             }
             message.Result=new IntPtr(1);
@@ -265,7 +303,7 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
         if (propertyId==AutomationElementIdentifiers.IsPasswordProperty.Id)
             return Owner.Mode=="password" && Object.ReferenceEquals(Owner.FocusedNode,this);
         if (propertyId==AutomationElementIdentifiers.HasKeyboardFocusProperty.Id)
-            return Object.ReferenceEquals(Owner.FocusedNode,this);
+        { Owner.RecordFocusPropertyRequest(); return Object.ReferenceEquals(Owner.FocusedNode,this); }
         return null;
     }
     public IRawElementProviderFragment Navigate(NavigateDirection direction) {
@@ -288,7 +326,7 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
     public virtual int[] GetRuntimeId() { return new[]{AutomationInteropProvider.AppendRuntimeId,Owner.Pid,Id}; }
     public WpfRect BoundingRectangle { get { return new WpfRect(120,140,450,100); } }
     public IRawElementProviderSimple[] GetEmbeddedFragmentRoots() { return null; }
-    public void SetFocus() { Owner.FocusedNode=this; }
+    public void SetFocus() { Owner.RecordSetFocusRequest(); Owner.FocusedNode=this; }
     public IRawElementProviderFragmentRoot FragmentRoot { get { return Owner.Root; } }
     public bool IsReadOnly { get { return true; } }
     public string Value { get { return Owner.ReadValue(this); } }
@@ -303,7 +341,12 @@ public sealed class RootNode : Node, IRawElementProviderFragmentRoot {
     }
     public override int[] GetRuntimeId() { return null; }
     public IRawElementProviderFragment ElementProviderFromPoint(double x,double y) { return Owner.FocusedNode; }
-    public IRawElementProviderFragment GetFocus() { return Owner.FocusedNode; }
+    public IRawElementProviderFragment GetFocus() {
+        Owner.RecordFocusRequest();
+        var focused=Owner.FocusedNode;
+        Owner.RecordFocusReturn();
+        return focused;
+    }
 }
 
 public static class BrowserDocumentFixture {
@@ -319,6 +362,7 @@ public static class BrowserDocumentFixture {
                 watchdog.Tick+=(sender,eventArgs)=>form.Close();
                 form.Shown+=(sender,eventArgs)=> {
                     form.FocusOwned(); watchdog.Start();
+                    form.ShownPublished=true;
                     int pid=form.Pid;
                     string json="{\"pid\":"+pid.ToString(CultureInfo.InvariantCulture)+
                         ",\"hwnd\":"+unchecked((ulong)form.Handle.ToInt64()).ToString(CultureInfo.InvariantCulture)+"}";
@@ -331,3 +375,4 @@ public static class BrowserDocumentFixture {
         } catch { return 3; }
     }
 }
+#endif

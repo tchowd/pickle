@@ -212,6 +212,52 @@ impl Child {
             _ => Err(io::Error::other("Could not inspect owned fixture process")),
         }
     }
+    /// Inspect the original retained process without reaping it or closing its
+    /// job. Test diagnostics must not change launcher/descendant ownership.
+    #[cfg(test)]
+    pub(crate) fn status_snapshot(&self) -> io::Result<Option<ExitStatus>> {
+        if self.is_running()? {
+            Ok(None)
+        } else {
+            self.status().map(Some)
+        }
+    }
+    /// Classify only a member of this exact held job. The process handle used
+    /// for membership is retained through the executable query, avoiding a
+    /// PID-reuse gap. Callers must not log the returned owned-fixture path.
+    #[cfg(test)]
+    pub(crate) fn member_executable(&self, pid: u32) -> io::Result<std::path::PathBuf> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+            QueryFullProcessImageNameW,
+        };
+        let job = self
+            .job
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Owned fixture job is closed"))?;
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+            .map_err(|error| failure("Inspect fixture member", error))?;
+        let process = unsafe { OwnedHandle::from_raw_handle(process.0) };
+        let mut belongs = BOOL::default();
+        unsafe { IsProcessInJob(raw(&process), Some(raw(job)), &mut belongs) }
+            .map_err(|error| failure("Check fixture member", error))?;
+        if !belongs.as_bool() {
+            return Err(io::Error::other("Process is not an owned fixture member"));
+        }
+        let mut path = vec![0u16; 32768];
+        let mut length = path.len() as u32;
+        unsafe {
+            QueryFullProcessImageNameW(
+                raw(&process),
+                PROCESS_NAME_WIN32,
+                PWSTR(path.as_mut_ptr()),
+                &mut length,
+            )
+        }
+        .map_err(|error| failure("Read fixture member executable", error))?;
+        Ok(std::ffi::OsString::from_wide(&path[..length as usize]).into())
+    }
     #[cfg(test)]
     pub(crate) fn contains_pid(&self, pid: u32) -> io::Result<bool> {
         use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};

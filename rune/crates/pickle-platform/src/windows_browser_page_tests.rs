@@ -112,6 +112,18 @@ impl Trace {
             "raw_ancestry_checks",
             "raw_ancestry_nodes",
             "filtered_discovery",
+            "focus_snapshot_available",
+            "native_snapshot_available",
+            "get_object_requests",
+            "get_focus_entries",
+            "get_focus_returns",
+            "set_focus_requests",
+            "focus_property_requests",
+            "native_focus_requests",
+            "shown_published",
+            "foreground_owned",
+            "native_focus_owned",
+            "internal_focus_present",
         ] {
             if let Some(value) = values
                 .get(key)
@@ -290,6 +302,70 @@ fn command(source: &CapturedSelection, code: usize) -> Result<usize, PlatformErr
     } else {
         Ok(result)
     }
+}
+
+fn focus_snapshot(callbacks: Option<usize>, native: Option<usize>) -> serde_json::Value {
+    let mut values = serde_json::json!({
+        "focus_snapshot_available":callbacks.is_some(),
+        "native_snapshot_available":native.is_some(),
+    });
+    if let Some(bits) = callbacks {
+        for (index, key) in [
+            "get_object_requests",
+            "get_focus_entries",
+            "get_focus_returns",
+            "set_focus_requests",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            values[key] = serde_json::json!((bits >> (index * 8)) & 0xff);
+        }
+    }
+    if let Some(bits) = native {
+        values["native_focus_requests"] = serde_json::json!(bits & 0xff);
+        values["focus_property_requests"] = serde_json::json!((bits >> 8) & 0xff);
+        for (index, key) in [
+            "shown_published",
+            "foreground_owned",
+            "native_focus_owned",
+            "internal_focus_present",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            values[key] = serde_json::json!(bits & (1 << (16 + index)) != 0);
+        }
+    }
+    values
+}
+
+#[test]
+fn synthetic_focus_diagnostics_preserve_unknown_and_saturated_callback_counts() {
+    let present = focus_snapshot(Some(0xff030201), Some(0x000f0504));
+    assert_eq!(present["get_object_requests"], 1);
+    assert_eq!(present["get_focus_entries"], 2);
+    assert_eq!(present["get_focus_returns"], 3);
+    assert_eq!(present["set_focus_requests"], 255);
+    assert_eq!(present["native_focus_requests"], 4);
+    assert_eq!(present["focus_property_requests"], 5);
+    for key in [
+        "shown_published",
+        "foreground_owned",
+        "native_focus_owned",
+        "internal_focus_present",
+    ] {
+        assert_eq!(present[key], true);
+    }
+    let unavailable = focus_snapshot(None, None);
+    assert_eq!(
+        unavailable,
+        serde_json::json!({"focus_snapshot_available":false,"native_snapshot_available":false})
+    );
+    let not_focused = focus_snapshot(Some(0), Some(0x00010000));
+    assert_eq!(not_focused["shown_published"], true);
+    assert_eq!(not_focused["foreground_owned"], false);
+    assert_eq!(not_focused["get_focus_entries"], 0);
 }
 
 fn framework_path(path: &Path) -> PathBuf {
@@ -504,8 +580,23 @@ fn owned_native_document_provider() {
         let fixture = Fixture::launch(&executable, directory.path(), mode, case);
         trace.step(trace_mode, "ready");
         case += 1;
+        // Read-only WM_APP frames do not query UIA, URL, or Value and do not
+        // gate/retry the following single production attempt. They distinguish
+        // a pumping native owner from first COM/provider callback readiness.
+        if case == 1 {
+            trace.metadata(
+                "provider-focus-before",
+                focus_snapshot(fixture.command(9).ok(), fixture.command(10).ok()),
+            );
+        }
         trace.step(trace_mode, "observing");
         let result = verify(fixture.source.clone(), phase);
+        if case == 1 {
+            trace.metadata(
+                "provider-focus-after",
+                focus_snapshot(fixture.command(9).ok(), fixture.command(10).ok()),
+            );
+        }
         if result.is_err() {
             trace.step(trace_mode, "adapter-unavailable");
         }

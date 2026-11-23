@@ -594,6 +594,117 @@ fn source(
     }
 }
 
+fn profile_snapshot(profile: &Path) -> serde_json::Value {
+    fn kind(path: &Path, directory: bool) -> Option<bool> {
+        match std::fs::metadata(path) {
+            Ok(metadata) => Some(if directory {
+                metadata.is_dir()
+            } else {
+                metadata.is_file()
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
+            Err(_) => None,
+        }
+    }
+    // Only fixed owned-profile entry metadata, never profile content/names.
+    serde_json::json!({
+        "root_directory":kind(profile,true),
+        "default_directory":kind(&profile.join("Default"),true),
+        "local_state_file":kind(&profile.join("Local State"),false),
+        "first_run_file":kind(&profile.join("First Run"),false),
+    })
+}
+
+fn executable_class(expected: Option<&Path>, observed: Option<&Path>) -> &'static str {
+    match (expected, observed) {
+        (Some(expected), Some(observed)) if expected == observed => "original-executable",
+        (Some(_), Some(_)) => "other-executable",
+        _ => "unavailable",
+    }
+}
+
+fn startup_failure_snapshot(
+    browser: &Browser,
+    executable: &Path,
+    profile: &Path,
+    before: &serde_json::Value,
+) -> serde_json::Value {
+    let child = browser.child();
+    // This accessor uses the original retained process handle and never calls
+    // try_wait, reaps the launcher, or closes the kill-on-close job.
+    let original = child.status_snapshot();
+    let (status_available, running, exit_code) = match &original {
+        Ok(None) => (true, Some(true), None),
+        Ok(Some(status)) => (true, Some(false), status.code()),
+        Err(_) => (false, None, None),
+    };
+    let original_id = child.id().ok();
+    let expected = std::fs::canonicalize(executable).ok();
+    let members = child.job_pids();
+    let mut records = vec![];
+    if let Ok(pids) = &members {
+        for pid in pids.iter().take(16) {
+            // Membership and path query share one retained process handle.
+            // Do not log path, command line, environment, stderr, or memory.
+            let path = child
+                .member_executable(*pid)
+                .ok()
+                .and_then(|path| std::fs::canonicalize(path).ok());
+            records.push(serde_json::json!({"original_process":Some(*pid)==original_id,"executable_class":executable_class(expected.as_deref(),path.as_deref())}));
+        }
+    }
+    serde_json::json!({
+        "stage":"startup-failure-diagnostics",
+        "original_process_status_available":status_available,
+        "original_process_running":running,
+        "original_process_exit_code":exit_code,
+        "original_process_status_os_error":original.as_ref().err().and_then(std::io::Error::raw_os_error),
+        "job_members_available":members.is_ok(),
+        "job_members_total":members.as_ref().ok().map(Vec::len),
+        "job_members_retained":records.len(),
+        "job_members_omitted":members.as_ref().ok().map(|pids|pids.len().saturating_sub(records.len())),
+        "job_members":records,
+        "profile_before":before,
+        "profile_after":profile_snapshot(profile),
+    })
+}
+
+#[test]
+fn startup_diagnostics_classify_only_fixed_paths_and_profile_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let before = profile_snapshot(directory.path());
+    assert_eq!(
+        before,
+        serde_json::json!({"root_directory":true,"default_directory":false,"local_state_file":false,"first_run_file":false})
+    );
+    std::fs::create_dir(directory.path().join("Default")).unwrap();
+    std::fs::write(
+        directory.path().join("Local State"),
+        "PRIVATE_PROFILE_CONTENT",
+    )
+    .unwrap();
+    let after = profile_snapshot(directory.path());
+    assert_eq!(after["default_directory"], true);
+    assert_eq!(after["local_state_file"], true);
+    assert!(!serde_json::to_string(&after).unwrap().contains("PRIVATE_"));
+    assert_eq!(
+        executable_class(Some(Path::new("same")), Some(Path::new("same"))),
+        "original-executable"
+    );
+    assert_eq!(
+        executable_class(Some(Path::new("same")), Some(Path::new("other"))),
+        "other-executable"
+    );
+    assert_eq!(
+        executable_class(Some(Path::new("same")), None),
+        "unavailable"
+    );
+    assert_eq!(
+        executable_class(None, Some(Path::new("same"))),
+        "unavailable"
+    );
+}
+
 fn resolved_source(browser: &'static str, owned: &CapturedSelection) -> CapturedSelection {
     let expected = if browser == "chrome" {
         "windows-browser:chrome"
@@ -725,6 +836,7 @@ fn installed_chrome_and_edge_document_urls() {
     for (name, executable, version) in browsers {
         let profile = directory.path().join(format!("owned-{name}-profile"));
         std::fs::create_dir(&profile).unwrap();
+        let initial_profile = profile_snapshot(&profile);
         let expected = server.url(name);
         let pages_before = server.pages.load(Ordering::Acquire);
         log.step(name, "launching");
@@ -763,6 +875,14 @@ fn installed_chrome_and_edge_document_urls() {
             std::thread::sleep(Duration::from_millis(100));
         }
         log.write(serde_json::json!({"browser":name,"stage":"startup-result","elapsed_ms":startup.elapsed().as_millis(),"polls":polls,"owned_window_found":selected.is_some(),"owned_profile_directory_observed":profile.join("Default").is_dir(),"page_requests":server.pages.load(Ordering::Acquire)-pages_before,"owned_job_members":last_counts.job_members,"visible_owned_windows":last_counts.visible_owned,"exact_executable_windows":last_counts.exact_executable}));
+        if selected.is_none() {
+            log.write(startup_failure_snapshot(
+                &browser,
+                &executable,
+                &profile,
+                &initial_profile,
+            ));
+        }
         let source = selected.expect(
             "Owned installed browser did not expose one owned visible window and load its page",
         );
