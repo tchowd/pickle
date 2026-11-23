@@ -2,6 +2,38 @@
 
 These are bounded development observations, not release approval. Keep successful execution, unavailable evidence, and failed checks distinct. The full compatibility matrix in the [plan](RUNE-CROSS-PLATFORM-PLAN.md) remains the release contract.
 
+## Current verified development checkpoint — 23 November 2026
+
+Product/test source **`a4b4b93f0079ebfe3f09584c7447e306d428b49d`** passed **all four jobs** in [run 45197132045, attempt 2](https://github.com/tchowd/pickle/actions/runs/45197132045). Workspace suites passed **413 Mac / 425 Windows tests, with three ignored each**. App suites passed 251/248, core 59, platform 42/57, providers 53/51, browser host 1 and benchmark example 7; Windows also executed its two browser-target integration cases. Formatting, locked checking, strict Clippy, standalone tooling, deterministic rendering and both development/optimized packages passed.
+
+All **15 Windows native reports** were downloaded and verified: twelve installed reading/startup/recovery/window reports, the owned target report, the controlled UIA/provider report and the actual installed-browser report. The final [Windows development artifact](https://github.com/tchowd/pickle/actions/runs/45197132045/artifacts/14830344802) is distinct from the earlier failed attempt's small artifact with the same name. [Optimized Windows](https://github.com/tchowd/pickle/actions/runs/45197132045/artifacts/14831320421), [Mac development](https://github.com/tchowd/pickle/actions/runs/45197132045/artifacts/14828707814) and [optimized Mac](https://github.com/tchowd/pickle/actions/runs/45197132045/artifacts/14830461326) artifacts belong to this exact source.
+
+### Actual installed browsers: target and document components
+
+On image `win25-vs2026`, version `20261116.315.1`, Chrome **157.0.8103.79** passed its second reading attempt in **174 ms**; Edge **157.0.4341.60** passed its first in **252 ms**. Each accepted reading performed exactly three successful matching URL observations, with two independent raw-ancestry checks per observation. Discovery retained **10/12** nodes; raw paths contained **8/11** nodes. Both explicit fragment mismatches yielded successful native URL observations but zero capture admissions. The production target resolver was bound to actual owned PID/HWND/executable relationships. Process jobs, bounded pipes, local proxy/server and temporary profiles were cleaned before the success report.
+
+Chrome's first native observation disagreed with the expected URL and correctly admitted **zero** captures after **276 ms**. The actual differing URL was not logged. No production URL-mismatch retry was introduced; this remains a text-fallback observation, not first-invocation reliability proof. Both browsers' accepted documents had the source PID and **zero candidate-path anchors**: discovery also validated an embedded foreign branch, but that is not proof of a cross-process candidate Document. That case is established separately below. These component tests capture no pixels/audio, use no extension or model calls, and apply no forced accessibility flags or DevTools/CDP. `screen_capture_proven` and `extension_bridge_proven` remain false.
+
+### Controlled providers with actual native windows and processes
+
+| Case | Observed native outcome |
+|---|---|
+| Embedded same-executable helper | Accepted after native owner/root/executable and raw ancestry validation; **three actual helper Document Value reads**, zero source-alias reads, one mock capture admission. |
+| Separate top-level helper | Excluded from the source-window traversal; three source Document reads, **zero helper Document reads**, one mock capture admission. |
+| Virtual sibling attempting to borrow a previously validated helper PID | Refused; source/helper Document reads and capture admissions all **zero**. The helper is deliberately empty so a global PID allowlist would incorrectly expose one valid-looking sibling Document. |
+| Actual HWND/UIA-PID owner mismatch | Refused before source/helper Document Value or capture. |
+| Correctly embedded helper at a different executable path | Refused at native anchor binding; source/helper Document reads and capture all **zero**. An owned byte-identical executable copy has an independently observed different canonical path. |
+
+All helpers and sources closed before the success report. These are controlled cross-process providers using actual Win32 windows, not actual browser-pixel/extension acceptance. Four virtual foreign-PID cases and the 193-Edit-node width case also reached their exact refusal boundaries with zero Value/capture/forbidden descendant reads. Non-control Document/Edit/Hyperlink boundaries, false/multiple/hidden roots, misleading names, password focus, navigation, replaced identity and successful-null traversal passed. The genuine delayed provider entered its Value getter before refusal at **552 ms**; the independent caller-wait check returned at **2,008 ms**. Cancellation and single-flight admission remained held until actual worker completion. Primary and anchor traces each retain their separate fixed 16-KiB cap.
+
+### Installed application, retry history and remaining scope
+
+All four installed readings—unpackaged/identity-bound, debug/release—passed exact selected source, real Ctrl+Alt+P/chooser, consent before requests, fixed loopback-provider completion, Home source retention and ordinary exit zero. Lease/control removal, helper shutdown and profile restoration passed. Startup-failure/recovery and visible-window checks passed. Optimized finalization binds this source, five signed images and trusted timestamps; installed fixed-word OCR, identity repair/conflict/live-instance checks and exact disposable test-certificate/private-key cleanup passed. This remains a CI test publisher, not production distribution trust.
+
+Attempt 1 on this same commit failed before the corrected anchor case: Chrome produced no owned window/profile/page within **25,085 ms**, then the unchanged stable provider's `GetFocusedElement` returned `UIA_E_TIMEOUT` after **650 ms**, with zero Value/capture. Those logs and the failed artifact are retained. Only the Windows desktop job was rerun, with **no source, deadline, traversal-cap or assertion change**, and passed on the fresh runner. The initial cause was not established; its failure is not erased by the successful retry. Earlier `c7d0cc8` was superseded while queued; the superseded `2c981a2` run's remaining queued Mac job was canceled after its actual-browser result and terminal package logs/artifacts were preserved. Neither is counted as a four-job green checkpoint.
+
+The local `rune/artifacts/development-f044617/Pickle Rune.app` and prior bundles were not replaced or launched during this Windows-only runtime work. Current Mac GUI/grants, actual extension delivery, browser WGC pixels, app-scoped audio, first-invocation behavior, screen readers/displays/performance and Windows 11 standard-user acceptance remain separate gates. Production signing/notarization, update hosting and publication remain deferred under the user's development-only decision. Earlier observations below retain their original source and scope.
+
 ## Mac controlled-source session, 22 November 2026 local time
 
 | Item | Observed evidence |
