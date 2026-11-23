@@ -628,10 +628,14 @@ mod reader_parity {
         assert!(rt.find("save-answer").is_some());
         assert!(rt.find("clear-follow-ups").is_some());
         let saved = rt.state.current_answer_entry().unwrap();
-        assert_eq!(saved.action, "Follow-up");
+        assert_eq!(saved.action, "Explain");
         assert_eq!(saved.answer, rt.state.conversation[0].answer);
         assert_eq!(saved.passage, snapshot.as_ref().unwrap().text);
-        assert_eq!(saved.question.as_deref(), Some("Explain “evidence”"));
+        assert_eq!(saved.question.as_deref(), Some("evidence"));
+        assert_eq!(
+            rt.state.conversation[0].label.as_deref(),
+            Some("Explain “evidence”")
+        );
         assert_ne!(saved.question.as_deref(), Some(pending.question.as_str()));
         click(&mut rt, "copy-answer");
         assert_eq!(

@@ -23,15 +23,38 @@ mod answer_reference_tests;
 #[path = "term_matching_tests.rs"]
 mod term_matching_tests;
 
+#[cfg(test)]
+#[path = "recorded_intent_tests.rs"]
+mod recorded_intent_tests;
+
 #[path = "library_controller.rs"]
 pub(crate) mod library_controller;
 
-/// Pointer metadata belongs to accepted answers, not to mutable source context.
+/// Recording metadata belongs to accepted answers, not to pending requests or context.
 /// Explicit Save exposes only the base answer or the latest follow-up.
 #[derive(Default)]
 pub struct AnswerReferences {
     base: Option<EntryReference>,
     follow_up: Option<EntryReference>,
+    follow_up_intent: Option<RecordedIntent>,
+}
+
+/// User-facing provenance only. Generation and conversation wire actions remain
+/// FollowUp; labels and model instructions are not a recording classification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecordedIntent {
+    FollowUp(String),
+    Explain(String),
+    Adjustment(String),
+}
+impl RecordedIntent {
+    fn fields(&self) -> (&'static str, &str) {
+        match self {
+            Self::FollowUp(question) => ("Follow-up", question),
+            Self::Explain(term) => ("Explain", term),
+            Self::Adjustment(label) => ("Adjustment", label),
+        }
+    }
 }
 
 pub const SAMPLE: &str = "The treatment may reduce symptoms in some patients, but the evidence remains limited. Larger studies are needed before the findings can be applied more broadly.";
@@ -58,6 +81,7 @@ pub struct Pending {
     pub label: Option<String>,
     pub chart: Option<ChartKind>,
     pub limited: bool,
+    pub recorded_intent: Option<RecordedIntent>,
 }
 impl Pending {
     pub fn action(action: ReadingAction) -> Self {
@@ -67,7 +91,15 @@ impl Pending {
             label: None,
             chart: None,
             limited: false,
+            recorded_intent: None,
         }
+    }
+    fn intent(&self) -> Option<RecordedIntent> {
+        (self.action == ReadingAction::FollowUp).then(|| {
+            self.recorded_intent
+                .clone()
+                .unwrap_or_else(|| RecordedIntent::FollowUp(self.question.clone()))
+        })
     }
 }
 pub enum Activity {
@@ -615,6 +647,7 @@ impl AppState {
         self.stop_reader_follow();
         self.conversation.clear();
         self.answer_references.follow_up = None;
+        self.answer_references.follow_up_intent = None;
         self.last = self.result.as_ref().map(|result| Pending {
             chart: result.chart.as_ref().map(ValidatedChart::kind),
             ..Pending::action(result.action)
@@ -649,12 +682,30 @@ impl AppState {
             return;
         }
         self.notice = None;
-        self.follow_up(
+        self.follow_up_recorded(
             format!("Explain the meaning of ‘{term}’ in this passage, using the surrounding context. Keep it brief; distinguish the contextual meaning from other meanings."),
-            Some(format!("Explain “{term}”")), tx,
+            Some(format!("Explain “{term}”")), RecordedIntent::Explain(term.to_owned()), tx,
         );
     }
     pub fn follow_up(&mut self, question: String, label: Option<String>, tx: &mut Tx) {
+        let intent = RecordedIntent::FollowUp(question.clone());
+        self.follow_up_recorded(question, label, intent, tx);
+    }
+    pub fn adjust(&mut self, instruction: String, label: String, tx: &mut Tx) {
+        self.follow_up_recorded(
+            instruction,
+            Some(label.clone()),
+            RecordedIntent::Adjustment(label),
+            tx,
+        );
+    }
+    fn follow_up_recorded(
+        &mut self,
+        question: String,
+        label: Option<String>,
+        recorded_intent: RecordedIntent,
+        tx: &mut Tx,
+    ) {
         if question.trim().is_empty() {
             return;
         }
@@ -662,6 +713,7 @@ impl AppState {
             Pending {
                 question,
                 label,
+                recorded_intent: Some(recorded_intent),
                 ..Pending::action(ReadingAction::FollowUp)
             },
             tx,
@@ -765,7 +817,8 @@ impl AppState {
                     self.sample_result();
                 } else {
                     self.result = Some(Self::demonstration_result());
-                    self.answer_references.base = None;
+                    self.conversation.clear();
+                    self.answer_references = AnswerReferences::default();
                     self.activity = Activity::Idle;
                 }
             } else {
@@ -810,9 +863,7 @@ impl AppState {
                 s.draft.clear();
                 match outcome {
                     Ok(PipelineOutcome::Result(result)) => {
-                        if should_record_result(&result, record, s.settings.history_enabled) {
-                            let mut entry = make_entry(&input_for_record.snapshot, &result, &pending);
-                            entry.reference = reference_pointer(input_for_record.reference.as_ref());
+                        if let Some(entry) = s.history_entry(id, &input_for_record, &result, &pending, record) {
                             s.record_history_entry(entry);
                         }
                         s.complete_reading_result_with_reference(id, &pending, result, reference_pointer(input_for_record.reference.as_ref()));
@@ -828,6 +879,23 @@ impl AppState {
     fn is_current(&self, id: u64) -> bool {
         self.revision == id
             && matches!(self.activity, Activity::Running { id: current, .. } if current == id)
+    }
+    fn history_entry(
+        &self,
+        id: u64,
+        input: &RequestInput,
+        result: &ReadingResult,
+        pending: &Pending,
+        record_at_start: bool,
+    ) -> Option<Entry> {
+        if !self.is_current(id)
+            || !should_record_result(result, record_at_start, self.settings.history_enabled)
+        {
+            return None;
+        }
+        let mut entry = make_entry(&input.snapshot, result, pending);
+        entry.reference = reference_pointer(input.reference.as_ref());
+        Some(entry)
     }
     #[cfg(test)]
     pub(crate) fn complete_reading_result(
@@ -870,12 +938,18 @@ impl AppState {
             } else {
                 reference
             };
+            self.answer_references.follow_up_intent = if self.conversation.is_empty() {
+                None
+            } else {
+                pending.intent()
+            };
         } else {
             self.result = Some(result);
             self.conversation.clear();
             self.answer_references = AnswerReferences {
                 base: reference,
                 follow_up: None,
+                follow_up_intent: None,
             };
         }
         self.draft.clear();
@@ -1261,13 +1335,20 @@ impl AppState {
     pub(crate) fn current_answer_entry(&self) -> Option<Entry> {
         let snapshot = self.snapshot.as_ref()?;
         let entry = if let Some(turn) = self.conversation.last() {
+            let fallback = RecordedIntent::FollowUp(turn.question.clone());
+            let (action, question) = self
+                .answer_references
+                .follow_up_intent
+                .as_ref()
+                .unwrap_or(&fallback)
+                .fields();
             Entry {
                 id: uuid::Uuid::new_v4().to_string(),
                 recorded_at: chrono::Utc::now().to_rfc3339(),
                 app_name: snapshot.app_name.clone(),
                 app_id: snapshot.app_id.clone(),
-                action: "Follow-up".into(),
-                question: Some(turn.label.clone().unwrap_or_else(|| turn.question.clone())),
+                action: action.into(),
+                question: Some(question.into()),
                 passage: snapshot.text.clone(),
                 answer: turn.answer.clone(),
                 quality: turn.quality.visible_label(),
@@ -1345,22 +1426,26 @@ fn reference_pointer(reference: Option<&WebReference>) -> Option<EntryReference>
     })
 }
 fn make_entry(snapshot: &SelectionSnapshot, result: &ReadingResult, pending: &Pending) -> Entry {
+    let intent = pending.intent();
+    let (action, question) = intent.as_ref().map_or_else(
+        || {
+            (
+                pending.action.title(),
+                (!pending.question.is_empty()).then_some(pending.question.as_str()),
+            )
+        },
+        |intent| {
+            let (action, question) = intent.fields();
+            (action, Some(question))
+        },
+    );
     Entry {
         id: uuid::Uuid::new_v4().to_string(),
         recorded_at: chrono::Utc::now().to_rfc3339(),
         app_name: snapshot.app_name.clone(),
         app_id: snapshot.app_id.clone(),
-        action: pending.action.title().into(),
-        question: if pending.question.is_empty() {
-            None
-        } else {
-            Some(
-                pending
-                    .label
-                    .clone()
-                    .unwrap_or_else(|| pending.question.clone()),
-            )
-        },
+        action: action.into(),
+        question: question.map(str::to_owned),
         passage: snapshot.text.clone(),
         answer: result.text.clone(),
         quality: result.quality.visible_label(),

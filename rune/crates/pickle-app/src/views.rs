@@ -469,9 +469,9 @@ fn reader(s: &AppState) -> El {
                     })),
             );
             content = content.child(row().gap(8.0)
-                .child(action(s, "shorter", "Shorter", false, |s, tx| s.follow_up("Make the explanation shorter without losing qualifications, uncertainty, or important details.".into(), Some("Shorter".into()), tx)))
-                .child(action(s, "more-detail", "More detail", false, |s, tx| s.follow_up("Explain this in more detail, distinguishing source facts from general background.".into(), Some("More detail".into()), tx)))
-                .child(action(s, "example", "Give an example", false, |s, tx| s.follow_up("Give a clearly labeled hypothetical example that illustrates this passage without inventing source-specific facts.".into(), Some("Give an example".into()), tx))));
+                .child(action(s, "shorter", "Shorter", false, |s, tx| s.adjust("Make the explanation shorter without losing qualifications, uncertainty, or important details.".into(), "Shorter".into(), tx)))
+                .child(action(s, "more-detail", "More detail", false, |s, tx| s.adjust("Explain this in more detail, distinguishing source facts from general background.".into(), "More detail".into(), tx)))
+                .child(action(s, "example", "Give an example", false, |s, tx| s.adjust("Give a clearly labeled hypothetical example that illustrates this passage without inventing source-specific facts.".into(), "Give an example".into(), tx))));
             content = content
                 .child(input_with_submit(
                     "follow-up",

@@ -65,21 +65,24 @@ fn follow_up() -> Pending {
 }
 
 #[test]
-fn saved_follow_up_uses_visible_label_like_history_and_preserves_typed_questions() {
-    for (question, label, expected) in [
+fn saved_follow_up_records_typed_intent_like_history_and_preserves_typed_questions() {
+    for (question, label, intent, expected) in [
         (
             "INTERNAL_ADJUSTMENT_PROMPT_DO_NOT_ARCHIVE",
             Some("Shorter"),
+            RecordedIntent::Adjustment("Shorter".into()),
             "Shorter",
         ),
         (
             "INTERNAL_WORD_PROMPT_DO_NOT_ARCHIVE",
             Some("Explain Café"),
-            "Explain Café",
+            RecordedIntent::Explain("Café".into()),
+            "Café",
         ),
         (
             "What does Café mean in this passage?",
             None,
+            RecordedIntent::FollowUp("What does Café mean in this passage?".into()),
             "What does Café mean in this passage?",
         ),
     ] {
@@ -87,6 +90,7 @@ fn saved_follow_up_uses_visible_label_like_history_and_preserves_typed_questions
         let pending = Pending {
             question: question.into(),
             label: label.map(str::to_owned),
+            recorded_intent: Some(intent),
             ..Pending::action(ReadingAction::FollowUp)
         };
         accept(
