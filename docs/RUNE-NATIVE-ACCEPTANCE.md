@@ -402,3 +402,31 @@ The Windows-probe-only follow-up changed no Rust application source. A new optim
 
 
 The first corrected Windows probe at `8d5b388` failed closed before sending any acknowledgment: the exact owned dialog and held lease matched, but `GetDlgItem(dialog, 1)` returned no button. The newly uploaded JSON records handle/PID/ID zero, an empty class and false control-state flags. This establishes the absence of the assumed IDOK control at those observations, not the presence of another button or a post-dialog app hang. The next probe enumerates a bounded, caption-free inventory of that exact dialog's owned child controls and waits for one unambiguous enabled visible Button within the original 30-second readiness deadline. It will use the actual verified control ID/HWND and retain all other acceptance checks. No application source is changed based only on the failed ID assumption.
+
+
+## Complete lifecycle CI at `c90c268`
+
+[Run 45118944853](https://github.com/tchowd/pickle/actions/runs/45118944853) passed all four jobs. Both Mac and Windows workspace totals are **302 passed, two ignored**; app suites passed 184/181. These totals exclude standalone helper/icon/PowerShell fixtures. Windows native job-object fixtures passed forced parent death, parent-alive job closure and a normally exited child leaving a descendant holding the transcript pipe; no real transcriber or PCM source was used.
+
+Installed Windows debug and release packages passed the owned real unavailable-adapter failure dialog, held-lease probe, verified native control acknowledgment, nonzero exit, removed transient descriptors, unchanged durable data and subsequent normal native-window recovery. Optimized finalization verified all five signed images and trusted timestamps, independent MSIX identity, fixed-fixture installed OCR, repair/conflict/live-instance guards and exact disposable test-certificate/private-key cleanup. No public release was signed or published. This hosted Windows Server/admin environment does not establish the declined Windows 11 interactive or standard-user matrix.
+
+The debug job's detailed native JSON reports were omitted from its artifact upload glob, although its assertions and native logs passed. Optimized artifacts retain those reports. Workflow-only `c121a6bbc012de79430570ea02488a8f33053f89` adds the same native-smoke glob for debug uploads; [run 45119923749](https://github.com/tchowd/pickle/actions/runs/45119923749) is verifying that follow-up. Neither it nor the bounded-control probe changes the Mac/Windows app source accepted above.
+
+
+The two optimized `c90c268` startup JSON reports were inspected from the retained artifact. Both the unpackaged and identity-bound installed dialog had exactly one visible enabled owned `Button` with **control ID 2**, whose direct parent was the exact owned `#32770` dialog. The other direct children were `Static` controls with IDs 20 and 65535. Neither inventory contained ID 1; both had zero rejected-process children and no truncation. This explains why the fixed `GetDlgItem(1)` assumption failed on this runner, without inferring the button caption or the native MessageBox return value.
+
+Both reports recorded `lease_held_during_dialog`, `acknowledgement_enqueued`, `dismissed`, `dialog_closed`, `lease_released`, `control_removed`, `bridge_control_removed` and `retained_data_unchanged` as true; each measured application `exit_code` **1**. The parent/child process containment tests are separate from these presentation probes.
+
+
+## Development-only scope
+
+On 23 November 2026, the user chose **“Keep this a development build for now.”** Production publisher setup, owned update hosting and publication are deferred. The development CI's disposable test-signing/cleanup checks remain development evidence and do not select a production identity. The local Mac bundle remains ad hoc signed. Current permission flags, model-fidelity failures and unverified client/native workflows remain known limitations; this scope decision does not retroactively pass them.
+
+
+## Final evidence run at `c121a6b`
+
+[Run 45119923749](https://github.com/tchowd/pickle/actions/runs/45119923749) completed **successfully in all four jobs** at `c121a6bbc012de79430570ea02488a8f33053f89`. Both Mac and Windows workspace suites passed **302 tests, with two ignored**; app totals are 184/181. Strict checks, fixtures, rendering, packages and Windows unsigned/signed installed lifecycle tests passed again. Optimized Windows repeated all five-image signature/trusted-timestamp checks, independent identity verification, installed fixed-word OCR, repair/conflict/live-instance checks, native responsiveness and exact test-certificate/private-key cleanup.
+
+The final debug artifact now retains all **four** expected native JSON reports: unpackaged/identity startup failures and unpackaged/identity normal windows. The two startup reports passed with sole owned visible/enabled Button ID 2, direct parent and PID verified, lease held through acknowledgment, actual dialog closure, application exit code 1, lease release, removed instance/browser descriptors and unchanged durable data. The two normal reports passed for visible, uncloaked 560×300 Pickle windows, each with two bounded WM_NULL responsiveness checks. These reports were inspected from the uploaded artifact, not inferred only from the job's green status.
+
+A source comparison confirms no app crate, native bridge or packaging source changed between the current local `8d5b388` Mac artifact and this final CI revision; later commits refine the Windows probe and report uploads. The native Mac artifact was therefore retained without another permission-changing rebuild or repeated physical error-dialog acknowledgment. Its recorded capture permission flags remain false. This is a development candidate with the known native/client/model-quality limits above; the user's development-only decision defers production publisher setup, update hosting and publication.
