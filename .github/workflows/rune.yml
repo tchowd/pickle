@@ -29,6 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rune
+          cache-on-failure: true
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -65,11 +66,16 @@ jobs:
         run: |
           mkdir -p artifacts
           cargo run --locked -p pickle-app -- --scene sample --snap artifacts/reader.png --tree artifacts/reader-tree.json
+          cargo run --locked -p pickle-app -- --scene chart-bar --snap artifacts/chart-bar.png --tree artifacts/chart-bar-tree.json
+          cargo run --locked -p pickle-app -- --scene chart-flow --snap artifacts/chart-flow.png --tree artifacts/chart-flow-tree.json
+          cargo run --locked -p pickle-app -- --scene streaming --snap artifacts/streaming.png --tree artifacts/streaming-tree.json
+          cargo run --locked -p pickle-app -- --scene consent-online --snap artifacts/consent-online.png --tree artifacts/consent-online-tree.json
       - name: Package Mac development build
         if: runner.os == 'macOS'
         run: |
           bash scripts/build-macos.sh debug
           bash scripts/build-macos-fixture.sh
+          bash native/macos/tests/run-page-fixture.sh
       - name: Package Windows development build
         if: runner.os == 'Windows'
         shell: pwsh
