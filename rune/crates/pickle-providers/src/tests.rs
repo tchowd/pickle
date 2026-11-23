@@ -40,6 +40,7 @@ struct Reply {
     body: String,
     extra: String,
     delay: Duration,
+    disconnect: bool,
 }
 impl Reply {
     fn json(body: Value) -> Self {
@@ -49,6 +50,7 @@ impl Reply {
             body: body.to_string(),
             extra: String::new(),
             delay: Duration::ZERO,
+            disconnect: false,
         }
     }
     fn stream(body: &str) -> Self {
@@ -58,6 +60,13 @@ impl Reply {
             body: body.into(),
             extra: String::new(),
             delay: Duration::ZERO,
+            disconnect: false,
+        }
+    }
+    fn disconnected() -> Self {
+        Self {
+            disconnect: true,
+            ..Self::json(Value::Null)
         }
     }
 }
@@ -164,6 +173,12 @@ fn server(replies: Vec<Reply>) -> (Url, mpsc::Receiver<Captured>) {
                 headers,
                 body: serde_json::from_slice(&body).unwrap_or(Value::Null),
             });
+            if reply.disconnect {
+                // Drop this owned socket before any response bytes, but retain
+                // the listener for the next reply/sentinel. This is a genuine
+                // transport failure, not a stopped listener or an HTTP status.
+                continue;
+            }
             thread::sleep(reply.delay);
             let response = format!(
                 "HTTP/1.1 {} Fixture\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{}",
@@ -1522,6 +1537,168 @@ async fn local_chart_uses_buffered_schema_and_never_cloud_checks() {
     let request = captured.recv().unwrap();
     assert_eq!(request.body["stream"], false);
     assert_eq!(request.body["format"], json!({"type":"object"}));
+}
+
+#[derive(Default)]
+struct CloudCheckCounter(std::sync::atomic::AtomicUsize);
+#[async_trait::async_trait]
+impl DecisionClient for CloudCheckCounter {
+    async fn evaluate(
+        &self,
+        _: pickle_core::DecisionState,
+        _: pickle_core::Questions,
+        _: CancellationToken,
+    ) -> pickle_core::Result<pickle_core::DecisionResponse> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(pickle_core::PickleError::message(
+            "Unexpected fixture cloud check",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn legacy_local_chart_http_preserves_local_schema_and_pipeline_validation() {
+    // Exact source/response/model from testLocalChartsUseSchemaAndKeepValidation.
+    // Only its HTTPS origin is substituted by an owned loopback recipient.
+    const SOURCE: &str = "Revenue was $10 million and $15 million.";
+    let (base, captured) = server(vec![
+        Reply::json(json!({"details":{"format":"gguf"},"capabilities":["completion"]})),
+        Reply::json(json!({"message":{"content":"{\"bars\":[]}"},"done":true})),
+    ]);
+    let writer = OllamaProvider::new(LocalAIConfiguration::new(base.to_string()));
+    let checker = Arc::new(CloudCheckCounter::default());
+    let mut input = RequestInput::new(
+        SelectionSnapshot::new(SOURCE, "Test", "test"),
+        ReadingAction::Chart,
+    );
+    input.chart_choice = Some(pickle_core::ChartKind::Bar);
+    let (events, mut received) = unbounded_channel();
+    let error = Pipeline::new(Arc::new(writer), Some(checker.clone()), false)
+        .run(input, events, CancellationToken::new())
+        .await
+        .expect_err("A decoded empty-bars candidate must not become a chart/result");
+    assert!(error.to_string().contains("invalid chart schema"));
+    assert_eq!(checker.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    while let Ok(event) = received.try_recv() {
+        assert!(
+            !matches!(event, PipelineEvent::Draft(_)),
+            "Structured JSON must stay buffered"
+        );
+    }
+    let metadata = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(metadata.path, "/api/show");
+    assert_eq!(metadata.body, json!({"model":"llama3.2:1b"}));
+    let request = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(request.path, "/api/chat");
+    assert_eq!(request.body["model"], "llama3.2:1b");
+    assert_eq!(request.body["stream"], false);
+    assert_eq!(request.body["format"]["type"], "object");
+    assert_eq!(request.body["format"]["properties"]["bars"]["minItems"], 2);
+    assert_eq!(
+        request.body["format"]["properties"]["bars"]["items"]["properties"]["evidenceID"]["enum"],
+        json!(["n12", "n28"])
+    );
+    let user: Value =
+        serde_json::from_str(request.body["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(user["source"], SOURCE);
+    assert!(matches!(
+        captured.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+#[tokio::test]
+async fn legacy_local_metadata_transport_failure_never_sends_chat_to_a_live_listener() {
+    let (base, captured) = server(vec![
+        Reply::disconnected(),
+        Reply::json(json!({"fixture":"finished"})),
+    ]);
+    let writer = OllamaProvider::new(LocalAIConfiguration::new(base.to_string()));
+    let (events, mut received) = unbounded_channel();
+    let error = writer
+        .generate(prompt(), events, CancellationToken::new())
+        .await
+        .expect_err("A metadata socket failure must stop before chat");
+    assert!(error.to_string().contains("Can’t reach the Local server"));
+    let metadata = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(metadata.path, "/api/show");
+    assert_eq!(
+        metadata.headers.lines().next(),
+        Some("POST /api/show HTTP/1.1")
+    );
+    assert_eq!(metadata.body, json!({"model":"llama3.2:1b"}));
+    assert!(received.try_recv().is_err());
+    assert!(matches!(
+        captured.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    // The next request MUST be this sentinel while the listener is live, not
+    // a /api/chat attempt hidden by connection refusal after worker teardown.
+    stop_listening_fixture(&base, &captured);
+}
+
+#[tokio::test]
+async fn legacy_local_ndjson_http_refuses_original_invalid_and_unterminated_chunks() {
+    // Exact lines from OllamaTests.testOllamaNDJSONCompletionAndErrors.
+    for (body, drafts_expected, reason) in [
+        ("data: [DONE]\n", vec![], "invalid answer"),
+        ("{\n", vec![], "invalid answer"),
+        (
+            "{\"error\":\"secret source text\"}\n",
+            vec![],
+            "could not complete",
+        ),
+        (
+            "{\"message\":{\"content\":\"Partial\"},\"done\":true,\"done_reason\":\"length\"}\n",
+            vec![],
+            "reached its length limit",
+        ),
+        (
+            "{\"message\":{\"content\":\"Partial\"},\"done\":false}\n",
+            vec!["Partial"],
+            "before the answer finished",
+        ),
+    ] {
+        let mut response = Reply::stream(body);
+        response.mime = "application/x-ndjson";
+        let (base, captured) = server(vec![
+            Reply::json(json!({"details":{"format":"gguf"},"capabilities":["completion"]})),
+            response,
+        ]);
+        let writer = OllamaProvider::new(LocalAIConfiguration::new(base.to_string()));
+        let input = RequestInput::new(
+            SelectionSnapshot::new("The treatment may help.", "Test", "test"),
+            ReadingAction::Simplify,
+        );
+        let (events, mut received) = unbounded_channel();
+        let error = Pipeline::new(Arc::new(writer), None, false)
+            .run(input, events, CancellationToken::new())
+            .await
+            .expect_err("An invalid or unterminated Local stream must not become a result");
+        assert!(
+            error.to_string().contains(reason),
+            "Expected stream decoder refusal: {reason}"
+        );
+        assert!(!error.to_string().contains("secret source text"));
+        let mut drafts = vec![];
+        while let Ok(event) = received.try_recv() {
+            if let PipelineEvent::Draft(text) = event {
+                drafts.push(text);
+            }
+        }
+        assert_eq!(drafts, drafts_expected);
+        let metadata = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(metadata.path, "/api/show");
+        let chat = captured.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(chat.path, "/api/chat");
+        assert_eq!(chat.body["model"], "llama3.2:1b");
+        assert_eq!(chat.body["stream"], true);
+        assert!(chat.body.get("format").is_none());
+        assert!(matches!(
+            captured.recv_timeout(Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
 }
 
 #[tokio::test]
