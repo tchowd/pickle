@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use pickle_core::{Generation, GenerationPrompt, GenerativeProvider, PickleError, PipelineEvent};
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
@@ -124,6 +124,7 @@ impl OllamaProvider {
             .base_url()?
             .join("api/chat")
             .map_err(|_| error("Invalid Local server address."))?;
+        let request_started = Instant::now();
         let response = open(
             url,
             Some(body),
@@ -135,7 +136,7 @@ impl OllamaProvider {
         )
         .await?;
         let result = json_body(response, &cancel).await?;
-        let mut accumulator = Ndjson::default();
+        let mut accumulator = Ndjson::new(request_started, false);
         accumulator.line(&result.to_string())?;
         let result = accumulator.finish(&self.configuration.model)?;
         Ok(crate::local_budget::truncate_utf8(&result.text, 3000).into())
@@ -159,9 +160,17 @@ impl GenerativeProvider for OllamaProvider {
         self.configuration.validate(false)?;
         check_cancel(&cancel)?;
         let prompt = fit(prompt)?;
-        self.verify_model(false, cancel.clone()).await?;
+        let capabilities = self.verify_model(false, cancel.clone()).await?;
         let stream = self.streaming && !prompt.structured;
         let mut body = json!({"model":self.configuration.model,"messages":[{"role":"system","content":prompt.system},{"role":"user","content":prompt.user}],"stream":stream,"keep_alive":"2m","options":{"num_ctx":LOCAL_CONTEXT,"num_predict":LOCAL_OUTPUT,"temperature":0.2}});
+        if capabilities
+            .iter()
+            .any(|capability| capability == "thinking")
+        {
+            // Request answer-focused generation. Ollama may use the lowest
+            // supported level when a model cannot disable thinking entirely.
+            body["think"] = json!(false);
+        }
         if prompt.structured {
             body["format"] = prompt.schema.unwrap_or_else(|| json!("json"));
         }
@@ -173,6 +182,7 @@ impl GenerativeProvider for OllamaProvider {
             .base_url()?
             .join("api/chat")
             .map_err(|_| error("Invalid Local server address."))?;
+        let request_started = Instant::now();
         let response = open(
             url,
             Some(body),
@@ -183,7 +193,7 @@ impl GenerativeProvider for OllamaProvider {
             &cancel,
         )
         .await?;
-        let mut accumulator = Ndjson::default();
+        let mut accumulator = Ndjson::new(request_started, stream);
         if stream {
             read_lines(response, &cancel, |line| {
                 if let Some(draft) = accumulator.line(line)? {

@@ -1,3 +1,6 @@
 # These reviewed upstream resources are hashed as exact bytes. Disable checkout
 # newline conversion so core.autocrlf cannot change their provenance checksums.
 /rune/packaging/licenses/** -text
+
+# Preserve captured benchmark bytes and their recorded hashes on Windows.
+rune/benchmarks/**/*.jsonl text eol=lf

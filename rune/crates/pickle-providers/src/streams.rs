@@ -189,15 +189,24 @@ pub(crate) struct Ndjson {
     done: bool,
     final_chunk: Value,
     start: Instant,
+    first_token_observable: bool,
     first_token: Option<f64>,
 }
 impl Default for Ndjson {
     fn default() -> Self {
+        Self::new(Instant::now(), true)
+    }
+}
+impl Ndjson {
+    /// Buffered responses expose only completion, not when the first token was
+    /// generated. The caller starts the clock before opening the chat request.
+    pub fn new(start: Instant, first_token_observable: bool) -> Self {
         Self {
             text: String::new(),
             done: false,
             final_chunk: Value::Null,
-            start: Instant::now(),
+            start,
+            first_token_observable,
             first_token: None,
         }
     }
@@ -235,7 +244,7 @@ impl Ndjson {
             ));
         }
         self.text.push_str(delta);
-        if !delta.is_empty() && self.first_token.is_none() {
+        if self.first_token_observable && !delta.is_empty() && self.first_token.is_none() {
             self.first_token = Some(self.start.elapsed().as_secs_f64());
         }
         if done {

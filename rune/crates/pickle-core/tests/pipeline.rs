@@ -182,22 +182,38 @@ async fn simplify_checks_context_difficulty_and_fidelity_only() {
     assert!(!calls[1].1.contains_key("invented_specifics"));
 }
 #[tokio::test]
-async fn expand_uses_support_bank_and_followup_has_fixed_source() {
-    let writer = Arc::new(Writer::new(&["Explanation"]));
-    let checker = Arc::new(Checker::new());
-    let mut request = input(ReadingAction::FollowUp);
-    request.question = "Why?".into();
-    request.previous_result = "An older answer, not evidence".into();
-    run(writer.clone(), Some(checker.clone()), request).await;
-    let calls = checker.calls.lock().unwrap();
-    assert!(!calls[0].1.contains_key("difficulty"));
-    assert!(calls[1].1.contains_key("invented_specifics"));
-    assert!(!calls[1].0["source"].contains("older answer"));
-    assert!(
-        writer.prompts.lock().unwrap()[0]
-            .user
-            .contains("older answer")
-    );
+async fn expansion_and_followup_check_support_against_the_fixed_source() {
+    for action in [ReadingAction::Expand, ReadingAction::FollowUp] {
+        let writer = Arc::new(Writer::new(&["Explanation"]));
+        let checker = Arc::new(Checker::new());
+        let mut request = input(action);
+        if action == ReadingAction::FollowUp {
+            request.question = "Why?".into();
+        }
+        request.previous_result = "An older answer, not evidence".into();
+        let fixed_source = request.reading_source();
+        let PipelineOutcome::Result(result) =
+            run(writer.clone(), Some(checker.clone()), request).await
+        else {
+            panic!("Expected a checked explanation");
+        };
+        assert_eq!(result.quality, QualityStatus::Checked);
+        let calls = checker.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0].1.contains_key("difficulty"),
+            action == ReadingAction::Expand
+        );
+        assert!(calls[1].1.contains_key("invented_specifics"));
+        assert!(!calls[1].1.contains_key("lost_uncertainty"));
+        for (state, _) in calls.iter() {
+            assert_eq!(state["source"], fixed_source);
+        }
+        let prompts = writer.prompts.lock().unwrap();
+        let body: serde_json::Value = serde_json::from_str(&prompts[0].user).unwrap();
+        assert_eq!(body["source"], fixed_source);
+        assert_eq!(body["prior_explanation"], "An older answer, not evidence");
+    }
 }
 #[tokio::test]
 async fn missing_context_stops_before_generation_unless_explicitly_limited() {

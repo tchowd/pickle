@@ -1,0 +1,169 @@
+{
+  "baseline_git_head": "cf222d10c5cf4068b1e3d16b6d9a64900aa4a5e9",
+  "baseline_prompt_sha256": "bc38599d4c63afefa41561d4fb3b3b0fb218f2b46de40ef20a25cb8ddcc9a7d3",
+  "baseline_reports": {
+    "1": "2a7f3da5d1a9ca7bf80a5cc5ed946cb71a9a0e422ef43b077dd186018dd7c349",
+    "2": "b9a5f5c1a18a1ac7de933231e918ff1410a4dcac7cb05d8b834654a3c02fe753",
+    "3": "633d79e1ffd58f578765e1c2cac75b85f79a153166fc75358eb8216ca998ecc4"
+  },
+  "candidate_prompt_sha256": "5d244ade7b0b9364555496751aa636c68d0d233d2107ea2575efde946c45d16f",
+  "candidate_disposition": "rejected_and_reverted: shorter answers still strengthened uncertainty and misattributed evidence",
+  "candidate_reports": {
+    "1": "429dc4a46c96e936db27dcf786596ac3f6322bc0d6471009590f77fdbaf1e4eb",
+    "2": "c559faa234205bdc18f0a8da257b321849949d8973ff294e05d1ae539d21e6ec",
+    "3": "1c3ea1212262c3ce951810432ce123c183765fee16501d7db170704d04f06bc0"
+  },
+  "schema": 1,
+  "corpus": "seven fixed synthetic inputs; no app preferences, archives or credentials",
+  "same_device": false,
+  "inference_location": "unverified",
+  "server_version_observed": "0.34.4",
+  "runs": [
+    {
+      "file": "baseline-1b-1.jsonl",
+      "variant": "baseline",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "2a7f3da5d1a9ca7bf80a5cc5ed946cb71a9a0e422ef43b077dd186018dd7c349",
+      "client_case_seconds": 6.393002625
+    },
+    {
+      "file": "baseline-1b-2.jsonl",
+      "variant": "baseline",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "b9a5f5c1a18a1ac7de933231e918ff1410a4dcac7cb05d8b834654a3c02fe753",
+      "client_case_seconds": 5.848106501
+    },
+    {
+      "file": "baseline-1b-3.jsonl",
+      "variant": "baseline",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "633d79e1ffd58f578765e1c2cac75b85f79a153166fc75358eb8216ca998ecc4",
+      "client_case_seconds": 5.247151584
+    },
+    {
+      "file": "rejected-expand-1b-1.jsonl",
+      "variant": "rejected-expand",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "429dc4a46c96e936db27dcf786596ac3f6322bc0d6471009590f77fdbaf1e4eb",
+      "client_case_seconds": 4.22796696
+    },
+    {
+      "file": "rejected-expand-1b-2.jsonl",
+      "variant": "rejected-expand",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "c559faa234205bdc18f0a8da257b321849949d8973ff294e05d1ae539d21e6ec",
+      "client_case_seconds": 2.314425291
+    },
+    {
+      "file": "rejected-expand-1b-3.jsonl",
+      "variant": "rejected-expand",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "1c3ea1212262c3ce951810432ce123c183765fee16501d7db170704d04f06bc0",
+      "client_case_seconds": 3.692291124
+    },
+    {
+      "file": "finite-ids-1b-1.jsonl",
+      "variant": "finite-ids",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 7,
+      "sha256": "bdba20b3742209ba0d15161ed9538e0839d91139975d9674b33e62ddae941a4b",
+      "client_case_seconds": 21.53867696
+    },
+    {
+      "file": "finite-ids-1b-2.jsonl",
+      "variant": "finite-ids",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 7,
+      "sha256": "1d5026052421543aabe1f8ccac775e8b6727b9eeede0276773ca7a06d73f47e9",
+      "client_case_seconds": 7.41683775
+    },
+    {
+      "file": "finite-ids-1b-3.jsonl",
+      "variant": "finite-ids",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "cae38ad7079a183b32e4b65219236f6f87d586391bd0259eff7ec8a4cc752ecf",
+      "client_case_seconds": 5.232207249
+    },
+    {
+      "file": "finite-ids-default-thinking-q6-1.jsonl",
+      "variant": "finite-ids-default-thinking",
+      "model_group": "q6",
+      "cases": 7,
+      "pipeline_results": 6,
+      "sha256": "aa10c8e634e8fe5c334a36dd94d9344cb492cf3215a1e9427696074524335a1b",
+      "client_case_seconds": 304.879581831
+    },
+    {
+      "file": "finite-ids-thinking-control-q6-1.jsonl",
+      "variant": "finite-ids-thinking-control",
+      "model_group": "q6",
+      "cases": 7,
+      "pipeline_results": 7,
+      "sha256": "71d18712fa2e3e63d4d4740f55ea25123ab9c168835da0003abced72ea2d3e4d",
+      "client_case_seconds": 76.221016208
+    },
+    {
+      "file": "final-q6-1.jsonl",
+      "variant": "final",
+      "model_group": "q6",
+      "cases": 7,
+      "pipeline_results": 7,
+      "sha256": "f157e43ebfa7cee6f9911ed78c4dcebb1626d2539e601d891f680d2f9b2a7e0c",
+      "client_case_seconds": 68.66753654200001
+    },
+    {
+      "file": "final-1b-1.jsonl",
+      "variant": "final",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 7,
+      "sha256": "dd1674dd5dd37dcce85b1d3b622872331e962fa1a10ee3a9429865e04ca11ec9",
+      "client_case_seconds": 6.129592667000001
+    },
+    {
+      "file": "final-1b-2.jsonl",
+      "variant": "final",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 7,
+      "sha256": "20d2a5fb86b365b03041aae83e78eda039cc8b3210121ae1af97c6023dd295dc",
+      "client_case_seconds": 4.531973168
+    },
+    {
+      "file": "final-1b-3.jsonl",
+      "variant": "final",
+      "model_group": "1b",
+      "cases": 7,
+      "pipeline_results": 7,
+      "sha256": "d7f9091a00a6b513df33ec1258505cb1b1dfa7fbc2ef746923a9c6892ebfcc5f",
+      "client_case_seconds": 4.397369458
+    }
+  ],
+  "final_source_sha256": {
+    "rune/crates/pickle-core/src/charts.rs": "f8956a51add2eb0399fcfa0d58254b82549b3668e22a20a71efb19a7b62a9c3f",
+    "rune/crates/pickle-core/src/prompt.rs": "bc38599d4c63afefa41561d4fb3b3b0fb218f2b46de40ef20a25cb8ddcc9a7d3",
+    "rune/crates/pickle-providers/src/ollama.rs": "65e8237a56b5b5349e5cde2105a5191f65c04a94c7b51602abc6c6c438be82d6",
+    "rune/crates/pickle-providers/src/streams.rs": "1b84ccbccc0a98c6ac626348f601d751e313df5fd222b93a1373bcad67dd15ab",
+    "rune/crates/pickle-providers/examples/local-benchmark.rs": "634b584382ad463bd17d200821f1536b15f566e4d8a025f3e500998e2211c764",
+    "rune/crates/pickle-providers/Cargo.toml": "6b383f7db3659191f542c5feb180adc318b765073859c1d64b28c84334e03995",
+    "rune/scripts/build-macos.sh": "e9be1e755e0c0886d5dba5b08d284eb123edbda316c735a6cdbe7642f7e867ae"
+  },
+  "rejected_expand_instruction": "Explain the passage in more detail, starting with its stated facts. Preserve what each quantity counts, qualifications and scope. Clarify only terms or relationships needed to understand those facts; avoid repeated definitions or commentary about explanation structure. Add brief, clearly labeled general background only when it helps.",
+  "hash_style": "SHA-256 of recorded LF file bytes; compare source hashes against Git blob content if a working copy has CRLF conversion."
+}

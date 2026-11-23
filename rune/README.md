@@ -164,3 +164,9 @@ Before public release, complete both native compatibility matrices, signing/nota
 - [Provider, article, and browser contracts](crates/pickle-providers/README.md)
 - [Third-party notice process](packaging/THIRD-PARTY-NOTICES.md)
 - [Original architecture and behavior](../docs/ARCHITECTURE.md)
+
+### Development reading checks
+
+The opt-in [synthetic Local benchmark](crates/pickle-providers/examples/README.md) runs the real pipeline on fixed passages, without reading application data or downloading models. It separates returned results from manual factual review; [recorded cases](benchmarks/local-reading/2026-11-23/README.md) retain known small-model failures. Thinking-capable text models request the server's no-thinking/lowest-supported mode; this does not verify their answers.
+
+To package a candidate without replacing the running development bundle, use `bash scripts/build-macos.sh release artifacts/quality-candidate`. The optional output directory holds its own notices, stage, prior bundle and ZIP; omitted output keeps the existing `artifacts` default.

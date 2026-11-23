@@ -211,13 +211,17 @@ pub fn numeric_evidence(source: &str) -> Vec<NumericEvidence> {
         .collect()
 }
 
-pub fn explicit_ordered_steps(source: &str) -> Vec<String> {
+fn ordered_step_sequence() -> &'static Regex {
     static SEQUENCE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?i)\b(?:is|are)\s+([a-z]+ed(?:,\s*[a-z]+ed)*(?:,?\s+and\s+[a-z]+ed))\b")
             .unwrap()
     });
+    &SEQUENCE
+}
+
+pub fn explicit_ordered_steps(source: &str) -> Vec<String> {
     static AND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\band\b").unwrap());
-    let Some(c) = SEQUENCE.captures(source) else {
+    let Some(c) = ordered_step_sequence().captures(source) else {
         return vec![];
     };
     AND.replace_all(c.get(1).unwrap().as_str(), ",")
@@ -226,6 +230,156 @@ pub fn explicit_ordered_steps(source: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// A deliberately bounded whole-source operation-list form under the existing
+/// ordered-step contract, not a general language or causal-relation classifier.
+/// Unknown participles, clauses and ambiguous prefixes retain the general path.
+fn sole_operation_list(source: &str) -> Option<Vec<String>> {
+    let source = source.trim();
+    if source
+        .chars()
+        .any(|ch| ch.is_control() && ch != '\t' || ch.is_whitespace() && !matches!(ch, ' ' | '\t'))
+    {
+        return None;
+    }
+    let capture = ordered_step_sequence().captures(source)?;
+    let sequence = capture.get(0)?;
+    if !matches!(source[sequence.end()..].trim(), "" | ".") {
+        return None;
+    }
+    let subject: Vec<_> = source[..sequence.start()]
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let article = |word: &str| matches!(word, "the" | "a" | "an");
+    if !(subject.len() == 1 && !article(&subject[0])
+        || (2..=4).contains(&subject.len()) && article(&subject[0]))
+        || subject.iter().any(|word| {
+            !word.bytes().all(|ch| ch.is_ascii_alphabetic())
+                || word.ends_with("ed")
+                || word.ends_with("ly")
+                || matches!(
+                    word.as_str(),
+                    "if" | "unless"
+                        | "except"
+                        | "when"
+                        | "whenever"
+                        | "while"
+                        | "after"
+                        | "before"
+                        | "once"
+                        | "until"
+                        | "provided"
+                        | "assuming"
+                        | "only"
+                        | "not"
+                        | "never"
+                        | "no"
+                        | "neither"
+                        | "nor"
+                        | "either"
+                        | "or"
+                        | "and"
+                        | "but"
+                        | "because"
+                        | "since"
+                        | "although"
+                        | "though"
+                        | "as"
+                        | "that"
+                        | "which"
+                        | "who"
+                        | "whose"
+                        | "where"
+                        | "whether"
+                        | "may"
+                        | "might"
+                        | "can"
+                        | "could"
+                        | "must"
+                        | "should"
+                        | "would"
+                        | "will"
+                        | "shall"
+                        | "has"
+                        | "have"
+                        | "had"
+                        | "is"
+                        | "are"
+                        | "was"
+                        | "were"
+                        | "be"
+                        | "been"
+                        | "being"
+                        | "to"
+                        | "by"
+                        | "for"
+                        | "with"
+                        | "without"
+                        | "under"
+                        | "during"
+                        | "in"
+                        | "on"
+                        | "at"
+                        | "of"
+                        | "from"
+                        | "it"
+                        | "they"
+                        | "this"
+                        | "these"
+                        | "those"
+                        | "he"
+                        | "she"
+                        | "we"
+                        | "you"
+                        | "i"
+                        | "cycle"
+                        | "loop"
+                        | "cyclic"
+                        | "iterative"
+                        | "circular"
+                        | "repeating"
+                        | "recurring"
+                )
+        })
+    {
+        return None;
+    }
+    let steps = explicit_ordered_steps(source);
+    let normalized: BTreeSet<_> = steps.iter().map(|step| step.to_ascii_lowercase()).collect();
+    if !(2..=10).contains(&steps.len())
+        || normalized.len() != steps.len()
+        || subject.iter().any(|word| normalized.contains(word))
+        || normalized.iter().any(|step| {
+            !matches!(
+                step.as_str(),
+                "received"
+                    | "validated"
+                    | "saved"
+                    | "created"
+                    | "checked"
+                    | "processed"
+                    | "stored"
+                    | "queued"
+                    | "reviewed"
+                    | "approved"
+                    | "rejected"
+                    | "recorded"
+                    | "updated"
+                    | "deleted"
+                    | "archived"
+                    | "published"
+                    | "completed"
+                    | "forwarded"
+                    | "delivered"
+                    | "closed"
+            )
+        })
+    {
+        return None;
+    }
+    Some(steps)
 }
 
 pub fn validate_chart(text: &str, kind: ChartKind, source: &str) -> Result<ValidatedChart> {
@@ -362,12 +516,41 @@ pub fn validate_chart(text: &str, kind: ChartKind, source: &str) -> Result<Valid
                     "The diagram omitted an explicitly stated process step or connection.",
                 ));
             }
+            if let Some(steps) = sole_operation_list(source) {
+                let expected_labels: BTreeSet<_> = steps.iter().map(String::as_str).collect();
+                let actual_labels: BTreeSet<_> = labels.values().copied().collect();
+                // Compare only to relations already required by the existing
+                // step contract. Never synthesize, replace or repair a graph.
+                let expected_pairs: BTreeSet<_> = steps
+                    .windows(2)
+                    .map(|pair| (pair[0].as_str(), pair[1].as_str()))
+                    .collect();
+                let actual_pairs: BTreeSet<_> = spec
+                    .edges
+                    .iter()
+                    .map(|edge| (labels[edge.from.as_str()], labels[edge.to.as_str()]))
+                    .collect();
+                if spec.nodes.len() != steps.len()
+                    || actual_labels != expected_labels
+                    || spec.edges.len() != steps.len() - 1
+                    || actual_pairs != expected_pairs
+                    || spec.edges.iter().any(|edge| !edge.condition.is_empty())
+                {
+                    return Err(PickleError::message(
+                        "The flow diagram added connections or conditions absent from the sole operation list.",
+                    ));
+                }
+            }
             Ok(ValidatedChart::Flow {
                 nodes: spec.nodes,
                 edges: spec.edges,
             })
         }
     }
+}
+
+fn flow_step_id(index: usize) -> String {
+    format!("s{index}")
 }
 
 pub fn chart_schema(kind: ChartKind, source: &str) -> Value {
@@ -381,15 +564,27 @@ pub fn chart_schema(kind: ChartKind, source: &str) -> Value {
         ),
         ChartKind::Flow => {
             let steps = explicit_ordered_steps(source);
+            let sole = sole_operation_list(source);
             let label = if steps.is_empty() {
                 json!({"type":"string","maxLength":180})
             } else {
                 json!({"type":"string","enum":steps})
             };
             let quotes = flow_evidence(source);
-            let id = json!({"type":"string","maxLength":40});
+            let condition = if sole.is_some() {
+                json!({"type":"string","enum":[""]})
+            } else {
+                json!({"type":"string","maxLength":180})
+            };
+            let min_edges = sole.as_ref().map_or(1, |steps| steps.len() - 1);
+            let max_edges = sole.as_ref().map_or(16, |steps| steps.len() - 1);
+            let id = if steps.is_empty() {
+                json!({"type":"string","maxLength":40})
+            } else {
+                json!({"type":"string","enum":(0..steps.len()).map(flow_step_id).collect::<Vec<_>>()})
+            };
             object(
-                json!({"type":{"type":"string","enum":["flow_diagram"]},"nodes":{"type":"array","minItems":steps.len().max(2),"maxItems":if steps.is_empty(){10}else{steps.len()},"items":object(json!({"id":id,"label":label}))},"edges":{"type":"array","minItems":1,"maxItems":16,"items":object(json!({"from":id,"to":id,"evidence":{"type":"string","enum":quotes},"condition":{"type":"string","maxLength":180}}))}}),
+                json!({"type":{"type":"string","enum":["flow_diagram"]},"nodes":{"type":"array","minItems":steps.len().max(2),"maxItems":if steps.is_empty(){10}else{steps.len()},"items":object(json!({"id":id,"label":label}))},"edges":{"type":"array","minItems":min_edges,"maxItems":max_edges,"items":object(json!({"from":id,"to":id,"evidence":{"type":"string","enum":quotes},"condition":condition}))}}),
             )
         }
     }
@@ -407,7 +602,27 @@ pub fn flow_evidence(source: &str) -> Vec<String> {
 }
 pub fn chart_instructions(kind: ChartKind, source: &str) -> String {
     match kind {
-    ChartKind::Bar => format!("Return only JSON {{\"type\":\"bar_chart\",\"bars\":[{{\"evidenceID\":\"ID\"}}]}}. Select 2–12 comparable candidates of the same unit measuring the same thing. Do not add values or labels; app code supplies those. Candidates: {}", serde_json::to_string(&numeric_evidence(source)).unwrap()),
-    ChartKind::Flow => "Return only JSON with type flow_diagram, nodes [{id,label}], and edges [{from,to,evidence,condition}]. Use 2–10 nodes and 1–16 supported directed edges. Labels must be exact source substrings. Include every explicit process step and connect the complete stated sequence. Each edge evidence must be an exact allowed source quote containing both connected labels. Preserve all conditions; condition is an exact source condition or empty string. No inferred relationships.".into()
-}
+        ChartKind::Bar => format!(
+            "Return only JSON {{\"type\":\"bar_chart\",\"bars\":[{{\"evidenceID\":\"ID\"}}]}}. Select 2–12 comparable candidates of the same unit measuring the same thing. Do not add values or labels; app code supplies those. Candidates: {}",
+            serde_json::to_string(&numeric_evidence(source)).unwrap()
+        ),
+        ChartKind::Flow => {
+            let mut instructions = String::from(
+                "Return only JSON with type flow_diagram, nodes [{id,label}], and edges [{from,to,evidence,condition}]. Use 2–10 nodes and 1–16 supported directed edges. Labels must be exact source substrings. Include every explicit process step and connect the complete stated sequence. Each edge evidence must be an exact allowed source quote containing both connected labels. Preserve all conditions; condition is an exact source condition or empty string. No inferred relationships.",
+            );
+            let steps = explicit_ordered_steps(source);
+            if !steps.is_empty() {
+                let names: Vec<_> = steps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, label)| json!({"id":flow_step_id(index),"label":label}))
+                    .collect();
+                instructions.push_str(&format!(" Source step node IDs (names only): {}. Use each listed ID once with its corresponding exact label. Edge from/to must use these IDs, never labels or source sentences. Infer no additional relationships; existing evidence and condition rules still apply.",serde_json::to_string(&names).unwrap()));
+            }
+            if let Some(steps) = sole_operation_list(source) {
+                instructions.push_str(&format!(" For this whole-source operation-list format, use exactly {} edges between consecutive listed steps and empty condition strings. Do not add back edges or other connections.",steps.len()-1));
+            }
+            instructions
+        }
+    }
 }

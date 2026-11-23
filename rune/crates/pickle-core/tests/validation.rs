@@ -131,6 +131,305 @@ fn explicit_process_cannot_omit_steps() {
     .unwrap();
     assert!(chart.alternative().contains("validated → saved"));
 }
+
+#[test]
+fn explicit_flow_schema_and_instruction_map_share_finite_step_names() {
+    let source = "The request is received, validated, and saved.";
+    let schema = chart_schema(ChartKind::Flow, source);
+    let nodes = &schema["properties"]["nodes"];
+    let edges = &schema["properties"]["edges"];
+    let names = json!({"type":"string","enum":["s0","s1","s2"]});
+    assert_eq!(nodes["items"]["properties"]["id"], names);
+    assert_eq!(edges["items"]["properties"]["from"], names);
+    assert_eq!(edges["items"]["properties"]["to"], names);
+    assert_eq!(
+        nodes["items"]["properties"]["label"]["enum"],
+        json!(["received", "validated", "saved"])
+    );
+    assert_eq!(nodes["minItems"], 3);
+    assert_eq!(nodes["maxItems"], 3);
+    assert_eq!(edges["minItems"], 2);
+    assert_eq!(edges["maxItems"], 2);
+    assert_eq!(
+        edges["items"]["properties"]["evidence"]["enum"],
+        json!([source])
+    );
+    assert_eq!(
+        edges["items"]["properties"]["condition"],
+        json!({"type":"string","enum":[""]})
+    );
+    let instructions = chart_instructions(ChartKind::Flow, source);
+    let mapping = instructions
+        .split_once("Source step node IDs (names only): ")
+        .unwrap()
+        .1;
+    let mapping = serde_json::Deserializer::from_str(mapping)
+        .into_iter::<serde_json::Value>()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        mapping,
+        json!([
+            {"id":"s0","label":"received"},
+            {"id":"s1","label":"validated"},
+            {"id":"s2","label":"saved"},
+        ])
+    );
+    assert!(
+        mapping
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|node| node.as_object().unwrap().len() == 2)
+    );
+    assert!(
+        instructions.contains("Edge from/to must use these IDs, never labels or source sentences.")
+    );
+}
+
+#[test]
+fn general_flow_schema_and_instructions_remain_unconstrained_by_step_names() {
+    let source = "If validated, it is saved.";
+    assert!(explicit_ordered_steps(source).is_empty());
+    let schema = chart_schema(ChartKind::Flow, source);
+    let nodes = &schema["properties"]["nodes"];
+    let edges = &schema["properties"]["edges"];
+    let id = json!({"type":"string","maxLength":40});
+    assert_eq!(nodes["items"]["properties"]["id"], id);
+    assert_eq!(edges["items"]["properties"]["from"], id);
+    assert_eq!(edges["items"]["properties"]["to"], id);
+    assert_eq!(
+        nodes["items"]["properties"]["label"],
+        json!({"type":"string","maxLength":180})
+    );
+    assert_eq!(nodes["minItems"], 2);
+    assert_eq!(nodes["maxItems"], 10);
+    assert!(!chart_instructions(ChartKind::Flow, source).contains("Source step node IDs"));
+    assert!(
+        validate_chart(
+            &flow(source, &["validated", "saved"], "If validated"),
+            ChartKind::Flow,
+            source
+        )
+        .is_ok()
+    );
+}
+
+fn named_step_flow(source: &str, condition: &str) -> serde_json::Value {
+    json!({"type":"flow_diagram",
+        "nodes":[{"id":"s0","label":"received"},{"id":"s1","label":"validated"},{"id":"s2","label":"saved"}],
+        "edges":[{"from":"s0","to":"s1","evidence":source,"condition":condition},{"from":"s1","to":"s2","evidence":source,"condition":condition}]
+    })
+}
+
+#[test]
+fn finite_step_names_do_not_bypass_existing_flow_semantic_rejections() {
+    let source = "The request is received, validated, and saved.";
+    let valid = named_step_flow(source, "");
+    let chart = validate_chart(&valid.to_string(), ChartKind::Flow, source).unwrap();
+    assert!(chart.alternative().contains("received → validated"));
+    let mut invalid = Vec::new();
+    let mut duplicate = valid.clone();
+    duplicate["nodes"][1]["id"] = json!("s0");
+    invalid.push(duplicate);
+    let mut sentence_endpoint = valid.clone();
+    sentence_endpoint["edges"][0]["from"] = json!("The request");
+    invalid.push(sentence_endpoint);
+    let mut omitted_step = valid.clone();
+    omitted_step["nodes"].as_array_mut().unwrap().remove(1);
+    omitted_step["edges"] = json!([{"from":"s0","to":"s2","evidence":source,"condition":""}]);
+    invalid.push(omitted_step);
+    let mut reversed = valid.clone();
+    reversed["edges"][0]["from"] = json!("s1");
+    reversed["edges"][0]["to"] = json!("s0");
+    invalid.push(reversed);
+    let mut invented_condition = valid.clone();
+    invented_condition["edges"][0]["condition"] = json!("exact");
+    invalid.push(invented_condition);
+    let mut invented_evidence = valid.clone();
+    invented_evidence["edges"][0]["evidence"] = json!("received and validated");
+    invalid.push(invented_evidence);
+    let mut disconnected = valid.clone();
+    disconnected["edges"].as_array_mut().unwrap().pop();
+    invalid.push(disconnected);
+    let mut self_loop = valid.clone();
+    self_loop["edges"][0]["to"] = json!("s0");
+    invalid.push(self_loop);
+    for candidate in invalid {
+        assert!(
+            validate_chart(&candidate.to_string(), ChartKind::Flow, source).is_err(),
+            "Accepted invalid candidate: {candidate}"
+        );
+    }
+    // The validator still accepts arbitrary consistent names: only generation
+    // guidance/schema changed, not the supported graph semantics.
+    assert!(
+        validate_chart(
+            &flow(source, &["received", "validated", "saved"], ""),
+            ChartKind::Flow,
+            source
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn finite_named_steps_preserve_conditional_requirements_and_graph_size_limits() {
+    let source = "If approved, the request is received, validated, and saved.";
+    assert!(
+        validate_chart(
+            &named_step_flow(source, "").to_string(),
+            ChartKind::Flow,
+            source
+        )
+        .is_err()
+    );
+    assert!(
+        validate_chart(
+            &named_step_flow(source, "If approved").to_string(),
+            ChartKind::Flow,
+            source
+        )
+        .is_ok()
+    );
+    let simple = "The request is received, validated, and saved.";
+    let mut too_many_nodes = named_step_flow(simple, "");
+    too_many_nodes["nodes"] = json!(
+        (0..11)
+            .map(|i| json!({"id":format!("s{i}"),"label":"received"}))
+            .collect::<Vec<_>>()
+    );
+    assert!(validate_chart(&too_many_nodes.to_string(), ChartKind::Flow, simple).is_err());
+    let mut too_many_edges = named_step_flow(simple, "");
+    too_many_edges["edges"] = json!(vec![too_many_edges["edges"][0].clone(); 17]);
+    assert!(validate_chart(&too_many_edges.to_string(), ChartKind::Flow, simple).is_err());
+}
+
+#[test]
+fn sole_operation_list_rejects_observed_cycles_and_nonconditional_condition_text() {
+    let source = "The request is received, validated, and saved.";
+    let valid = named_step_flow(source, "");
+    assert!(validate_chart(&valid.to_string(), ChartKind::Flow, source).is_ok());
+    let mut cyclic = valid.clone();
+    cyclic["edges"].as_array_mut().unwrap().push(json!({
+        "from":"s2","to":"s0","evidence":source,"condition":""
+    }));
+    assert!(validate_chart(&cyclic.to_string(), ChartKind::Flow, source).is_err());
+    let mut shortcut = valid.clone();
+    shortcut["edges"].as_array_mut().unwrap().push(json!({
+        "from":"s0","to":"s2","evidence":source,"condition":""
+    }));
+    assert!(validate_chart(&shortcut.to_string(), ChartKind::Flow, source).is_err());
+    for condition in [source, "received", "validated"] {
+        let mut candidate = valid.clone();
+        candidate["edges"][0]["condition"] = json!(condition);
+        assert!(validate_chart(&candidate.to_string(), ChartKind::Flow, source).is_err());
+    }
+    let mut duplicate_label = valid;
+    duplicate_label["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"extra","label":"validated"}));
+    duplicate_label["edges"][1]["from"] = json!("extra");
+    assert!(validate_chart(&duplicate_label.to_string(), ChartKind::Flow, source).is_err());
+    // Names are presentation identifiers, not a new semantic requirement.
+    assert!(
+        validate_chart(
+            &flow(source, &["received", "validated", "saved"], ""),
+            ChartKind::Flow,
+            source
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn sole_operation_constraints_decline_ambiguous_or_partial_source_forms() {
+    for (source, count) in [
+        ("The request is received, validated, and saved.", 3),
+        ("Records are created, checked and stored", 3),
+        ("A library request is queued and reviewed.", 2),
+        (
+            "The event is recorded, processed, delivered, and archived.",
+            4,
+        ),
+    ] {
+        let schema = chart_schema(ChartKind::Flow, source);
+        let edges = &schema["properties"]["edges"];
+        assert_eq!(edges["minItems"], count - 1, "{source}");
+        assert_eq!(edges["maxItems"], count - 1, "{source}");
+        assert_eq!(
+            edges["items"]["properties"]["condition"],
+            json!({"type":"string","enum":[""]})
+        );
+    }
+    for source in [
+        "The patient is tired, bored, and worried.",
+        "The request is received, decorated, and saved.",
+        "The request is not received, validated, and saved.",
+        "If approved, the request is received, validated, and saved.",
+        "The request is received, validated, and saved unless retried.",
+        "The request that is approved is received, validated, and saved.",
+        "The request is received, validated, and saved. A saved request is received again.",
+        "The saved request is received, validated, and saved.",
+        "The request may be received, validated, and saved.",
+        "The iterative request is received, validated, and saved.",
+        "The request is received, validated, and saved!",
+        "The request is received,\nvalidated, and saved.",
+        "The request is received,\u{2028}validated, and saved.",
+        "The request is received, received, and saved.",
+        "The request is RECEIVED, received, and SAVED.",
+        "Request: it is received, validated, and saved.",
+    ] {
+        let schema = chart_schema(ChartKind::Flow, source);
+        let edges = &schema["properties"]["edges"];
+        assert_eq!(edges["minItems"], 1, "Narrowed ambiguous source: {source}");
+        assert_eq!(edges["maxItems"], 16, "Narrowed ambiguous source: {source}");
+        assert_eq!(
+            edges["items"]["properties"]["condition"],
+            json!({"type":"string","maxLength":180}),
+            "{source}"
+        );
+        assert!(
+            !chart_instructions(ChartKind::Flow, source)
+                .contains("For this whole-source operation-list format")
+        );
+    }
+}
+
+#[test]
+fn conditional_multiclause_and_multisentence_cycles_keep_the_general_path() {
+    for (source, forward_condition, back_condition) in [
+        (
+            "The request is received, validated, and saved. A saved request is received again.",
+            "",
+            "",
+        ),
+        (
+            "If approved, the request is received, validated, and saved; if retried, the saved request is received again.",
+            "If approved",
+            "if retried",
+        ),
+    ] {
+        let mut spec = named_step_flow(source, forward_condition);
+        spec["edges"].as_array_mut().unwrap().push(json!({
+            "from":"s2","to":"s0","evidence":source,"condition":back_condition
+        }));
+        assert!(
+            validate_chart(&spec.to_string(), ChartKind::Flow, source).is_ok(),
+            "Rejected existing general flow: {source}"
+        );
+        let schema = chart_schema(ChartKind::Flow, source);
+        assert_eq!(schema["properties"]["edges"]["maxItems"], 16);
+        assert!(
+            schema["properties"]["edges"]["items"]["properties"]["condition"]
+                .get("enum")
+                .is_none()
+        );
+    }
+}
+
 #[test]
 fn schemas_exclude_unknown_fields_and_pin_evidence() {
     let schema = chart_schema(ChartKind::Bar, "$10 and $20");

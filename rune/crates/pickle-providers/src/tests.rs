@@ -428,6 +428,182 @@ async fn local_generation_verifies_metadata_before_streaming() {
 }
 
 #[tokio::test]
+async fn local_text_thinking_control_uses_verified_capability_only() {
+    for (capabilities, thinking_metadata, expected_control) in [
+        // The deployed server may advertise the capability without the newer
+        // top-level thinking metadata. No model-name heuristic is needed.
+        (json!(["completion", "thinking"]), None, true),
+        (json!(["completion"]), None, false),
+        (
+            json!(["completion", "unknown-future-capability"]),
+            None,
+            false,
+        ),
+        // Top-level metadata alone must not override capability gating.
+        (
+            json!(["completion"]),
+            Some(json!({"values":["low","high"],"default":"high"})),
+            false,
+        ),
+    ] {
+        for structured in [false, true] {
+            let content = if structured {
+                r#"{"answer":"Fixed fixture answer."}"#
+            } else {
+                "Fixed fixture answer."
+            };
+            let mut metadata = json!({"details":{"format":"gguf"},"capabilities":capabilities});
+            if let Some(thinking) = &thinking_metadata {
+                metadata["thinking"] = thinking.clone();
+            }
+            let completed = json!({"done":true,"message":{"content":content}});
+            let mut reply = Reply::json(completed);
+            if !structured {
+                reply.mime = "application/x-ndjson";
+                reply.body.push('\n');
+            }
+            let (base, captured) = server(vec![Reply::json(metadata), reply]);
+            let model = if expected_control {
+                "fixture-local-model"
+            } else {
+                "thinking-word-in-name-only"
+            };
+            let provider = OllamaProvider::new(LocalAIConfiguration {
+                address: base.to_string(),
+                model: model.into(),
+                token: String::new(),
+                same_device: true,
+            });
+            let mut request = prompt();
+            request.structured = structured;
+            let schema = json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]});
+            if structured {
+                request.schema = Some(schema.clone());
+            }
+            let expected_system = request.system.clone();
+            let expected_user = request.user.clone();
+            let (sender, _) = unbounded_channel();
+            let result = provider
+                .generate(request, sender, CancellationToken::new())
+                .await
+                .unwrap();
+            assert_eq!(result.text, content);
+            let show = captured.recv().unwrap();
+            assert_eq!(show.path, "/api/show");
+            assert_eq!(show.body, json!({"model":model}));
+            let chat = captured.recv().unwrap();
+            assert_eq!(chat.path, "/api/chat");
+            if expected_control {
+                assert_eq!(chat.body.get("think"), Some(&json!(false)));
+            } else {
+                assert!(
+                    chat.body.get("think").is_none(),
+                    "Non-thinking/unknown capabilities must keep the prior request contract"
+                );
+            }
+            assert_eq!(chat.body["model"], model);
+            assert_eq!(
+                chat.body["messages"],
+                json!([{"role":"system","content":expected_system},{"role":"user","content":expected_user}])
+            );
+            assert_eq!(chat.body["stream"], !structured);
+            assert_eq!(chat.body["keep_alive"], "2m");
+            assert_eq!(
+                chat.body["options"],
+                json!({"num_ctx":8192,"num_predict":1024,"temperature":0.2})
+            );
+            if structured {
+                assert_eq!(chat.body["format"], schema);
+            } else {
+                assert!(chat.body.get("format").is_none());
+            }
+            assert!(
+                captured.try_recv().is_err(),
+                "Capability gating must reuse the existing show response"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_chat_timing_includes_delayed_headers_and_only_streams_report_first_token() {
+    let delay = Duration::from_millis(160);
+    // Cover ordinary streaming, explicitly buffered prose and forced-buffered
+    // structured output through the real HTTP serializer/response reader.
+    for (streaming, structured) in [(true, false), (false, false), (true, true)] {
+        let content = if structured {
+            r#"{"answer":"Fixed fixture answer."}"#
+        } else {
+            "Fixed fixture answer."
+        };
+        let complete = json!({"done":true,"model":"llama3.2:1b","message":{"content":content},"eval_count":2,"prompt_eval_count":5,"load_duration":2_000_000,"eval_duration":80_000_000});
+        let actual_stream = streaming && !structured;
+        let mut reply = if actual_stream {
+            let delta = json!({"done":false,"message":{"content":content}});
+            let mut final_chunk = complete.clone();
+            final_chunk["message"]["content"] = json!("");
+            let mut reply = Reply::stream(&format!("{delta}\n{final_chunk}\n"));
+            reply.mime = "application/x-ndjson";
+            reply
+        } else {
+            Reply::json(complete)
+        };
+        // The fixture sleeps before writing ANY headers. The previous timer
+        // started after open().await and incorrectly measured near-zero here.
+        reply.delay = delay;
+        let (base, captured) = server(vec![
+            Reply::json(json!({"details":{"format":"gguf"},"capabilities":["completion"]})),
+            reply,
+        ]);
+        let provider = OllamaProvider::new(LocalAIConfiguration {
+            address: base.to_string(),
+            model: "llama3.2:1b".into(),
+            token: String::new(),
+            same_device: true,
+        })
+        .with_streaming(streaming);
+        let mut request = prompt();
+        request.structured = structured;
+        let (sender, _) = unbounded_channel();
+        let started = Instant::now();
+        let result = provider
+            .generate(request, sender, CancellationToken::new())
+            .await
+            .unwrap();
+        let client_elapsed = started.elapsed().as_secs_f64();
+        assert_eq!(result.text, content);
+        let timing = result.timing.unwrap();
+        let minimum = delay.as_secs_f64() * 0.8;
+        assert!(
+            timing.total_seconds >= minimum,
+            "Chat timing excluded the pre-header delay: {timing:?}"
+        );
+        assert!(timing.total_seconds < 10.0 && timing.total_seconds <= client_elapsed + 0.1);
+        if actual_stream {
+            let first = timing
+                .first_token_seconds
+                .expect("Streaming content is observable");
+            assert!(
+                first >= minimum && first <= timing.total_seconds,
+                "Streaming first-token timing excluded pre-header delay: {timing:?}"
+            );
+        } else {
+            assert_eq!(
+                timing.first_token_seconds, None,
+                "Buffered JSON cannot establish first-token latency"
+            );
+        }
+        assert_eq!(timing.load_seconds, 0.002);
+        assert_eq!(timing.generation_seconds, 0.08);
+        assert_eq!(timing.output_tokens, 2);
+        assert_eq!(captured.recv().unwrap().path, "/api/show");
+        let chat = captured.recv().unwrap();
+        assert_eq!(chat.path, "/api/chat");
+        assert_eq!(chat.body["stream"], actual_stream);
+    }
+}
+
+#[tokio::test]
 async fn cloud_backed_ollama_metadata_prevents_chat() {
     let (base, captured) = server(vec![Reply::json(
         json!({"details":{"format":"gguf"},"capabilities":["completion"],"remote_host":"cloud.example"}),
