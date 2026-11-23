@@ -1,0 +1,2781 @@
+{
+  "cases": [
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "heading",
+          "level": 2,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Overview"
+            }
+          ],
+          "text": "Overview"
+        },
+        {
+          "depth": 0,
+          "kind": "paragraph",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "First line\nsecond line"
+            }
+          ],
+          "text": "First line\nsecond line"
+        },
+        {
+          "depth": 0,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "•",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Parent\ncontinued"
+            }
+          ],
+          "text": "Parent\ncontinued"
+        },
+        {
+          "depth": 1,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "◦",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Child"
+            }
+          ],
+          "text": "Child"
+        },
+        {
+          "depth": 0,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "•",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Sibling"
+            }
+          ],
+          "text": "Sibling"
+        },
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Quoted\ntext"
+            }
+          ],
+          "text": "Quoted\ntext"
+        },
+        {
+          "depth": 0,
+          "kind": "code",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "let x = 1"
+            }
+          ],
+          "text": "let x = 1"
+        },
+        {
+          "depth": 0,
+          "kind": "code",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "still streaming"
+            }
+          ],
+          "text": "still streaming"
+        }
+      ],
+      "id": "original_block_structure",
+      "plain_text": "Overview\n\nFirst line\nsecond line\n\n• Parent\ncontinued\n  ◦ Child\n• Sibling\n\nQuoted\ntext\n\nlet x = 1\n\nstill streaming",
+      "source": "## Overview ##\nFirst line\nsecond line\n\n- Parent\n  continued\n    * Child\n- Sibling\n\n---\n> Quoted\n> text\n```\nlet x = 1\n```\n```\nstill streaming"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "paragraph",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "The design involves several key components:"
+            }
+          ],
+          "text": "The design involves several key components:"
+        },
+        {
+          "depth": 0,
+          "kind": "numbered",
+          "level": 0,
+          "marker": "1.",
+          "number": "1.",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "Model Inference"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": ": The API will use a large language model."
+            }
+          ],
+          "text": "Model Inference: The API will use a large language model."
+        },
+        {
+          "depth": 0,
+          "kind": "numbered",
+          "level": 0,
+          "marker": "2.",
+          "number": "2.",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "GPU Batching"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": ": The model will be run on a pool of GPUs."
+            }
+          ],
+          "text": "GPU Batching: The model will be run on a pool of GPUs."
+        },
+        {
+          "depth": 0,
+          "kind": "numbered",
+          "level": 0,
+          "marker": "10.",
+          "number": "10.",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Wide markers stay numbered"
+            }
+          ],
+          "text": "Wide markers stay numbered"
+        }
+      ],
+      "id": "original_lists",
+      "plain_text": "The design involves several key components:\n\n1. Model Inference: The API will use a large language model.\n2. GPU Batching: The model will be run on a pool of GPUs.\n10. Wide markers stay numbered",
+      "source": "The design involves several key components:\n\n1.  **Model Inference**: The API will use a large language model.\n2.  **GPU Batching**: The model will be run on a pool of GPUs.\n10) Wide markers stay numbered"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "numbered",
+          "level": 0,
+          "marker": "1.",
+          "number": "1.",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "One"
+            }
+          ],
+          "text": "One"
+        },
+        {
+          "depth": 0,
+          "kind": "numbered",
+          "level": 0,
+          "marker": "7.",
+          "number": "7.",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Seven"
+            }
+          ],
+          "text": "Seven"
+        },
+        {
+          "depth": 0,
+          "kind": "numbered",
+          "level": 0,
+          "marker": "001.",
+          "number": "001.",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Leading zeros"
+            }
+          ],
+          "text": "Leading zeros"
+        }
+      ],
+      "id": "distinct_numbers",
+      "plain_text": "1. One\n7. Seven\n001. Leading zeros",
+      "source": "1. One\n7. Seven\n001) Leading zeros"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "•",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "A"
+            }
+          ],
+          "text": "A"
+        },
+        {
+          "depth": 1,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "◦",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "B"
+            }
+          ],
+          "text": "B"
+        },
+        {
+          "depth": 2,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "◦",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "C"
+            }
+          ],
+          "text": "C"
+        },
+        {
+          "depth": 3,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "◦",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "D"
+            }
+          ],
+          "text": "D"
+        },
+        {
+          "depth": 3,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "◦",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "E"
+            }
+          ],
+          "text": "E"
+        }
+      ],
+      "id": "depth_cap",
+      "plain_text": "• A\n  ◦ B\n    ◦ C\n      ◦ D\n      ◦ E",
+      "source": "- A\n  - B\n    - C\n      - D\n        - E"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "•",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Parent"
+            }
+          ],
+          "text": "Parent"
+        },
+        {
+          "depth": 1,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "◦",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Child"
+            }
+          ],
+          "text": "Child"
+        },
+        {
+          "depth": 0,
+          "kind": "bullet",
+          "level": 0,
+          "marker": "•",
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Sibling"
+            }
+          ],
+          "text": "Sibling"
+        }
+      ],
+      "id": "bullet_forms",
+      "plain_text": "• Parent\n  ◦ Child\n• Sibling",
+      "source": "• Parent\n  – Child\n+ Sibling"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "heading",
+          "level": 2,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Title"
+            }
+          ],
+          "text": "Title"
+        },
+        {
+          "depth": 0,
+          "kind": "paragraph",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "First\nsecond"
+            }
+          ],
+          "text": "First\nsecond"
+        }
+      ],
+      "id": "foundation_whitespace",
+      "plain_text": "Title\n\nFirst\nsecond",
+      "source": "​## Title###​\r\nFirst\r\nsecond"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "paragraph",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "[^name]: is a literal reference"
+            }
+          ],
+          "text": "[^name]: is a literal reference"
+        },
+        {
+          "depth": 0,
+          "kind": "numbered",
+          "level": 0,
+          "marker": "12.",
+          "number": "12.",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Numbered"
+            }
+          ],
+          "text": "Numbered"
+        },
+        {
+          "depth": 0,
+          "kind": "paragraph",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "2024. Ordinary prose"
+            }
+          ],
+          "text": "2024. Ordinary prose"
+        }
+      ],
+      "id": "literal_footnote",
+      "plain_text": "[^name]: is a literal reference\n\n12. Numbered\n\n2024. Ordinary prose",
+      "source": "[^name]: is a literal reference\n\n12. Numbered\n2024. Ordinary prose"
+    },
+    {
+      "blocks": [],
+      "id": "empty",
+      "plain_text": "",
+      "source": ""
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Overview"
+            }
+          ],
+          "text": "Overview"
+        }
+      ],
+      "id": "inline_000",
+      "plain_text": "Overview",
+      "source": "> Overview"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "First line\nsecond line"
+            }
+          ],
+          "text": "First line\nsecond line"
+        }
+      ],
+      "id": "inline_001",
+      "plain_text": "First line\nsecond line",
+      "source": "> First line\n> second line"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Parent\ncontinued"
+            }
+          ],
+          "text": "Parent\ncontinued"
+        }
+      ],
+      "id": "inline_002",
+      "plain_text": "Parent\ncontinued",
+      "source": "> Parent\n> continued"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Quoted\ntext"
+            }
+          ],
+          "text": "Quoted\ntext"
+        }
+      ],
+      "id": "inline_003",
+      "plain_text": "Quoted\ntext",
+      "source": "> Quoted\n> text"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "First\n==="
+            }
+          ],
+          "text": "First\n==="
+        }
+      ],
+      "id": "inline_004",
+      "plain_text": "First\n===",
+      "source": "> First\n> ==="
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "One\n# Literal"
+            }
+          ],
+          "text": "One\n# Literal"
+        }
+      ],
+      "id": "inline_005",
+      "plain_text": "One\n# Literal",
+      "source": "> One\n> # Literal"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "One\n> Nested"
+            }
+          ],
+          "text": "One\n> Nested"
+        }
+      ],
+      "id": "inline_006",
+      "plain_text": "One\n> Nested",
+      "source": "> One\n> > Nested"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "First\n<div>"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "bold"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "</div>"
+            }
+          ],
+          "text": "First\n<div>bold</div>"
+        }
+      ],
+      "id": "inline_007",
+      "plain_text": "First\n<div>bold</div>",
+      "source": "> First\n> <div>**bold**</div>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "x y"
+            }
+          ],
+          "text": "x y"
+        }
+      ],
+      "id": "inline_008",
+      "plain_text": "x y",
+      "source": "> `x\n> y`"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "## Literal"
+            }
+          ],
+          "text": "## Literal"
+        }
+      ],
+      "id": "inline_009",
+      "plain_text": "## Literal",
+      "source": "> ## Literal"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "Use "
+            },
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "snake_case"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": " "
+            },
+            {
+              "code": false,
+              "emphasis": true,
+              "strong": false,
+              "text": "carefully"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": ", see docs, keep <b>tags</b> and **unclosed"
+            }
+          ],
+          "text": "Use snake_case carefully, see docs, keep <b>tags</b> and **unclosed"
+        }
+      ],
+      "id": "inline_010",
+      "plain_text": "Use snake_case carefully, see docs, keep <b>tags</b> and **unclosed",
+      "source": "> Use `snake_case` *carefully*, see [docs](https://example.com), keep <b>tags</b> and **unclosed"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "line\nnext"
+            }
+          ],
+          "text": "line\nnext"
+        }
+      ],
+      "id": "inline_011",
+      "plain_text": "line\nnext",
+      "source": "> line\\\n> next"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a & café *literal*"
+            }
+          ],
+          "text": "a & café *literal*"
+        }
+      ],
+      "id": "inline_012",
+      "plain_text": "a & café *literal*",
+      "source": "> a &amp; café \\*literal\\*"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": true,
+              "strong": true,
+              "text": "both"
+            }
+          ],
+          "text": "both"
+        }
+      ],
+      "id": "inline_013",
+      "plain_text": "both",
+      "source": "> ***both***"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "one\n\ntwo"
+            }
+          ],
+          "text": "one\n\ntwo"
+        }
+      ],
+      "id": "inline_014",
+      "plain_text": "one\n\ntwo",
+      "source": "> one\n> \n> two"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "\nleading and trailing\n"
+            }
+          ],
+          "text": "\nleading and trailing\n"
+        }
+      ],
+      "id": "inline_015",
+      "plain_text": "\nleading and trailing\n",
+      "source": "> \n> leading and trailing\n> "
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "alt"
+            }
+          ],
+          "text": "alt"
+        }
+      ],
+      "id": "inline_016",
+      "plain_text": "alt",
+      "source": "> ![alt](https://example.com)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "bold"
+            }
+          ],
+          "text": "bold"
+        }
+      ],
+      "id": "inline_017",
+      "plain_text": "bold",
+      "source": "> ![**bold**](https://example.com)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "[label][id]\n[id]: https://example.com"
+            }
+          ],
+          "text": "[label][id]\n[id]: https://example.com"
+        }
+      ],
+      "id": "inline_018",
+      "plain_text": "[label][id]\n[id]: https://example.com",
+      "source": "> [label][id]\n> [id]: https://example.com"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "https://example.com"
+            }
+          ],
+          "text": "https://example.com"
+        }
+      ],
+      "id": "inline_019",
+      "plain_text": "https://example.com",
+      "source": "> <https://example.com>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "before\t"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "strong"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "\tafter"
+            }
+          ],
+          "text": "before\tstrong\tafter"
+        }
+      ],
+      "id": "inline_020",
+      "plain_text": "before\tstrong\tafter",
+      "source": "> before\t**strong**\tafter"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": " a  b "
+            }
+          ],
+          "text": " a  b "
+        }
+      ],
+      "id": "inline_021",
+      "plain_text": " a  b ",
+      "source": "> `  a  b  `"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "x"
+            }
+          ],
+          "text": "x"
+        }
+      ],
+      "id": "inline_022",
+      "plain_text": "x",
+      "source": "> `\n> x\n> `"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "  "
+            }
+          ],
+          "text": "  "
+        }
+      ],
+      "id": "inline_023",
+      "plain_text": "  ",
+      "source": "> `\n> \n> `"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "first\nsecond"
+            }
+          ],
+          "text": "first\nsecond"
+        }
+      ],
+      "id": "inline_024",
+      "plain_text": "first\nsecond",
+      "source": "> **first\n> second**"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": true,
+              "strong": false,
+              "text": "first\nsecond"
+            }
+          ],
+          "text": "first\nsecond"
+        }
+      ],
+      "id": "inline_025",
+      "plain_text": "first\nsecond",
+      "source": "> _first\n> second_"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "*x* & "
+            },
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "\\x"
+            }
+          ],
+          "text": "*x* & \\x"
+        }
+      ],
+      "id": "inline_026",
+      "plain_text": "*x* & \\x",
+      "source": "> \\*x\\* &amp; ` \\x `"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "first\n\nsecond"
+            }
+          ],
+          "text": "first\n\nsecond"
+        }
+      ],
+      "id": "inline_027",
+      "plain_text": "first\n\nsecond",
+      "source": "> **first\n> \n> second**"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": true,
+              "strong": false,
+              "text": "first\n\nsecond"
+            }
+          ],
+          "text": "first\n\nsecond"
+        }
+      ],
+      "id": "inline_028",
+      "plain_text": "first\n\nsecond",
+      "source": "> *first\n> \n> second*"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "**\n\n**"
+            }
+          ],
+          "text": "**\n\n**"
+        }
+      ],
+      "id": "inline_029",
+      "plain_text": "**\n\n**",
+      "source": "> **\n> \n> **"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "one\n\n\nthree"
+            }
+          ],
+          "text": "one\n\n\nthree"
+        }
+      ],
+      "id": "inline_030",
+      "plain_text": "one\n\n\nthree",
+      "source": "> one\n> \n> \n> three"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "[x](https://example.com/\n\npath)"
+            }
+          ],
+          "text": "[x](https://example.com/\n\npath)"
+        }
+      ],
+      "id": "inline_031",
+      "plain_text": "[x](https://example.com/\n\npath)",
+      "source": "> [x](https://example.com/\n> \n> path)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "[x](<https://example.com/\n\npath>)"
+            }
+          ],
+          "text": "[x](<https://example.com/\n\npath>)"
+        }
+      ],
+      "id": "inline_032",
+      "plain_text": "[x](<https://example.com/\n\npath>)",
+      "source": "> [x](<https://example.com/\n> \n> path>)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "x"
+            }
+          ],
+          "text": "x"
+        }
+      ],
+      "id": "inline_033",
+      "plain_text": "x",
+      "source": "> [x](https://example.com \"title\n> \n> more\")"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "x"
+            }
+          ],
+          "text": "x"
+        }
+      ],
+      "id": "inline_034",
+      "plain_text": "x",
+      "source": "> [x](https://example.com\n> \n> \"title\")"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "first\n\nlabel"
+            }
+          ],
+          "text": "first\n\nlabel"
+        }
+      ],
+      "id": "inline_035",
+      "plain_text": "first\n\nlabel",
+      "source": "> [first\n> \n> label](https://example.com)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "first\n\nalt"
+            }
+          ],
+          "text": "first\n\nalt"
+        }
+      ],
+      "id": "inline_036",
+      "plain_text": "first\n\nalt",
+      "source": "> ![first\n> \n> alt](https://example.com)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "<b title=\"a\n\nb\">"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "bold"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "</b>"
+            }
+          ],
+          "text": "<b title=\"a\n\nb\">bold</b>"
+        }
+      ],
+      "id": "inline_037",
+      "plain_text": "<b title=\"a\n\nb\">bold</b>",
+      "source": "> <b title=\"a\n> \n> b\">**bold**</b>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "<script>\n\n"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "bold"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "\n\n</script>"
+            }
+          ],
+          "text": "<script>\n\nbold\n\n</script>"
+        }
+      ],
+      "id": "inline_038",
+      "plain_text": "<script>\n\nbold\n\n</script>",
+      "source": "> <script>\n> \n> **bold**\n> \n> </script>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "[x](https://example.com/\npath)"
+            }
+          ],
+          "text": "[x](https://example.com/\npath)"
+        }
+      ],
+      "id": "inline_039",
+      "plain_text": "[x](https://example.com/\npath)",
+      "source": "> [x](https://example.com/\n> path)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "x"
+            }
+          ],
+          "text": "x"
+        }
+      ],
+      "id": "inline_040",
+      "plain_text": "x",
+      "source": "> [x](https://example.com \"title\n> more\")"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "󰀀\n\n󰀀 󰀁"
+            }
+          ],
+          "text": "󰀀\n\n󰀀 󰀁"
+        }
+      ],
+      "id": "inline_041",
+      "plain_text": "󰀀\n\n󰀀 󰀁",
+      "source": "> 󰀀\n> \n> &#983040; &#xF0001;"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "&#xF0000;  󰀁"
+            }
+          ],
+          "text": "&#xF0000;  󰀁"
+        }
+      ],
+      "id": "inline_042",
+      "plain_text": "&#xF0000;  󰀁",
+      "source": "> `&#xF0000;\n> \n> 󰀁`"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "󰀀\n\n󰀁"
+            }
+          ],
+          "text": "󰀀\n\n󰀁"
+        }
+      ],
+      "id": "inline_043",
+      "plain_text": "󰀀\n\n󰀁",
+      "source": "> &#xF0000;\n> \n> &#983041;"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "<https://example.com/\n\nx>"
+            }
+          ],
+          "text": "<https://example.com/\n\nx>"
+        }
+      ],
+      "id": "inline_044",
+      "plain_text": "<https://example.com/\n\nx>",
+      "source": "> <https://example.com/\n> \n> x>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "one\n\n"
+            },
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": true,
+              "text": "two  three"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": " four"
+            }
+          ],
+          "text": "one\n\ntwo  three four"
+        }
+      ],
+      "id": "inline_045",
+      "plain_text": "one\n\ntwo  three four",
+      "source": "> **one\n> \n> `two\n> \n> three` four**"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "run"
+            }
+          ],
+          "text": "run"
+        }
+      ],
+      "id": "inline_046",
+      "plain_text": "run",
+      "source": "> [run](javascript:alert(1))"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "file"
+            }
+          ],
+          "text": "file"
+        }
+      ],
+      "id": "inline_047",
+      "plain_text": "file",
+      "source": "> [file](file:///tmp/synthetic-fixture)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "alt"
+            }
+          ],
+          "text": "alt"
+        }
+      ],
+      "id": "inline_048",
+      "plain_text": "alt",
+      "source": "> ![alt](data:image/png;base64,AA==)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "file:///tmp/synthetic-fixture"
+            }
+          ],
+          "text": "file:///tmp/synthetic-fixture"
+        }
+      ],
+      "id": "inline_049",
+      "plain_text": "file:///tmp/synthetic-fixture",
+      "source": "> <file:///tmp/synthetic-fixture>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "one`two"
+            }
+          ],
+          "text": "one`two"
+        }
+      ],
+      "id": "inline_050",
+      "plain_text": "one`two",
+      "source": "> ``one`two``"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "fence-like"
+            }
+          ],
+          "text": "fence-like"
+        }
+      ],
+      "id": "inline_051",
+      "plain_text": "fence-like",
+      "source": "> ```fence-like```"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "<b>&amp;</b>"
+            }
+          ],
+          "text": "<b>&amp;</b>"
+        }
+      ],
+      "id": "inline_052",
+      "plain_text": "<b>&amp;</b>",
+      "source": "> `<b>&amp;</b>`"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "👩‍💻 "
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "café"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": " "
+            },
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "x_y"
+            }
+          ],
+          "text": "👩‍💻 café x_y"
+        }
+      ],
+      "id": "inline_053",
+      "plain_text": "👩‍💻 café x_y",
+      "source": "> 👩‍💻 **café** `x_y`"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "quoted"
+            }
+          ],
+          "text": "quoted"
+        }
+      ],
+      "id": "inline_054",
+      "plain_text": "quoted",
+      "source": "> [quoted](https://example.com/a(b))"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "<a title=\"`x`\">"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "bold"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "</a>"
+            }
+          ],
+          "text": "<a title=\"`x`\">bold</a>"
+        }
+      ],
+      "id": "inline_055",
+      "plain_text": "<a title=\"`x`\">bold</a>",
+      "source": "> <a title=\"`x`\">**bold**</a>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "� "
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "after"
+            }
+          ],
+          "text": "� after"
+        }
+      ],
+      "id": "inline_056",
+      "plain_text": "� after",
+      "source": "> \u0000 **after**"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "data"
+            }
+          ],
+          "text": "data"
+        }
+      ],
+      "id": "inline_057",
+      "plain_text": "data",
+      "source": "> [data](data:text/plain,fixture)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "https://bücher.example/a%20b"
+            }
+          ],
+          "text": "https://bücher.example/a%20b"
+        }
+      ],
+      "id": "inline_058",
+      "plain_text": "https://bücher.example/a%20b",
+      "source": "> <https://bücher.example/a%20b>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "https://xn--bcher-kva.example/%C3%A9"
+            }
+          ],
+          "text": "https://xn--bcher-kva.example/%C3%A9"
+        }
+      ],
+      "id": "inline_059",
+      "plain_text": "https://xn--bcher-kva.example/%C3%A9",
+      "source": "> <https://xn--bcher-kva.example/%C3%A9>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "mailto:user%2Btag@example.com"
+            }
+          ],
+          "text": "mailto:user%2Btag@example.com"
+        }
+      ],
+      "id": "inline_060",
+      "plain_text": "mailto:user%2Btag@example.com",
+      "source": "> <mailto:user%2Btag@example.com>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "user@example.com"
+            }
+          ],
+          "text": "user@example.com"
+        }
+      ],
+      "id": "inline_061",
+      "plain_text": "user@example.com",
+      "source": "> <user@example.com>"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "removed style"
+            }
+          ],
+          "text": "removed style"
+        }
+      ],
+      "id": "inline_062",
+      "plain_text": "removed style",
+      "source": "> ~~removed style~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "single stays"
+            }
+          ],
+          "text": "single stays"
+        }
+      ],
+      "id": "inline_063",
+      "plain_text": "single stays",
+      "source": "> ~single stays~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "strong"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": " and "
+            },
+            {
+              "code": false,
+              "emphasis": true,
+              "strong": false,
+              "text": "emphasis"
+            }
+          ],
+          "text": "strong and emphasis"
+        }
+      ],
+      "id": "inline_064",
+      "plain_text": "strong and emphasis",
+      "source": "> ~~**strong** and *emphasis*~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~~~triple~~~"
+            }
+          ],
+          "text": "~~~triple~~~"
+        }
+      ],
+      "id": "inline_065",
+      "plain_text": "~~~triple~~~",
+      "source": "> ~~~triple~~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~x~~"
+            }
+          ],
+          "text": "~x~~"
+        }
+      ],
+      "id": "inline_066",
+      "plain_text": "~x~~",
+      "source": "> ~x~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~~x~"
+            }
+          ],
+          "text": "~~x~"
+        }
+      ],
+      "id": "inline_067",
+      "plain_text": "~~x~",
+      "source": "> ~~x~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~~~x~~~"
+            }
+          ],
+          "text": "~~~x~~~"
+        }
+      ],
+      "id": "inline_068",
+      "plain_text": "~~~x~~~",
+      "source": "> ~~~x~~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~~~~x~~~~"
+            }
+          ],
+          "text": "~~~~x~~~~"
+        }
+      ],
+      "id": "inline_069",
+      "plain_text": "~~~~x~~~~",
+      "source": "> ~~~~x~~~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "abc"
+            }
+          ],
+          "text": "abc"
+        }
+      ],
+      "id": "inline_070",
+      "plain_text": "abc",
+      "source": "> a~b~c"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "abc"
+            }
+          ],
+          "text": "abc"
+        }
+      ],
+      "id": "inline_071",
+      "plain_text": "abc",
+      "source": "> a~~b~~c"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "x"
+            }
+          ],
+          "text": "x"
+        }
+      ],
+      "id": "inline_072",
+      "plain_text": "x",
+      "source": "> ~**x**~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "x"
+            }
+          ],
+          "text": "x"
+        }
+      ],
+      "id": "inline_073",
+      "plain_text": "x",
+      "source": "> ~~`x`~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "x\n\ny"
+            }
+          ],
+          "text": "x\n\ny"
+        }
+      ],
+      "id": "inline_074",
+      "plain_text": "x\n\ny",
+      "source": "> ~x\n> \n> y~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~x~"
+            }
+          ],
+          "text": "~x~"
+        }
+      ],
+      "id": "inline_075",
+      "plain_text": "~x~",
+      "source": "> \\~x\\~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~~~"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "x"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~~~"
+            }
+          ],
+          "text": "~~~x~~~"
+        }
+      ],
+      "id": "inline_076",
+      "plain_text": "~~~x~~~",
+      "source": "> ~~~**x**~~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "x~~y"
+            }
+          ],
+          "text": "x~~y"
+        }
+      ],
+      "id": "inline_077",
+      "plain_text": "x~~y",
+      "source": "> ~x~~y~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "x~y"
+            }
+          ],
+          "text": "x~y"
+        }
+      ],
+      "id": "inline_078",
+      "plain_text": "x~y",
+      "source": "> ~~x~y~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~ x~"
+            }
+          ],
+          "text": "~ x~"
+        }
+      ],
+      "id": "inline_079",
+      "plain_text": "~ x~",
+      "source": "> ~ x~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~x ~"
+            }
+          ],
+          "text": "~x ~"
+        }
+      ],
+      "id": "inline_080",
+      "plain_text": "~x ~",
+      "source": "> ~x ~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a **b c**"
+            }
+          ],
+          "text": "a **b c**"
+        }
+      ],
+      "id": "inline_081",
+      "plain_text": "a **b c**",
+      "source": "> ~a **b~ c**"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": true,
+              "text": "a ~b"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": " c~"
+            }
+          ],
+          "text": "a ~b c~"
+        }
+      ],
+      "id": "inline_082",
+      "plain_text": "a ~b c~",
+      "source": "> **a ~b** c~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a b"
+            }
+          ],
+          "text": "a b"
+        }
+      ],
+      "id": "inline_083",
+      "plain_text": "a b",
+      "source": "> ~a [b](https://example.com)~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a"
+            }
+          ],
+          "text": "a"
+        }
+      ],
+      "id": "inline_084",
+      "plain_text": "a",
+      "source": "> [~a~](https://example.com)"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a b c"
+            }
+          ],
+          "text": "a b c"
+        }
+      ],
+      "id": "inline_085",
+      "plain_text": "a b c",
+      "source": "> ~a ~~b~~ c~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a b c"
+            }
+          ],
+          "text": "a b c"
+        }
+      ],
+      "id": "inline_086",
+      "plain_text": "a b c",
+      "source": "> ~~a ~b~ c~~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a "
+            },
+            {
+              "code": true,
+              "emphasis": false,
+              "strong": false,
+              "text": "b~"
+            },
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": " c"
+            }
+          ],
+          "text": "a b~ c"
+        }
+      ],
+      "id": "inline_087",
+      "plain_text": "a b~ c",
+      "source": "> ~a `b~` c~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a <span title=\"~\">b</span> c"
+            }
+          ],
+          "text": "a <span title=\"~\">b</span> c"
+        }
+      ],
+      "id": "inline_088",
+      "plain_text": "a <span title=\"~\">b</span> c",
+      "source": "> ~a <span title=\"~\">b</span> c~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "a~b"
+            }
+          ],
+          "text": "a~b"
+        }
+      ],
+      "id": "inline_089",
+      "plain_text": "a~b",
+      "source": "> ~a\\~b~"
+    },
+    {
+      "blocks": [
+        {
+          "depth": 0,
+          "kind": "quote",
+          "level": 0,
+          "marker": null,
+          "number": "",
+          "runs": [
+            {
+              "code": false,
+              "emphasis": false,
+              "strong": false,
+              "text": "~~~a~~"
+            }
+          ],
+          "text": "~~~a~~"
+        }
+      ],
+      "id": "inline_090",
+      "plain_text": "~~~a~~",
+      "source": "> ~~~a~~"
+    }
+  ],
+  "origin": "Sources/PickleCore/AnswerMarkup.swift and actual Foundation inlineOnlyPreservingWhitespace; synthetic developer fixtures"
+}

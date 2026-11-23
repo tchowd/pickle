@@ -1,3 +1,4 @@
+mod answer_blocks;
 mod charts;
 mod decisions;
 mod markup;
@@ -6,6 +7,7 @@ mod pipeline;
 mod prompt;
 mod text;
 
+pub use answer_blocks::*;
 pub use charts::*;
 pub use decisions::*;
 pub use markup::*;

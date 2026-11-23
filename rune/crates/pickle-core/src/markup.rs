@@ -175,60 +175,7 @@ fn escape_text(text: &str, output: &mut String) {
     }
 }
 
-/// Plain readable copy text from the same supported presentation subset.
+/// Plain readable copy text from the same canonical document as the reader.
 pub fn answer_plain_text(source: &str) -> String {
-    let safe = safe_answer_markup(source);
-    let mut output = String::new();
-    let mut lists: Vec<Option<u64>> = vec![];
-    let mut after_top_level_list = false;
-    for event in Parser::new_ext(&safe, Options::empty()) {
-        let adjacent_list = after_top_level_list;
-        after_top_level_list = false;
-        match event {
-            Event::Start(Tag::List(start)) => {
-                // Separate CommonMark lists retain independent numbering in
-                // the renderer, while readable copy joins adjacent list items
-                // with one newline, as for items within the same list.
-                if lists.is_empty() && adjacent_list && output.ends_with("\n\n") {
-                    output.pop();
-                }
-                lists.push(start);
-            }
-            Event::Start(Tag::Item) => {
-                line_break(&mut output);
-                output.push_str(&"  ".repeat(lists.len().saturating_sub(1)));
-                match lists.last_mut() {
-                    Some(Some(number)) => {
-                        output.push_str(&format!("{number}. "));
-                        *number = number.saturating_add(1);
-                    }
-                    _ => output.push_str(if lists.len() > 1 { "◦ " } else { "• " }),
-                }
-            }
-            Event::Text(text) | Event::Code(text) | Event::Html(text) | Event::InlineHtml(text) => {
-                output.push_str(&text)
-            }
-            Event::SoftBreak | Event::HardBreak => output.push('\n'),
-            Event::End(TagEnd::Paragraph) => {
-                if lists.is_empty() {
-                    blank_line(&mut output);
-                } else {
-                    line_break(&mut output);
-                }
-            }
-            Event::End(TagEnd::Heading(_) | TagEnd::CodeBlock | TagEnd::BlockQuote(_)) => {
-                blank_line(&mut output)
-            }
-            Event::End(TagEnd::List(_)) => {
-                lists.pop();
-                if lists.is_empty() {
-                    blank_line(&mut output);
-                    after_top_level_list = true;
-                }
-            }
-            Event::End(TagEnd::Item) => line_break(&mut output),
-            _ => {}
-        }
-    }
-    output.trim().to_owned()
+    crate::answer_document(source).plain_text()
 }
