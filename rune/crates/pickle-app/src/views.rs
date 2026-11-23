@@ -9,6 +9,9 @@ use rune_kit::{Markdown, MarkdownStyle};
 #[cfg(test)]
 #[path = "reader_scroll_tests.rs"]
 mod reader_scroll_tests;
+#[cfg(test)]
+#[path = "saved_quality_tests.rs"]
+mod saved_quality_tests;
 
 // Rune stores linear RGB. These decode the original Pickle sRGB palette.
 const PAPER: Color = Color {
@@ -1000,6 +1003,16 @@ fn context_tools(s: &AppState) -> El {
             ),
     )
 }
+fn saved_quality(entry: &crate::storage::Entry) -> Option<El> {
+    // Stored labels are historical display text, not a fresh quality judgment.
+    entry.quality.as_ref().map(|quality| {
+        note(quality.clone())
+            .key(format!("entry-quality-{}", entry.id))
+            .w_full()
+            .wrap_anywhere()
+    })
+}
+
 fn library(s: &AppState, bookmark: bool) -> El {
     let entries = if bookmark { &s.bookmarks } else { &s.entries };
     let mut content = col()
@@ -1056,6 +1069,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
                 s.library_selected = None
             }))
             .child(note(format!("{} · {}", entry.app_name, entry.recorded_at)))
+            .children(saved_quality(entry))
             .child(answer(&entry.answer, s.settings.text_size, false))
             .child(
                 section("Original passage")
@@ -1130,6 +1144,7 @@ fn library(s: &AppState, bookmark: bool) -> El {
                 .radius(10.0)
                 .fill(SURFACE)
                 .child(note(format!("{} · {}", entry.app_name, entry.action)))
+                .children(saved_quality(entry))
                 .child(answer(
                     &entry.answer.chars().take(500).collect::<String>(),
                     s.settings.text_size,

@@ -138,7 +138,7 @@ cargo run --locked -p pickle-app -- --scene choosing --snap artifacts/chooser.pn
 cargo run --locked -p pickle-app -- --scene settings --snap artifacts/settings.png
 ```
 
-Seventeen isolated scenes include `chart-bar`, `chart-flow`, `streaming`, `reviewing`, `repairing`, `consent-local`, `consent-online`, `permission-denied`, `history-empty`, `history-damaged`, and `error`. `scripts/check.sh` renders seven representative states. Fixture startup never loads archives, acquires the normal instance lease, or supplies live provider/vault services; native permission, export and reveal actions are guarded. Rendering still needs a supported graphics adapter/backend. State/layout tests and local HTTP fixtures are distinct from actual OS capture, focus, permissions, and screen-reader tests.
+Nineteen isolated scenes include `chart-bar`, `chart-flow`, `streaming`, `reviewing`, `repairing`, `consent-local`, `consent-online`, `permission-denied`, `history-empty`, `history-damaged`, `saved-quality`, `saved-quality-detail`, and `error`. `scripts/check.sh` renders nine representative states. The saved-quality scenes use one fixed synthetic entry to show a retained warning in its card and detail. Fixture startup never loads archives, acquires the normal instance lease, or supplies live provider/vault services; native permission, export and reveal actions are guarded. Rendering still needs a supported graphics adapter/backend. State/layout tests and local HTTP fixtures are distinct from actual OS capture, focus, permissions, and screen-reader tests.
 
 ```sh
 cargo run --locked -p pickle-app -- --capabilities

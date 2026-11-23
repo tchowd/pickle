@@ -28,6 +28,8 @@ pub const SCENES: &[Scene] = &[
     ("permission-denied", permission_denied),
     ("history-empty", empty_history),
     ("history-damaged", damaged_history),
+    ("saved-quality", saved_quality),
+    ("saved-quality-detail", saved_quality_detail),
 ];
 
 /// Normalize common flag spellings before Rune parses value pairs. Classify
@@ -217,6 +219,30 @@ fn damaged_history(state: &mut AppState) {
     state.notice = Some("Fixture: history.json is damaged. Existing data has not been changed. Move the file aside before trying again.".into());
 }
 
+const SAVED_QUALITY_REASON: &str =
+    "the checker was unavailable. Review the original passage before relying on this saved answer.";
+fn saved_quality(state: &mut AppState) {
+    fixture(state, SAMPLE);
+    state.route = Route::Library(true);
+    state.bookmarks.push(crate::storage::Entry {
+        id: uuid::Uuid::from_u128(5).to_string(),
+        recorded_at: "2026-01-01T00:00:00Z".into(),
+        app_name: "Fixed UI fixture".into(),
+        app_id: "fixture".into(),
+        action: "Simplify".into(),
+        question: None,
+        passage: SAMPLE.into(),
+        answer: SAMPLE_ANSWER.into(),
+        quality: QualityStatus::NotChecked(SAVED_QUALITY_REASON.into()).visible_label(),
+        chart: None,
+        reference: None,
+    });
+}
+fn saved_quality_detail(state: &mut AppState) {
+    saved_quality(state);
+    state.library_selected = Some(uuid::Uuid::from_u128(5).to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,7 +291,23 @@ mod tests {
                 "{name}"
             );
             assert!(state.window_geometry_worker.is_none());
-            assert!(state.entries.is_empty() && state.bookmarks.is_empty());
+            assert!(state.entries.is_empty());
+            if matches!(*name, "saved-quality" | "saved-quality-detail") {
+                assert_eq!(state.bookmarks.len(), 1);
+                let entry = &state.bookmarks[0];
+                assert_eq!(entry.id, uuid::Uuid::from_u128(5).to_string());
+                assert_eq!(entry.app_id, "fixture");
+                assert_eq!(entry.recorded_at, "2026-01-01T00:00:00Z");
+                assert_eq!(entry.passage, SAMPLE);
+                assert_eq!(entry.answer, SAMPLE_ANSWER);
+                assert_eq!(
+                    entry.quality,
+                    QualityStatus::NotChecked(SAVED_QUALITY_REASON.into()).visible_label()
+                );
+                assert!(entry.chart.is_none() && entry.reference.is_none());
+            } else {
+                assert!(state.bookmarks.is_empty(), "{name}");
+            }
             assert!(state.credential.text.is_empty(), "{name}");
             assert!(state.credential_operation.is_none());
             let snapshot = state.snapshot.as_ref().unwrap();

@@ -32,3 +32,5 @@ cargo run --locked -p pickle-app -- --scene chart-bar --snap artifacts/chart-bar
 cargo run --locked -p pickle-app -- --scene chart-flow --snap artifacts/chart-flow.png --tree artifacts/chart-flow-tree.json
 cargo run --locked -p pickle-app -- --scene streaming --snap artifacts/streaming.png --tree artifacts/streaming-tree.json
 cargo run --locked -p pickle-app -- --scene consent-online --snap artifacts/consent-online.png --tree artifacts/consent-online-tree.json
+cargo run --locked -p pickle-app -- --scene saved-quality --snap artifacts/saved-quality.png --tree artifacts/saved-quality-tree.json
+cargo run --locked -p pickle-app -- --scene saved-quality-detail --snap artifacts/saved-quality-detail.png --tree artifacts/saved-quality-detail-tree.json
