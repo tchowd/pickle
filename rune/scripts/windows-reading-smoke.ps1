@@ -403,7 +403,7 @@ function Build-PickleReadingFixture([string]$Directory) {
   return $executable
 }
 
-function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration) {
+function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture) {
   if (!$IsWindows) { throw 'Native installed reading acceptance runs only on Windows; no app was launched.' }
   $actualData=Get-PickleReadingDataDirectory
   if (![string]::Equals([IO.Path]::GetFullPath($DataDirectory),[IO.Path]::GetFullPath($actualData),[StringComparison]::OrdinalIgnoreCase)) { throw 'Reading acceptance requires the app actual KnownFolder data directory, not an environment override.' }
@@ -411,7 +411,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
   $work=Join-Path ([IO.Path]::GetTempPath()) ('pickle-reading-'+[guid]::NewGuid().ToString('N'))
   Assert-PickleReadingDirectory $work | Out-Null
   New-Item -ItemType Directory -Path $work | Out-Null
-  $evidence=[ordered]@{schema=1;test='windows-installed-reading-workflow';passed=$false;configuration=$Configuration;driver=$null;restart_driver=$null;server=$null;fixture=$null;application_pid=$null;restart_application_pid=$null;ordinary_exit=$false;lease_released=$false;control_removed=$false;restart_ordinary_exit=$false;restart_lease_released=$false;restart_control_removed=$false;saved_archive_verified=$false;saved_archive_unchanged=$false;profile_restored=$false;owned_children_stopped=$false;owned_processes=[ordered]@{};cleanup_categories=@()}
+  $evidence=[ordered]@{schema=1;test='windows-installed-reading-workflow';passed=$false;configuration=$Configuration;require_window_capture=[bool]$RequireWindowCapture;marker_in_context=$false;driver=$null;restart_driver=$null;server=$null;fixture=$null;application_pid=$null;restart_application_pid=$null;ordinary_exit=$false;lease_released=$false;control_removed=$false;restart_ordinary_exit=$false;restart_lease_released=$false;restart_control_removed=$false;saved_archive_verified=$false;saved_archive_unchanged=$false;profile_restored=$false;owned_children_stopped=$false;owned_processes=[ordered]@{};cleanup_categories=@()}
   $applicationProcess=$null;$restartApplication=$null;$fixture=$null;$server=$null;$driver=$null;$restartDriver=$null;$snapshot=$null;$failure=$null;$stage='prepare'
   try {
     # If the supervising Core owner must be terminated, leave only the private
@@ -430,17 +430,20 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     $stage='start-owned-provider'
     $python=(Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $provider=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'windows-reading-provider.py'))
-    $server=Start-PickleReadingChild $python @($provider,'--contract',$contractPath,'--ready',$serverReady,'--state',$serverState,'--stop-file',$serverStop)
+    $providerArguments=@($provider,'--contract',$contractPath,'--ready',$serverReady,'--state',$serverState,'--stop-file',$serverStop)
+    if ($RequireWindowCapture) { $providerArguments+= '--require-window-capture' }
+    $server=Start-PickleReadingChild $python $providerArguments
     $serverInfo=Wait-PickleReadingReady $server $python $serverReady
     if ($serverInfo.port -lt 1 -or $serverInfo.port -gt 65535) { throw 'Owned provider returned an invalid ephemeral port.' }
     $address='http://127.0.0.1:'+$serverInfo.port
-    $settings=[ordered]@{version=1;data=[ordered]@{mode='Local';local_address=$address;local_model='pickle-reading-fixture:local';same_device=$true;strict_offline=$true;modifier_gesture=$false;shortcut='ctrl+alt+p';automatic_menu=$false;history_enabled=$false;screen_context_enabled=$false;web_context_enabled=$false;jev_enabled=$false;cloud_consent=$false;jev_consent=$false;local_consent='';context_consent_destination='';streaming=$true;transcriber_executable='';transcriber_model='';local_vision_model='';exclusions=@()}}
+    $settings=[ordered]@{version=1;data=[ordered]@{mode='Local';local_address=$address;local_model='pickle-reading-fixture:local';same_device=$true;strict_offline=$true;modifier_gesture=$false;shortcut='ctrl+alt+p';automatic_menu=$false;history_enabled=$false;screen_context_enabled=[bool]$RequireWindowCapture;web_context_enabled=$false;jev_enabled=$false;cloud_consent=$false;jev_consent=$false;local_consent='';context_consent_destination='';streaming=$true;transcriber_executable='';transcriber_model='';local_vision_model='';exclusions=@()}}
     Write-PickleReadingAtomic (Join-Path $DataDirectory 'settings.json') ([Text.UTF8Encoding]::new($false).GetBytes(($settings | ConvertTo-Json -Depth 5)))
     $stage='start-owned-source'
     $fixture=Start-PickleReadingChild $fixtureExe @('fixture','--contract',$contractPath,'--ready',$fixtureReady)
     $fixtureInfo=Wait-PickleReadingReady $fixture $fixtureExe $fixtureReady
+    if ($fixtureInfo.window_marker_painted -isnot [bool] -or !$fixtureInfo.window_marker_painted) { throw 'The owned source did not attest completed paint-only marker rendering.' }
     foreach ($handle in @($fixtureInfo.hwnd,$fixtureInfo.edit_hwnd)) { if ($handle -notmatch '^0x[0-9a-fA-F]{1,16}$' -or [Convert]::ToUInt64($handle.Substring(2),16) -eq 0) { Throw-PickleReadingFailure 'ready-native-handle-invalid' } }
-    $evidence.fixture=[ordered]@{pid=$fixture.Id;hwnd=$fixtureInfo.hwnd;edit_hwnd=$fixtureInfo.edit_hwnd}
+    $evidence.fixture=[ordered]@{pid=$fixture.Id;hwnd=$fixtureInfo.hwnd;edit_hwnd=$fixtureInfo.edit_hwnd;window_marker_painted=$true}
     $stage='drive-installed-reader'
     $applicationProcess=Start-PickleReadingChild $Application @()
     $evidence.application_pid=$applicationProcess.Id
@@ -450,7 +453,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     if (!$driver.WaitForExit(90000) -or $driver.ExitCode -ne 0) { throw 'Owned reading driver failed or exceeded 90 seconds.' }
     $evidence.driver=Read-PickleReadingJson $driverEvidence
     if ($evidence.driver.schema -ne 1 -or $evidence.driver.test -cne 'windows-server-installed-selection-reading' -or $evidence.driver.pid -ne $driver.Id -or $evidence.driver.passed -ne $true) { throw 'Owned reading driver did not attest its checks.' }
-    foreach ($attestation in @('initial_compose_ready','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','completed_answer_verified','source_retained_verified','saved_answer_verified','ordinary_quit_verified')) {
+    foreach ($attestation in @('initial_compose_ready','window_marker_painted','window_marker_absent_from_accessibility','fixture_selection_verified','chooser_source_verified','consent_before_network_verified','provider_source_verified','completed_answer_verified','source_retained_verified','saved_answer_verified','ordinary_quit_verified')) {
       if ($evidence.driver.$attestation -ne $true) { throw 'Owned reading driver omitted a required attestation.' }
     }
     if ($evidence.driver.application_pid -ne $applicationProcess.Id -or $evidence.driver.fixture_pid -ne $fixture.Id -or $evidence.driver.app_exit_code -ne 0 -or $evidence.driver.shortcut_events_inserted -ne 6) { throw 'Owned driver process identity, shortcut delivery or ordinary exit evidence differed.' }
@@ -495,7 +498,8 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
     Assert-PickleReadingOwnedArchives $snapshot
     $evidence.saved_archive_unchanged=$true
     $evidence.server=Read-PickleReadingJson $serverState
-    if ($evidence.server.total_requests -ne 2 -or $evidence.server.show_count -ne 1 -or $evidence.server.chat_count -ne 1 -or $evidence.server.source_verified -ne $true -or $evidence.server.rejected -ne $false) { throw 'Owned provider did not attest the exact source and request contract.' }
+    if ($evidence.server.total_requests -ne 2 -or $evidence.server.show_count -ne 1 -or $evidence.server.chat_count -ne 1 -or $evidence.server.source_verified -ne $true -or $evidence.server.context_verified -isnot [bool] -or !$evidence.server.context_verified -or $evidence.server.window_capture_required -isnot [bool] -or $evidence.server.window_capture_required -ne [bool]$RequireWindowCapture -or $evidence.server.marker_in_context -isnot [bool] -or $evidence.server.marker_in_context -ne [bool]$RequireWindowCapture -or $evidence.server.rejected -ne $false) { throw 'Owned provider did not attest the exact source, expected OCR boundary and request contract.' }
+    $evidence.marker_in_context=[bool]$evidence.server.marker_in_context
   } catch {
     $failure='Installed reading acceptance failed at '+$stage+'.'
     $evidence.failure_stage=$stage

@@ -8,6 +8,7 @@ using System.Linq;
 using System.Threading;
 #if !PICKLE_PREDICATES
 using System.Diagnostics;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -19,6 +20,11 @@ using System.Windows.Forms;
 #endif
 
 public static class ReadingFixturePredicates {
+    public const string PixelMarker="ORCHID";
+    public static bool MarkerAbsent(IEnumerable<string> values) {
+        return values!=null && values.All(value=>value!=null &&
+            value.IndexOf(PixelMarker,StringComparison.OrdinalIgnoreCase)<0);
+    }
     public static string ErrorKind(Exception error) {
         if (error is TypeInitializationException) return "type-initialization";
         if (error is System.DllNotFoundException) return "native-library-unavailable";
@@ -36,6 +42,7 @@ public static class ReadingFixturePredicates {
             value.Length <= max && value.IndexOfAny(new char[] {'\r','\n','\0'}) < 0 &&
             !value.Any(c => Char.IsSurrogate(c) || Char.IsControl(c));
         return line(before,300) && line(selected,200) && line(after,300) && line(answer,300) &&
+            MarkerAbsent(new[]{before,selected,after,answer}) &&
             before != after && selected.Contains("Caf\u00e9") &&
             !selected.Contains(before) && !selected.Contains(after) &&
             !before.Contains(selected) && !after.Contains(selected) &&
@@ -70,6 +77,7 @@ public static class ReadingFixturePredicates {
         if (Contract("BEFORE",chosen+" BEFORE","AFTER","answer")) throw new Exception("sentinel");
         if (Contract("BEFORE "+chosen,chosen,"AFTER","answer")) throw new Exception("ambiguous-selection");
         if (Contract("BEFORE",chosen,"AFTER","answer\nmore")) throw new Exception("multiline");
+        if (Contract("BEFORE",chosen,"AFTER","ORCHID answer")) throw new Exception("marker-in-contract");
         if (!Source(new[]{chosen,"Show full passage"},chosen,"BEFORE","AFTER")) throw new Exception("source");
         foreach (string[] bad in new[]{new[]{"BEFORE "+chosen},new[]{chosen,"AFTER"},new[]{chosen,chosen},new[]{"unexpected"}})
             if (Source(bad,chosen,"BEFORE","AFTER")) throw new Exception("source-negative");
@@ -77,6 +85,9 @@ public static class ReadingFixturePredicates {
             throw new Exception("document");
         if (ErrorKind(new InvalidOperationException("synthetic text must not become a diagnostic")) != "invalid-operation")
             throw new Exception("error-kind");
+        if (!MarkerAbsent(new[]{chosen,"Controlled image region","BEFORE\nAFTER"})) throw new Exception("marker-absence");
+        foreach (string exposed in new[]{"ORCHID","before orchid after","OrChId"})
+            if (MarkerAbsent(new[]{chosen,exposed})) throw new Exception("marker-exposed");
         var saved=new Dictionary<string,object> {{"id","123e4567-e89b-42d3-a456-426614174000"},
             {"recorded_at","2026-11-23T12:00:00Z"},{"app_name","ReadingFixture"},{"app_id",@"windows:c:\owned\ReadingFixture.exe"},
             {"action","Simplify"},{"question",null},{"passage",chosen},{"answer","A controlled answer."},
@@ -113,6 +124,38 @@ public static class ReadingFixtureProgram {
     static string stage="arguments";
     static DateTime overall;
     const int MaxNodes=512;
+    const int MarkerStatusMessage=0x8000+0x51;
+
+    // This word exists only in pixels: never set Text, AccessibleName, a title,
+    // RichEdit contents, clipboard, or an application/provider request field.
+    sealed class MarkerPanel : Panel {
+        public bool Painted;
+        protected override void OnPaint(PaintEventArgs e) {
+            base.OnPaint(e);
+            e.Graphics.Clear(Color.White);
+            using (var font=new Font("Segoe UI",48.0f,FontStyle.Bold,GraphicsUnit.Point)) {
+                Size size=TextRenderer.MeasureText(e.Graphics,ReadingFixturePredicates.PixelMarker,font);
+                if (size.Width>ClientSize.Width || size.Height>ClientSize.Height) Fail("fixture-marker-clipped");
+                TextRenderer.DrawText(e.Graphics,ReadingFixturePredicates.PixelMarker,font,ClientRectangle,
+                    Color.Black,Color.White,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
+            }
+            e.Graphics.Flush(System.Drawing.Drawing2D.FlushIntention.Sync);
+            if (!Native.GdiFlush()) Fail("fixture-marker-flush-failed");
+            Painted=true;
+        }
+    }
+    sealed class MarkerForm : Form {
+        public MarkerPanel Marker;
+        protected override void WndProc(ref Message message) {
+            if (message.Msg==MarkerStatusMessage) {
+                // A bounded boolean-only diagnostic; never disclose the word.
+                message.Result=new IntPtr(Marker!=null && Marker.Painted && Marker.Visible &&
+                    ClientRectangle.Contains(Marker.Bounds) ? 1 : 0);
+                return;
+            }
+            base.WndProc(ref message);
+        }
+    }
 
     [MTAThread]
     public static int Main(string[] args) {
@@ -225,12 +268,20 @@ public static class ReadingFixtureProgram {
                 stage="fixture-visual-styles";
                 Application.EnableVisualStyles();
                 stage="fixture-controls";
-                using (var form=new Form()) using (var edit=new RichTextBox()) {
+                using (var form=new MarkerForm()) using (var edit=new RichTextBox()) using (var marker=new MarkerPanel()) {
                     stage="fixture-content";
-                    form.Text="Pickle controlled selection fixture"; form.Width=720; form.Height=360;
+                    form.Text="Pickle controlled selection fixture"; form.Width=720; form.Height=420;
                     form.StartPosition=FormStartPosition.CenterScreen;
-                    edit.Dock=DockStyle.Fill; edit.Text=contract.Document; edit.HideSelection=false; edit.ReadOnly=true;
+                    edit.Text=contract.Document; edit.HideSelection=false; edit.ReadOnly=true;
                     edit.AccessibleName="Controlled selected passage"; form.Controls.Add(edit);
+                    marker.AccessibleName="Controlled image region"; marker.TabStop=false;
+                    form.Marker=marker; form.Controls.Add(marker);
+                    Action layout=()=> {
+                        const int height=120;
+                        edit.SetBounds(0,0,form.ClientSize.Width,Math.Max(1,form.ClientSize.Height-height));
+                        marker.SetBounds(0,edit.Bottom,form.ClientSize.Width,height);
+                    };
+                    form.ClientSizeChanged+=delegate { layout(); }; layout();
                     // Restore only this fixture's edit on its own STA when the
                     // installed app's initial window has temporarily taken focus.
                     form.Activated+=delegate { if (!form.IsDisposed && !edit.IsDisposed) { form.ActiveControl=edit; edit.Focus(); } };
@@ -241,9 +292,13 @@ public static class ReadingFixtureProgram {
                         int start=edit.Text.IndexOf(contract.Selected,StringComparison.Ordinal);
                         if (start<0) Fail("fixture-selection-unavailable");
                         edit.Select(start,contract.Selected.Length);
+                        stage="fixture-marker-paint";
+                        form.Update(); marker.Invalidate(); marker.Update();
+                        if (!marker.Painted || !marker.Visible || !form.ClientRectangle.Contains(marker.Bounds)) Fail("fixture-marker-not-painted");
                         stage="fixture-ready-write";
                         AtomicJson(ready,new Dictionary<string,object> {
-                            {"pid",Process.GetCurrentProcess().Id},{"hwnd",Hex(form.Handle)},{"edit_hwnd",Hex(edit.Handle)}});
+                            {"pid",Process.GetCurrentProcess().Id},{"hwnd",Hex(form.Handle)},{"edit_hwnd",Hex(edit.Handle)},
+                            {"window_marker_painted",true}});
                         stage="fixture-message-loop";
                     };
                     Application.Run(form);
@@ -316,6 +371,35 @@ public static class ReadingFixtureProgram {
         }
         if (!value.TryGetValue("rejected",out field) || !(field is bool) || (bool)field) Fail("provider-rejected-input");
         if (!value.TryGetValue("source_verified",out field) || !(field is bool) || (bool)field!=complete) Fail("provider-source-unverified");
+        if (!value.TryGetValue("context_verified",out field) || !(field is bool) || (bool)field!=complete) Fail("provider-context-unverified");
+    }
+    static void VerifyPixelMarker(IntPtr fixture,int pid) {
+        stage="source-pixel-marker";
+        if (!Owned(fixture,pid)) Fail("marker-source-not-owned");
+        UIntPtr painted;
+        if (Native.SendMessageTimeout(fixture,MarkerStatusMessage,UIntPtr.Zero,IntPtr.Zero,2,1000,out painted)==IntPtr.Zero ||
+            painted.ToUInt64()!=1) Fail("fixture-marker-not-painted");
+        evidence["window_marker_painted"]=true;
+        var root=Root(fixture,pid);
+        var nodes=root.FindAll(TreeScope.Subtree,Condition.TrueCondition);
+        if (nodes.Count>MaxNodes) Fail("marker-uia-bound-exceeded");
+        var texts=new List<string>(); int total=0;
+        for (int n=0;n<nodes.Count;n++) {
+            var node=nodes[n];
+            if (node.Current.ProcessId!=pid) Fail("marker-uia-not-owned");
+            texts.Add(node.Current.Name);
+            object pattern;
+            if (node.TryGetCurrentPattern(ValuePattern.Pattern,out pattern)) texts.Add(((ValuePattern)pattern).Current.Value);
+            if (node.TryGetCurrentPattern(TextPattern.Pattern,out pattern)) texts.Add(((TextPattern)pattern).DocumentRange.GetText(4097));
+        }
+        var title=new StringBuilder(4097);
+        if (Native.GetWindowText(fixture,title,title.Capacity)>=4096) Fail("marker-title-bound-exceeded");
+        texts.Add(title.ToString());
+        foreach (string text in texts) {
+            if (text==null || text.Length>4096 || (total+=text.Length)>32768) Fail("marker-uia-text-bound-exceeded");
+        }
+        if (!ReadingFixturePredicates.MarkerAbsent(texts)) Fail("pixel-marker-exposed-through-accessibility");
+        evidence["window_marker_absent_from_accessibility"]=true;
     }
     static void SourceOracle(Contract contract,IntPtr fixture,int fixturePid,Process source) {
         int attempts=0;
@@ -514,6 +598,7 @@ public static class ReadingFixtureProgram {
             stage="source-oracle";
             Focus(fixture,fixturePid);
             SourceOracle(contract,fixture,fixturePid,source);
+            VerifyPixelMarker(fixture,fixturePid);
             if (application.HasExited || source.HasExited || !Owned(fixture,fixturePid) || Native.GetForegroundWindow()!=fixture) Fail("source-changed-before-shortcut");
             Server(options["--server-state"],false); evidence["fixture_selection_verified"]=true;
             stage="shortcut";
@@ -565,6 +650,9 @@ public static class ReadingFixtureProgram {
         delegate bool WindowCallback(IntPtr hwnd,IntPtr parameter);
         [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+        [DllImport("gdi32.dll")] public static extern bool GdiFlush();
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd,StringBuilder text,int count);
+        [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hwnd,int message,UIntPtr wparam,IntPtr lparam,uint flags,uint timeout,out UIntPtr result);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint pid);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);

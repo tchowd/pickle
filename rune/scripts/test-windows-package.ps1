@@ -73,9 +73,6 @@ if ($hasIdentity) {
   }
   $ocrResult = Get-Content -Raw $ocrReport | ConvertFrom-Json
   if ($ocrResult.test -cne 'windows-ocr-fixed-fixture' -or $ocrResult.passed -ne $true) { throw 'The installed OCR probe did not return its expected evidence.' }
-  . (Join-Path $PSScriptRoot 'windows-capture-smoke.ps1')
-  & (Join-Path $PSScriptRoot 'test-windows-capture-smoke.ps1')
-  Invoke-PickleWindowCaptureProbe $application (Join-Path $PWD "artifacts/identity-$Configuration-native-smoke-window-capture.json")
 }
 if ($Configuration -eq 'debug') {
   $snapshot = Join-Path $PWD $(if ($hasIdentity) { 'artifacts/identity-installed-reader.png' } else { 'artifacts/unpackaged-installed-reader.png' })
@@ -91,7 +88,12 @@ $uninstaller = Join-Path $testDirectory 'Uninstall.exe'
 $supportRoot = Get-PickleReadingDataDirectory
 Assert-PickleInstalledStartupFailure $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-startup-failure.json") $Configuration
 . (Join-Path $PSScriptRoot 'windows-reading-delegate.ps1')
-Invoke-PickleReadingCore $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json") $Configuration
+Invoke-PickleReadingCore $application $supportRoot (Join-Path $PWD "artifacts/$variant-$Configuration-native-smoke-reading.json") $Configuration -RequireWindowCapture:$hasIdentity
+if ($hasIdentity) {
+  . (Join-Path $PSScriptRoot 'windows-capture-smoke.ps1')
+  & (Join-Path $PSScriptRoot 'test-windows-capture-smoke.ps1')
+  Invoke-PickleWindowCaptureProbe $application (Join-Path $PWD "artifacts/identity-$Configuration-native-smoke-window-capture.json")
+}
 $background = $null
 try {
   $stdout = Join-Path $PWD "artifacts/$variant-$Configuration-native-stdout.log"

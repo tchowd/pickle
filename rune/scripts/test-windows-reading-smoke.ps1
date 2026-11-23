@@ -26,17 +26,21 @@ try {
   }
   $coreStart=New-PickleReadingCoreStart 'C:\Program Files\PowerShell\7\pwsh.exe' 'C:\owned script\reading.ps1' 'C:\owned app\PickleRune.exe' 'C:\owned data\' 'C:\owned evidence\reading.json' 'release'
   if ($coreStart.UseShellExecute -or $coreStart.FileName -cne 'C:\Program Files\PowerShell\7\pwsh.exe' -or $coreStart.Arguments -notlike '*"-Configuration" "release"' -or $coreStart.Arguments -notlike '*"C:\owned data\\"*') { throw 'The reading delegation must preserve its exact executable and named paths without a shell.' }
+  $captureStart=New-PickleReadingCoreStart 'C:\Program Files\PowerShell\7\pwsh.exe' 'C:\owned script\reading.ps1' 'C:\owned app\PickleRune.exe' 'C:\owned data\' 'C:\owned evidence\reading.json' 'release' -RequireWindowCapture
+  if ($coreStart.Arguments -like '*RequireWindowCapture*' -or $captureStart.Arguments -cne ($coreStart.Arguments+' "-RequireWindowCapture"')) { throw 'Only explicitly required window capture may reach the delegated acceptance.' }
   # Exercise the same Arguments transport with only a non-UI, test-owned script.
   $argumentProbe=Join-Path $root 'owned argv probe.ps1';$argumentResult=Join-Path $root 'owned argv result.json'
-  [IO.File]::WriteAllText($argumentProbe,'param([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration); [IO.File]::WriteAllText($EvidencePath,(@($Application,$DataDirectory,$Configuration) | ConvertTo-Json -Compress))')
+  [IO.File]::WriteAllText($argumentProbe,'param([string]$Application,[string]$DataDirectory,[string]$EvidencePath,[string]$Configuration,[switch]$RequireWindowCapture); [IO.File]::WriteAllText($EvidencePath,(@($Application,$DataDirectory,$Configuration,[bool]$RequireWindowCapture) | ConvertTo-Json -Compress))')
   $powerShell=(Get-Process -Id $PID).Path
   $probeApplication='C:\owned Café app\PickleRune.exe';$probeData='C:\owned data\'
-  $argumentProcess=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $argumentProbe $probeApplication $probeData $argumentResult 'release'))
-  try {
-    if (!$argumentProcess.WaitForExit(10000) -or $argumentProcess.ExitCode -ne 0) { throw 'The owned structured-argument transport probe failed.' }
-    $transport=Read-PickleReadingJson $argumentResult
-    if ($transport.Count -ne 3 -or $transport[0] -cne $probeApplication -or $transport[1] -cne $probeData -or $transport[2] -cne 'release') { throw 'The delegate transport changed Unicode, spaces, trailing slashes or configuration.' }
-  } finally { if (!$argumentProcess.HasExited) { $argumentProcess.Kill();$argumentProcess.WaitForExit(10000) | Out-Null };$argumentProcess.Dispose() }
+  foreach ($requireCapture in @($false,$true)) {
+    $argumentProcess=[Diagnostics.Process]::Start((New-PickleReadingCoreStart $powerShell $argumentProbe $probeApplication $probeData $argumentResult 'release' -RequireWindowCapture:$requireCapture))
+    try {
+      if (!$argumentProcess.WaitForExit(10000) -or $argumentProcess.ExitCode -ne 0) { throw 'The owned structured-argument transport probe failed.' }
+      $transport=Read-PickleReadingJson $argumentResult
+      if ($transport.Count -ne 4 -or $transport[0] -cne $probeApplication -or $transport[1] -cne $probeData -or $transport[2] -cne 'release' -or $transport[3] -isnot [bool] -or $transport[3] -ne $requireCapture) { throw 'The delegate transport changed Unicode, spaces, trailing slashes, configuration or the required capture switch.' }
+    } finally { if (!$argumentProcess.HasExited) { $argumentProcess.Kill();$argumentProcess.WaitForExit(10000) | Out-Null };$argumentProcess.Dispose() }
+  }
   $primary='Original controlled startup failure.'
   $cleanup=[ordered]@{cleanup_categories=@()}
   Add-PickleReadingCleanupFailure $cleanup ([ref]$primary) 'fixture-forced-stop'
