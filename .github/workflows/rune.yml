@@ -79,6 +79,7 @@ jobs:
           bash scripts/build-macos.sh debug
           bash scripts/build-macos-fixture.sh
           bash native/macos/tests/run-page-fixture.sh
+          bash native/macos/tests/run-invocation-fixture.sh
       - name: Package Windows development build
         if: runner.os == 'Windows'
         shell: pwsh
@@ -105,6 +106,7 @@ jobs:
             rune/artifacts/notices-*/
             rune/artifacts/*capabilities.json
             rune/artifacts/*version.txt
+            rune/artifacts/*native-*.log
             rune/artifacts/identity-ocr-result.json
             rune/artifacts/windows-runtime-report.json
   optimized-package:
