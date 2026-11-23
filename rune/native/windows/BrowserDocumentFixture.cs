@@ -34,7 +34,7 @@ public sealed class DocumentFixtureForm : Form {
     public RootNode Root;
     public Node MainDocument, FocusedNode;
     public int DocumentReads, NestedReads, EditReads, LinkReads, ForeignChildNavigations,
-        UnanchoredForeignChildNavigations;
+        UnanchoredForeignChildNavigations, RootChildNavigations;
     private int nextId = 100;
     [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr window);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
@@ -61,7 +61,8 @@ public sealed class DocumentFixtureForm : Form {
         return new Node(this,nextId++,ControlType.Document,name,web,value);
     }
     private void BuildTree() {
-        if (Mode.StartsWith("native-",StringComparison.Ordinal)) {
+        if (Mode.StartsWith("native-",StringComparison.Ordinal) &&
+            Mode!="native-helper" && Mode!="native-helper-owner-mismatch") {
             // Rust starts and owns the helper separately, then installs its
             // real Win32 PID/HWND through command6. No provider process spawn.
             FocusedNode=Root; return;
@@ -71,6 +72,9 @@ public sealed class DocumentFixtureForm : Form {
         edit.Add(Document("document-under-edit",true,Expected));
         link.Add(Document("document-under-link",true,Expected));
         if (Mode=="omnibox-only" || Mode=="link-only") {
+            // Focused discovery must retain Edit/Hyperlink boundaries even
+            // when ControlView would omit them and promote their true Doc.
+            if (Mode=="omnibox-only") edit.Control=false; else link.Control=false;
             Root.Add(Mode=="omnibox-only" ? edit : link); FocusedNode=Root; return;
         }
         Root.Add(edit); Root.Add(link);
@@ -79,6 +83,7 @@ public sealed class DocumentFixtureForm : Form {
         MainDocument=Document("fixture-document",web,
             Mode=="wrong-value" ? Changed : Expected);
         MainDocument.Hidden=Mode=="hidden-root";
+        if (Mode=="false-root") MainDocument.Control=false;
         MainDocument.Add(Document("fixture-iframe",true,
             Mode=="wrong-value" || Mode=="false-root" ? Expected : Changed));
         if (Mode=="foreign-pane") {
@@ -100,13 +105,13 @@ public sealed class DocumentFixtureForm : Form {
             wrapper.Add(MainDocument);
             Root.Add(wrapper); FocusedNode=Root; return;
         }
-        if (Mode=="foreign-root") Root.PidOverride=Pid+1;
+        if (Mode=="foreign-root" || Mode=="native-helper-owner-mismatch") Root.PidOverride=Pid+1;
         if (Mode=="wide-root") {
             Root.Children.Clear();
-            // Wider than the existing global 192-node limit. The real
-            // document comes last and must not be read after a bounded walk.
+            // Wider than the existing global 192 retained-node limit. Edit
+            // boundaries remain in focused discovery; no Value may be read.
             for (int index=0;index<193;index++)
-                Root.Add(new Node(this,nextId++,ControlType.Pane,"wide-decoration",false,""));
+                Root.Add(new Node(this,nextId++,ControlType.Edit,"wide-boundary",false,""));
         }
         Root.Add(MainDocument);
         if (Mode=="multiple-roots") Root.Add(Document("fixture-second-root",true,Expected));
@@ -132,6 +137,9 @@ public sealed class DocumentFixtureForm : Form {
     public void RecordForeignChildNavigation(bool unanchored) {
         Interlocked.Increment(ref ForeignChildNavigations);
         if (unanchored) Interlocked.Increment(ref UnanchoredForeignChildNavigations);
+    }
+    public void RecordRootChildNavigation() {
+        Interlocked.Increment(ref RootChildNavigations);
     }
     private void InstallNativeAnchor() {
         string metadata=File.ReadAllText(Entered+".native-anchor");
@@ -196,6 +204,10 @@ public sealed class DocumentFixtureForm : Form {
                 message.Result=new IntPtr(UnanchoredForeignChildNavigations);
                 return;
             }
+            if (command==8) {
+                message.Result=new IntPtr(RootChildNavigations);
+                return;
+            }
             message.Result=new IntPtr(1);
             return;
         }
@@ -212,6 +224,7 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
     public readonly bool Web;
     public string Url;
     public bool Hidden;
+    public bool Control=true;
     public int? PidOverride;
     public IntPtr? HwndOverride;
     public Node Parent;
@@ -239,8 +252,8 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
             return HwndOverride.HasValue ? unchecked((int)HwndOverride.Value.ToInt64()) :
                 Parent==null ? unchecked((int)Owner.Handle.ToInt64()) : 0;
         if (propertyId==AutomationElementIdentifiers.IsControlElementProperty.Id ||
-            propertyId==AutomationElementIdentifiers.IsContentElementProperty.Id ||
-            propertyId==AutomationElementIdentifiers.IsEnabledProperty.Id ||
+            propertyId==AutomationElementIdentifiers.IsContentElementProperty.Id) return Control;
+        if (propertyId==AutomationElementIdentifiers.IsEnabledProperty.Id ||
             propertyId==AutomationElementIdentifiers.IsKeyboardFocusableProperty.Id) return true;
         if (propertyId==AutomationElementIdentifiers.IsOffscreenProperty.Id) return Hidden;
         if (propertyId==AutomationElementIdentifiers.IsPasswordProperty.Id)
@@ -250,6 +263,9 @@ public class Node : IRawElementProviderSimple, IRawElementProviderFragment, IVal
         return null;
     }
     public IRawElementProviderFragment Navigate(NavigateDirection direction) {
+        if (Object.ReferenceEquals(this,Owner.Root) &&
+            (direction==NavigateDirection.FirstChild || direction==NavigateDirection.LastChild))
+            Owner.RecordRootChildNavigation();
         if (PidOverride.HasValue && PidOverride.Value!=Owner.Pid &&
             (direction==NavigateDirection.FirstChild || direction==NavigateDirection.LastChild))
             Owner.RecordForeignChildNavigation(!HwndOverride.HasValue || HwndOverride.Value==IntPtr.Zero);
@@ -289,7 +305,7 @@ public static class BrowserDocumentFixture {
         try {
             if (args.Length!=3) return 2;
             string mode=args[0],ready=args[1],entered=args[2];
-            if (Array.IndexOf(new[]{"stable","wrong-value","false-root","decoys-only","omnibox-only","link-only","multiple-roots","hidden-root","password","slow","foreign-pane","foreign-document-only","foreign-wrapper-main","foreign-root","wide-root","native-helper","native-embedded-anchor","native-outside-anchor","native-sibling-escape","native-owner-mismatch","native-wrong-executable"},mode)<0) return 2;
+            if (Array.IndexOf(new[]{"stable","wrong-value","false-root","decoys-only","omnibox-only","link-only","multiple-roots","hidden-root","password","slow","foreign-pane","foreign-document-only","foreign-wrapper-main","foreign-root","wide-root","native-helper","native-helper-empty","native-helper-owner-mismatch","native-embedded-anchor","native-outside-anchor","native-sibling-escape","native-owner-mismatch","native-wrong-executable"},mode)<0) return 2;
             Application.EnableVisualStyles();
             using (var form=new DocumentFixtureForm(mode,entered)) {
                 var watchdog=new System.Windows.Forms.Timer();

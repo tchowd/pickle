@@ -10,7 +10,7 @@ use ::windows::{
                 OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
                 PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
             },
-            Variant::{VT_BOOL, VariantClear},
+            Variant::{VARIANT, VT_BOOL, VariantClear},
         },
         UI::{Accessibility::*, WindowsAndMessaging::*},
     },
@@ -86,6 +86,38 @@ type AnchorPath = Vec<Rc<NativeAnchor>>;
 struct DocumentBinding {
     element: IUIAutomationElement,
     anchors: AnchorPath,
+    raw_chain: Vec<IUIAutomationElement>,
+}
+struct RawProof {
+    anchors: AnchorPath,
+    chain: Vec<IUIAutomationElement>,
+    document_pid: u32,
+}
+
+fn focused_discovery_walker(
+    ui: &IUIAutomation,
+    source_pid: u32,
+) -> Result<IUIAutomationTreeWalker, PlatformError> {
+    // Preserve every pruning boundary, native anchor and unknown/foreign PID.
+    // Only same-process layout/command nodes may be promoted past. Raw ancestry
+    // is independently proved before and after any document Value is read.
+    let property = |id, value: i32| {
+        unsafe { ui.CreatePropertyCondition(id, &VARIANT::from(value)) }.map_err(|_| unavailable())
+    };
+    let document = property(UIA_ControlTypePropertyId, UIA_DocumentControlTypeId.0)?;
+    let edit = property(UIA_ControlTypePropertyId, UIA_EditControlTypeId.0)?;
+    let link = property(UIA_ControlTypePropertyId, UIA_HyperlinkControlTypeId.0)?;
+    let no_hwnd = property(UIA_NativeWindowHandlePropertyId, 0)?;
+    let native = unsafe { ui.CreateNotCondition(&no_hwnd) }.map_err(|_| unavailable())?;
+    let owned_pid = property(UIA_ProcessIdPropertyId, source_pid as i32)?;
+    let foreign_pid = unsafe { ui.CreateNotCondition(&owned_pid) }.map_err(|_| unavailable())?;
+    let boundary = unsafe { ui.CreateOrCondition(&document, &edit) }.map_err(|_| unavailable())?;
+    let boundary = unsafe { ui.CreateOrCondition(&boundary, &link) }.map_err(|_| unavailable())?;
+    let condition =
+        unsafe { ui.CreateOrCondition(&boundary, &native) }.map_err(|_| unavailable())?;
+    let condition =
+        unsafe { ui.CreateOrCondition(&condition, &foreign_pid) }.map_err(|_| unavailable())?;
+    unsafe { ui.CreateTreeWalker(&condition) }.map_err(|_| unavailable())
 }
 
 // Both hosted fixture types own foreground windows. Serialize their native UI
@@ -210,6 +242,7 @@ struct DocumentReader {
     settings: IUIAutomation2,
     root: IUIAutomationElement,
     walker: IUIAutomationTreeWalker,
+    discovery_walker: IUIAutomationTreeWalker,
     property: UIA_PROPERTY_ID,
     first_document: RefCell<Option<DocumentBinding>>,
     source_executable: PathBuf,
@@ -244,6 +277,8 @@ struct ReaderDiagnostic {
     candidate_native_anchors: usize,
     anchor_revalidations: usize,
     document_pid: u32,
+    raw_ancestry_checks: usize,
+    raw_ancestry_nodes: usize,
 }
 impl DocumentReader {
     fn new(source: &CapturedSelection, cancel: CancellationToken) -> Result<Self, PlatformError> {
@@ -288,12 +323,14 @@ impl DocumentReader {
         }
         .map_err(|_| unavailable())?;
         let walker = unsafe { ui.RawViewWalker() }.map_err(|_| unavailable())?;
+        let discovery_walker = focused_discovery_walker(&ui, source.source_pid)?;
         Ok(Self {
             source: source.clone(),
             ui,
             settings,
             root,
             walker,
+            discovery_walker,
             property: UIA_PROPERTY_ID(property),
             first_document: RefCell::new(None),
             source_executable,
@@ -324,6 +361,8 @@ impl DocumentReader {
                 candidate_native_anchors: 0,
                 anchor_revalidations: 0,
                 document_pid: 0,
+                raw_ancestry_checks: 0,
+                raw_ancestry_nodes: 0,
             }),
         })
     }
@@ -360,7 +399,8 @@ impl DocumentReader {
         serde_json::json!({"stage":value.stage,"elapsed_ms":elapsed.as_millis(),"remaining_ms":remaining.as_millis(),"cancelled":self.cancel.is_cancelled(),"hresult":value.hresult,"nodes":value.nodes,"documents":value.documents,"control_type":value.control_type,"custom_variant_type":value.variant_type,"custom_variant_bool":value.variant_bool,"nullable_navigation_ends":value.nullable_navigation_ends,
             "source_pid":self.source.source_pid,"root_pid":value.root_pid,"node_pid":value.node_pid,"queue_len":value.queue_len,"node_depth":value.node_depth,
             "node_native_hwnd_present":value.node_native_hwnd_present,"node_hwnd_root_matches_source":value.node_hwnd_root_matches_source,"node_hwnd_owner_pid":value.node_hwnd_owner_pid,"node_executable_matches_source":value.node_executable_matches_source,"post_rejection_metadata":value.post_rejection_metadata,"pruned_foreign_native_branches":value.pruned_foreign_native_branches,
-            "anchored_foreign_native_branches":value.anchored_foreign_native_branches,"virtual_nodes_using_path_anchor":value.virtual_nodes_using_path_anchor,"candidate_native_anchors":value.candidate_native_anchors,"anchor_revalidations":value.anchor_revalidations,"document_pid":value.document_pid})
+            "anchored_foreign_native_branches":value.anchored_foreign_native_branches,"virtual_nodes_using_path_anchor":value.virtual_nodes_using_path_anchor,"candidate_native_anchors":value.candidate_native_anchors,"anchor_revalidations":value.anchor_revalidations,"document_pid":value.document_pid,
+            "filtered_discovery":true,"raw_ancestry_checks":value.raw_ancestry_checks,"raw_ancestry_nodes":value.raw_ancestry_nodes})
     }
     #[cfg(test)]
     fn record_rejected_node(&self, node: &IUIAutomationElement, pid: i32, branch: NativeBranch) {
@@ -562,6 +602,172 @@ impl DocumentReader {
         }
         self.check()
     }
+    fn qualify_node(
+        &self,
+        node: &IUIAutomationElement,
+        node_pid: i32,
+        anchors: &mut AnchorPath,
+        pid_stage: &'static str,
+    ) -> Result<bool, PlatformError> {
+        if node_pid as u32 == self.source.source_pid {
+            return Ok(true);
+        }
+        let branch = self.native_branch(node)?;
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.node_native_hwnd_present = Some(branch.window != 0);
+            value.node_hwnd_owner_pid = branch.owner;
+            value.node_hwnd_root_matches_source =
+                (branch.root != 0).then_some(Some(branch.root) == self.source.source_window);
+            value
+        });
+        if foreign_branch_is_outside(self.source.source_window.unwrap_or(0), node_pid, branch) {
+            return Ok(false);
+        }
+        if branch.window != 0 {
+            self.bind_anchor(node_pid, branch, anchors)?;
+        } else if pid_is_path_bound(
+            self.source.source_pid,
+            node_pid,
+            anchors.iter().map(|anchor| anchor.key.pid),
+        ) {
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.virtual_nodes_using_path_anchor += 1;
+                value
+            });
+        } else {
+            self.stage(pid_stage);
+            #[cfg(test)]
+            self.record_rejected_node(node, node_pid, branch);
+            return Err(unavailable());
+        }
+        Ok(true)
+    }
+    fn raw_proof(&self, document: &IUIAutomationElement) -> Result<RawProof, PlatformError> {
+        #[cfg(test)]
+        self.diagnostic.update(|mut value| {
+            value.raw_ancestry_checks += 1;
+            value.raw_ancestry_nodes = 0;
+            value
+        });
+        let mut chain = Vec::new();
+        let mut current = document.clone();
+        let mut reached = false;
+        for _ in 0..16 {
+            self.stage("raw-ancestry-root");
+            self.check()?;
+            if self.same(&current, &self.root)? {
+                reached = true;
+                break;
+            }
+            chain.push(current.clone());
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.raw_ancestry_nodes = chain.len();
+                value
+            });
+            self.stage("raw-ancestry-parent");
+            self.check()?;
+            current = self.rpc(unsafe { self.walker.GetParentElement(&current) })?;
+        }
+        if !reached {
+            self.stage("raw-ancestry-limit");
+            return Err(unavailable());
+        }
+        self.stage("raw-ancestry-root");
+        self.check()?;
+        if self.rpc(unsafe { current.CurrentProcessId() })? as u32 != self.source.source_pid {
+            return Err(unavailable());
+        }
+        let mut anchors = AnchorPath::new();
+        let mut document_pid = 0;
+        // Rebuild ownership top-down. Filtered discovery may have promoted a
+        // descendant past omitted wrappers; those wrappers remain mandatory
+        // parts of this raw proof, never a global PID allowlist.
+        for (index, node) in chain.iter().enumerate().rev() {
+            self.stage("raw-ancestry-pid");
+            self.check()?;
+            let pid = self.rpc(unsafe { node.CurrentProcessId() })?;
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.node_pid = pid;
+                value
+            });
+            if !self.qualify_node(node, pid, &mut anchors, "raw-ancestry-pid")? {
+                self.stage("raw-ancestry-pid");
+                return Err(unavailable());
+            }
+            self.stage("raw-ancestry-boundary");
+            self.check()?;
+            let control = self.rpc(unsafe { node.CurrentControlType() })?;
+            #[cfg(test)]
+            self.diagnostic.update(|mut value| {
+                value.control_type = control.0;
+                value
+            });
+            if index != 0
+                && [
+                    UIA_DocumentControlTypeId,
+                    UIA_EditControlTypeId,
+                    UIA_HyperlinkControlTypeId,
+                ]
+                .contains(&control)
+            {
+                return Err(unavailable());
+            }
+            if index == 0 {
+                if control != UIA_DocumentControlTypeId || !self.web_root(node)? {
+                    return Err(unavailable());
+                }
+                self.check()?;
+                if self.rpc(unsafe { node.CurrentIsOffscreen() })?.as_bool() {
+                    return Err(unavailable());
+                }
+                document_pid = pid as u32;
+            }
+        }
+        if chain.is_empty() {
+            // A native root can itself be a Document. Its process was checked
+            // above and it still needs the same document role/marker proof.
+            self.stage("raw-ancestry-boundary");
+            self.check()?;
+            if self.rpc(unsafe { document.CurrentControlType() })? != UIA_DocumentControlTypeId
+                || !self.web_root(document)?
+            {
+                return Err(unavailable());
+            }
+            self.check()?;
+            if self
+                .rpc(unsafe { document.CurrentIsOffscreen() })?
+                .as_bool()
+            {
+                return Err(unavailable());
+            }
+            document_pid = self.source.source_pid;
+        }
+        self.validate_path(&anchors)?;
+        Ok(RawProof {
+            anchors,
+            chain,
+            document_pid,
+        })
+    }
+    fn same_chain(
+        &self,
+        before: &[IUIAutomationElement],
+        now: &[IUIAutomationElement],
+    ) -> Result<bool, PlatformError> {
+        if before.len() != now.len() {
+            return Ok(false);
+        }
+        for (before, now) in before.iter().zip(now) {
+            if !self.same(before, now)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
     fn check(&self) -> Result<(), PlatformError> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         if self.cancel.is_cancelled() || remaining.is_zero() {
@@ -589,7 +795,7 @@ impl DocumentReader {
         element: &IUIAutomationElement,
         first_child: bool,
     ) -> Result<Option<IUIAutomationElement>, PlatformError> {
-        let walker = Interface::vtable(&self.walker);
+        let walker = Interface::vtable(&self.discovery_walker);
         let getter = if first_child {
             walker.GetFirstChildElement
         } else {
@@ -598,7 +804,7 @@ impl DocumentReader {
         let result = unsafe {
             nullable_automation_element(|output| {
                 getter(
-                    Interface::as_raw(&self.walker),
+                    Interface::as_raw(&self.discovery_walker),
                     Interface::as_raw(element),
                     output,
                 )
@@ -723,51 +929,15 @@ impl DocumentReader {
                 value.node_pid = node_pid;
                 value
             });
-            if node_pid as u32 != self.source.source_pid {
-                let branch = self.native_branch(&node)?;
+            if !self.qualify_node(&node, node_pid, &mut anchors, "traversal-pid")? {
                 #[cfg(test)]
                 self.diagnostic.update(|mut value| {
-                    value.node_native_hwnd_present = Some(branch.window != 0);
-                    value.node_hwnd_owner_pid = branch.owner;
-                    value.node_hwnd_root_matches_source = (branch.root != 0)
-                        .then_some(Some(branch.root) == self.source.source_window);
+                    value.pruned_foreign_native_branches += 1;
                     value
                 });
-                if foreign_branch_is_outside(
-                    self.source.source_window.unwrap_or(0),
-                    node_pid,
-                    branch,
-                ) {
-                    #[cfg(test)]
-                    self.diagnostic.update(|mut value| {
-                        value.pruned_foreign_native_branches += 1;
-                        value
-                    });
-                    // A different OS top-level window is outside this capture.
-                    // Do not read its Value or navigate any of its children.
-                    // WGC's IncludeSecondaryWindows defaults false; this app
-                    // does not enable it when capturing the exact source HWND.
-                    // https://learn.microsoft.com/uwp/api/windows.graphics.capture.graphicscapturesession.includesecondarywindows
-                    continue;
-                }
-                if branch.window != 0 {
-                    self.bind_anchor(node_pid, branch, &mut anchors)?;
-                } else if pid_is_path_bound(
-                    self.source.source_pid,
-                    node_pid,
-                    anchors.iter().map(|anchor| anchor.key.pid),
-                ) {
-                    #[cfg(test)]
-                    self.diagnostic.update(|mut value| {
-                        value.virtual_nodes_using_path_anchor += 1;
-                        value
-                    });
-                } else {
-                    self.stage("traversal-pid");
-                    #[cfg(test)]
-                    self.record_rejected_node(&node, node_pid, branch);
-                    return Err(unavailable());
-                }
+                // Separate OS top-level windows are outside this exact HWND
+                // capture (WGC IncludeSecondaryWindows remains default false).
+                continue;
             }
             self.check()?;
             self.stage("traversal-control-type");
@@ -821,7 +991,23 @@ impl DocumentReader {
         if documents.len() != 1 {
             return Err(unavailable());
         }
-        let (document, anchors, document_pid) = documents.pop().ok_or_else(unavailable)?;
+        let (document, discovered_anchors, _) = documents.pop().ok_or_else(unavailable)?;
+        let proof = self.raw_proof(&document)?;
+        // Discovery's anchors must also occur on the actual raw path, in order.
+        // Additional raw anchors are independently validated by raw_proof.
+        let mut raw_anchors = proof.anchors.iter();
+        for discovered in &discovered_anchors {
+            if !raw_anchors.any(|anchor| anchor.key == discovered.key) {
+                self.stage("raw-ancestry-anchor-path");
+                return Err(unavailable());
+            }
+        }
+        self.validate_path(&discovered_anchors)?;
+        let RawProof {
+            anchors,
+            chain: raw_chain,
+            document_pid,
+        } = proof;
         #[cfg(test)]
         self.diagnostic.update(|mut value| {
             value.candidate_native_anchors = anchors.len();
@@ -840,7 +1026,8 @@ impl DocumentReader {
                         .anchors
                         .iter()
                         .zip(&anchors)
-                        .all(|(before, now)| before.key == now.key))
+                        .all(|(before, now)| before.key == now.key)
+                    || !self.same_chain(&first.raw_chain, &raw_chain)?)
             {
                 return Err(unavailable());
             }
@@ -862,6 +1049,19 @@ impl DocumentReader {
         self.stage("document-value-read");
         let value = self.rpc(unsafe { pattern.CurrentValue() })?;
         self.validate_path(&anchors)?;
+        let after = self.raw_proof(&document)?;
+        self.stage("raw-ancestry-identity");
+        if after.document_pid != document_pid
+            || after.anchors.len() != anchors.len()
+            || !after
+                .anchors
+                .iter()
+                .zip(&anchors)
+                .all(|(now, before)| now.key == before.key)
+            || !self.same_chain(&raw_chain, &after.chain)?
+        {
+            return Err(unavailable());
+        }
         self.stage("document-url-bound");
         if value.len() > 4096 {
             return Err(unavailable());
@@ -876,6 +1076,7 @@ impl DocumentReader {
             *self.first_document.borrow_mut() = Some(DocumentBinding {
                 element: document,
                 anchors,
+                raw_chain,
             });
         }
         self.stage("observation-complete");

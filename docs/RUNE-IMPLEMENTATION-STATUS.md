@@ -10,6 +10,8 @@ The repository now contains a substantial Rust/Rune application, native adapters
 
 The follow-up at `9bb7efb`, [run 45189825927](https://github.com/tchowd/pickle/actions/runs/45189825927), preserves strict rejection for embedded/unknown foreign processes and only prunes native windows proven to have a separate top-level root. Actual Chrome still failed: its pane is genuinely inside the source window, with UIA PID matching the native HWND owner. All five new synthetic refusal/width cases passed with zero Value/capture/foreign-descendant reads; the Windows platform suite passed 54 tests and failed the real-browser test. Both Mac jobs passed. Supporting this layout requires explicit validation of embedded process/window/executable relationships along each document ancestry path; no compatibility pass is claimed from matching executable paths alone.
 
+Embedded-process source `0b258ab`, [run 45192593691](https://github.com/tchowd/pickle/actions/runs/45192593691), establishes Chrome's native anchor but still fails the document check because its stable raw graph exceeds node 192. The synthetic embedded-child check also fails: Windows selects the real child provider, whose initial fixture graph was empty. Windows platform results are **55 passed, two failed**. These are explicit unresolved failures; a retry alone cannot fix the now-observed persistent graph-width problem. The next investigation narrows discovery while retaining all document/field/link/native-window boundaries and independently proving raw ancestry before any Value read, and changes the fixture to use the real helper provider's document. The local Mac candidate remains frozen at the fully green `f044617` checkpoint.
+
 ## 1. How to read this report
 
 | Status | Meaning |

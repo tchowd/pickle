@@ -104,6 +104,14 @@ impl Trace {
             "document_pid",
             "node_hwnd_owner_pid",
             "node_executable_matches_source",
+            "helper_document_reads",
+            "helper_nested_reads",
+            "helper_edit_reads",
+            "helper_link_reads",
+            "helper_root_child_navigation_delta",
+            "raw_ancestry_checks",
+            "raw_ancestry_nodes",
+            "filtered_discovery",
         ] {
             if let Some(value) = values
                 .get(key)
@@ -536,6 +544,16 @@ fn owned_native_document_provider() {
             "No omnibox/edit Value may be read"
         );
         assert_eq!((counts >> 24) & 0xff, 0, "No hyperlink Value may be read");
+        if matches!(mode, "false-root" | "omnibox-only" | "link-only") {
+            assert!(
+                outcome.diagnostics.iter().any(|observation| {
+                    observation.stage == "document-count"
+                        && observation.values["documents"].as_u64() == Some(0)
+                        && observation.values["filtered_discovery"] == true
+                }),
+                "{mode}: focused discovery must retain non-ControlView boundaries"
+            );
+        }
         if success {
             assert!(
                 counts & 0xff >= 3,
@@ -562,10 +580,9 @@ fn owned_native_document_provider() {
                 "ownership-branch-counters",
                 serde_json::json!({"foreign_child_navigations":child_navigations}),
             );
-            assert_eq!(
-                child_navigations, 0,
-                "{mode}: a foreign branch must not enumerate descendants"
-            );
+            // Foreign/unknown PID nodes are retained by focused discovery,
+            // even when generic same-PID Pane wrappers are filtered out.
+            assert_eq!(child_navigations, 0, "{mode}: no foreign descendants");
             let observed_boundary = if mode == "wide-root" {
                 outcome.diagnostics.iter().any(|observation| {
                     observation.stage == "traversal-node-limit"
@@ -596,8 +613,8 @@ fn owned_native_document_provider() {
 
     // Synthetic provider graph, backed by a genuinely separate owned process/
     // window. All but the explicit wrong-executable case use the same canonical
-    // EXE. This proves anchor checks, not a real browser or native cross-process
-    // UIA provider implementation.
+    // EXE. UIA resolves the real helper HWND's provider, whose counters must
+    // prove the cross-process reads. This remains synthetic, not a browser.
     let mut native_anchor_cases = vec![];
     {
         // Keep each trace bounded without starving later anchor failures of
@@ -629,8 +646,14 @@ fn owned_native_document_provider() {
             } else {
                 executable.clone()
             };
-            let helper =
-                Fixture::launch(&helper_executable, directory.path(), "native-helper", case);
+            let helper_mode = match mode {
+                // An empty anchored branch is required: a global PID leak
+                // would then expose exactly the separate fake sibling Doc.
+                "native-sibling-escape" => "native-helper-empty",
+                "native-owner-mismatch" => "native-helper-owner-mismatch",
+                _ => "native-helper",
+            };
+            let helper = Fixture::launch(&helper_executable, directory.path(), helper_mode, case);
             case += 1;
             assert_ne!(fixture.source.source_pid, helper.source.source_pid);
             let same_executable = fixture.source.app_id == helper.source.app_id;
@@ -684,6 +707,7 @@ fn owned_native_document_provider() {
                 assert!(focused.elapsed() < Duration::from_secs(2));
                 std::thread::sleep(Duration::from_millis(20));
             }
+            let helper_navigations_before = helper.command(8).unwrap();
             trace.step(mode, "observing");
             let outcome = verify(fixture.source.clone(), "stable").unwrap();
             for observation in &outcome.diagnostics {
@@ -692,24 +716,58 @@ fn owned_native_document_provider() {
             let counts = fixture.command(3).unwrap();
             let child_navigations = fixture.command(5).unwrap();
             let unanchored_navigations = fixture.command(7).unwrap();
-            trace.metadata("native-anchor-counters",serde_json::json!({"accepted":outcome.accepted,"capture_count":outcome.captures,"document_reads":counts&0xff,"nested_reads":(counts>>8)&0xff,"foreign_child_navigations":child_navigations,"unanchored_foreign_child_navigations":unanchored_navigations}));
+            let helper_counts = helper.command(3).unwrap();
+            let helper_navigation_delta = helper
+                .command(8)
+                .unwrap()
+                .checked_sub(helper_navigations_before)
+                .unwrap();
+            trace.metadata("native-anchor-counters",serde_json::json!({"accepted":outcome.accepted,"capture_count":outcome.captures,"document_reads":counts&0xff,"nested_reads":(counts>>8)&0xff,"foreign_child_navigations":child_navigations,"unanchored_foreign_child_navigations":unanchored_navigations,"helper_document_reads":helper_counts&0xff,"helper_nested_reads":(helper_counts>>8)&0xff,"helper_edit_reads":(helper_counts>>16)&0xff,"helper_link_reads":(helper_counts>>24)&0xff,"helper_root_child_navigation_delta":helper_navigation_delta}));
             let success = matches!(mode, "native-embedded-anchor" | "native-outside-anchor");
             assert_eq!(outcome.accepted, success, "{mode}");
             assert_eq!(outcome.captures, usize::from(success), "{mode}");
             assert_eq!((counts >> 8) & 0xff, 0, "{mode}: no decoy Document Value");
             assert_eq!((counts >> 16) & 0xff, 0);
             assert_eq!((counts >> 24) & 0xff, 0);
+            assert_eq!(
+                (helper_counts >> 8) & 0xff,
+                0,
+                "No helper iframe/decoy Value"
+            );
+            assert_eq!((helper_counts >> 16) & 0xff, 0, "No helper edit Value");
+            assert_eq!((helper_counts >> 24) & 0xff, 0, "No helper hyperlink Value");
             if success {
                 assert_eq!(outcome.reads, 3);
-                assert!(counts & 0xff >= 3, "{mode}: first/pre/post Value reads");
-            } else {
-                assert_eq!(counts & 0xff, 0, "{mode}: refusal before main Value");
+                assert!(outcome.diagnostics.iter().all(|observation| {
+                    observation.values["filtered_discovery"] == true
+                        && observation.values["raw_ancestry_checks"]
+                            .as_u64()
+                            .is_some_and(|count| count > 0)
+                }));
             }
+            assert_eq!(
+                counts & 0xff,
+                if mode == "native-outside-anchor" {
+                    3
+                } else {
+                    0
+                },
+                "{mode}: only the outside-anchor case may read the source main Doc"
+            );
+            assert_eq!(
+                helper_counts & 0xff,
+                if mode == "native-embedded-anchor" {
+                    3
+                } else {
+                    0
+                },
+                "{mode}: only the embedded anchor may read the actual helper Doc"
+            );
             match mode {
                 "native-embedded-anchor" => {
                     assert!(
-                        child_navigations >= 3,
-                        "Native anchor descendants traversed"
+                        helper_navigation_delta >= 1,
+                        "Actual helper provider traversed"
                     );
                     assert!(outcome.diagnostics.iter().all(|observation| {
                         observation.values["anchored_foreign_native_branches"]
@@ -718,7 +776,9 @@ fn owned_native_document_provider() {
                             && observation.values["virtual_nodes_using_path_anchor"]
                                 .as_u64()
                                 .is_some_and(|count| count > 0)
-                            && observation.values["candidate_native_anchors"].as_u64() == Some(1)
+                            && observation.values["candidate_native_anchors"]
+                                .as_u64()
+                                .is_some_and(|count| count >= 1)
                             && observation.values["anchor_revalidations"]
                                 .as_u64()
                                 .is_some_and(|count| count >= 2)
@@ -735,17 +795,14 @@ fn owned_native_document_provider() {
                     }));
                 }
                 "native-sibling-escape" => {
-                    assert!(
-                        child_navigations > 0,
-                        "Earlier valid native anchor was reached"
-                    );
                     assert_eq!(
                         unanchored_navigations, 0,
                         "Sibling cannot borrow anchor PID"
                     );
                     assert!(outcome.diagnostics.iter().any(|observation| {
-                        observation.values["node_pid"].as_u64()
-                            == Some(u64::from(helper.source.source_pid))
+                        observation.stage == "traversal-pid"
+                            && observation.values["node_pid"].as_u64()
+                                == Some(u64::from(helper.source.source_pid))
                             && observation.values["anchored_foreign_native_branches"]
                                 .as_u64()
                                 .is_some_and(|count| count > 0)
@@ -794,7 +851,7 @@ fn owned_native_document_provider() {
             helper.close();
             fixture.close();
             trace.step(mode, "closed");
-            native_anchor_cases.push(serde_json::json!({"mode":mode,"accepted":outcome.accepted,"capture_count":outcome.captures,"document_reads":counts&0xff,"nested_reads":(counts>>8)&0xff,"foreign_child_navigations":child_navigations,"unanchored_foreign_child_navigations":unanchored_navigations,"distinct_owned_pid_observed":true,"canonical_same_executable_observed":same_executable,"canonical_different_executable_path_observed":!same_executable,"native_hwnd_owner_observed":true,"native_root_matches_source":embedded,"helper_and_source_closed":true}));
+            native_anchor_cases.push(serde_json::json!({"mode":mode,"accepted":outcome.accepted,"capture_count":outcome.captures,"source_document_reads":counts&0xff,"source_nested_reads":(counts>>8)&0xff,"source_foreign_child_navigations":child_navigations,"source_unanchored_foreign_child_navigations":unanchored_navigations,"helper_document_reads":helper_counts&0xff,"helper_nested_reads":(helper_counts>>8)&0xff,"helper_root_child_navigation_delta":helper_navigation_delta,"actual_helper_provider_counters_checked":true,"distinct_owned_pid_observed":true,"canonical_same_executable_observed":same_executable,"canonical_different_executable_path_observed":!same_executable,"native_hwnd_owner_observed":true,"native_root_matches_source":embedded,"helper_and_source_closed":true}));
         }
     }
 
@@ -883,12 +940,14 @@ fn owned_native_document_provider() {
         "successful_null_navigation_observed":true,
         "root_document_value_exact_url":true,"document_name_decoy_ignored":true,
         "false_root_subtree_rejected":true,"iframe_values_not_read":true,
+        "noncontrol_document_edit_hyperlink_boundaries_retained":true,
         "omnibox_values_not_read":true,"hyperlink_values_not_read":true,
         "multiple_and_hidden_roots_rejected":true,"password_focus_rejected":true,
         "navigation_before_capture_rejected":true,"navigation_after_capture_discards_result":true,
         "document_identity_change_rejected":true,"provider_timeout_bounded":true,
         "virtual_foreign_pid_cases":ownership_cases,"virtual_foreign_pid_is_not_real_external_process":true,
-        "foreign_unknown_owner_branches_refused_without_value_or_descendant_reads":true,
+        "foreign_unknown_owner_branches_refused_before_document_value":true,
+        "virtual_foreign_pid_boundaries_retained_without_descendant_navigation":true,
         "wide_tree_limit_refused_before_document_value":true,
         "synthetic_provider_real_owned_native_anchor_cases":native_anchor_cases,
         "provider_timeout_ms":provider_timeout_ms,"outer_timeout_ms":outer_timeout_ms,
