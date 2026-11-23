@@ -31,6 +31,10 @@ mod recorded_intent_tests;
 #[path = "recorded_privacy_tests.rs"]
 mod recorded_privacy_tests;
 
+#[cfg(test)]
+#[path = "recorded_quality_tests.rs"]
+mod recorded_quality_tests;
+
 #[path = "library_controller.rs"]
 pub(crate) mod library_controller;
 

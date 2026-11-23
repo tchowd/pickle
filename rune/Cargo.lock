@@ -2971,6 +2971,7 @@ dependencies = [
 name = "pickle-app"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "directories",
  "ed25519-dalek",
