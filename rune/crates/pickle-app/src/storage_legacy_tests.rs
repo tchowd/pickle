@@ -52,6 +52,44 @@ fn other_bytes(repo: &Repository, bookmark: bool) -> (Vec<u8>, Vec<u8>) {
 }
 
 #[test]
+fn malformed_and_newer_archives_refuse_nonexistent_removal_without_changing_either_store() {
+    const MISSING_ID: &str = "7253c477-5b6e-4905-9ee0-3645c9548bd7";
+    for bookmark in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = Repository::new(directory.path().into()).unwrap();
+        let untouched = seed_other_store_and_settings(&repo, bookmark);
+        let path = directory.path().join(names(bookmark).0);
+        // Original malformed bytes; the newer-version fixture uses Rune's
+        // archive field name so it reaches the version guard, not a shape error.
+        for (protected, expected_error) in [
+            (b"{not json".as_slice(), "is damaged"),
+            (
+                br#"{"version":2,"data":[]}"#.as_slice(),
+                "was created by another version",
+            ),
+        ] {
+            fs::write(&path, protected).unwrap();
+            assert!(
+                repo.entries(names(bookmark).0, if bookmark { 200 } else { 1000 })
+                    .is_err()
+            );
+            let error = repo.remove(bookmark, MISSING_ID).unwrap_err();
+            assert!(error.contains(expected_error), "{error}");
+            assert_eq!(fs::read(&path).unwrap(), protected);
+            assert_eq!(other_bytes(&repo, bookmark), untouched);
+            let reopened = Repository::new(directory.path().into()).unwrap();
+            assert!(if bookmark {
+                reopened.bookmarks().is_err()
+            } else {
+                reopened.history().is_err()
+            });
+            assert_eq!(fs::read(&path).unwrap(), protected);
+            assert_eq!(other_bytes(&reopened, bookmark), untouched);
+        }
+    }
+}
+
+#[test]
 fn ordinary_append_at_actual_capacity_keeps_accepted_order_and_rejects_without_mutation() {
     for (bookmark, capacity) in [(false, 1000), (true, 200)] {
         let directory = tempfile::tempdir().unwrap();

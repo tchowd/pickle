@@ -46,6 +46,40 @@ fn original_block_structure_keeps_hard_lines_markers_quote_and_streaming_code() 
 }
 
 #[test]
+fn original_inline_runs_and_ordinary_punctuation_use_the_actual_answer_document() {
+    let source = "Use `snake_case` *carefully*, see [docs](https://example.com), keep <b>tags</b> and **unclosed";
+    let document = answer_document(source);
+    assert_eq!(document.blocks.len(), 1);
+    let block = &document.blocks[0];
+    assert_eq!(block.kind, Kind::Paragraph);
+    assert_eq!(
+        block.text(),
+        "Use snake_case carefully, see docs, keep <b>tags</b> and **unclosed"
+    );
+    assert!(block.runs.contains(&AnswerRun {
+        text: "snake_case".into(),
+        code: true,
+        ..AnswerRun::default()
+    }));
+    assert!(block.runs.contains(&AnswerRun {
+        text: "carefully".into(),
+        emphasis: true,
+        ..AnswerRun::default()
+    }));
+    assert_eq!(document.plain_text(), block.text());
+
+    let punctuation = "-5 degrees, #hashtag, 2024. A year\n2 * 3 = 6";
+    let document = answer_document(punctuation);
+    assert_eq!(
+        document.blocks.iter().map(|b| &b.kind).collect::<Vec<_>>(),
+        [&Kind::Paragraph]
+    );
+    assert_eq!(document.blocks[0].text(), punctuation);
+    assert_eq!(document.plain_text(), punctuation);
+    assert_eq!(answer_document("").plain_text(), "");
+}
+
+#[test]
 fn foundation_oracle_covers_real_blocks_and_inline_only_edge_cases() {
     // Expected values came from the actual original AnswerMarkup.swift compiled
     // against Foundation, not from this parser or a rewritten Swift algorithm.
