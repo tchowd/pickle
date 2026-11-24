@@ -143,8 +143,9 @@ function ConvertTo-PickleExtensionLayout($Observation) {
   } elseif ($clean.stage -ceq 'complete') { throw 'An unsafe layout record cannot claim completion.' }
   return [pscustomobject]$clean
 }
-function ConvertTo-PickleExtensionMenu($Observation) {
+function ConvertTo-PickleExtensionMenu($Observation,[switch]$AfterLoad) {
   $bools=@('action_performed','safely_verified','before_verified','discovery_complete','control_verified','invoke_completed','after_verified','unavailable')
+  if ($AfterLoad) { $bools+=@('prior_menu_verified','developer_mode_on_verified') }
   $keys=$bools+@('stage','candidate_count')
   if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'The observed Edge menu record had unknown fields.' }
   if ($Observation.stage -cnotin @('before-ownership','before-document','discovery','before-invoke','after-document','complete')) { throw 'The observed menu stage was invalid.' }
@@ -153,6 +154,7 @@ function ConvertTo-PickleExtensionMenu($Observation) {
   $count=$Observation.candidate_count
   if (($count -isnot [int] -and $count -isnot [long]) -or $count -lt 0 -or $count -gt 1024) { throw 'The menu candidate count was invalid.' };$clean.candidate_count=$count
   if (($clean.action_performed -and (!$clean.before_verified -or !$clean.discovery_complete -or !$clean.control_verified -or $count -ne 1)) -or ($clean.invoke_completed -and !$clean.action_performed) -or ($clean.after_verified -and !$clean.safely_verified)) { throw 'The menu action/ownership facts were inconsistent.' }
+  if ($AfterLoad -and (!$clean.prior_menu_verified -or ($clean.action_performed -and !$clean.developer_mode_on_verified))) { throw 'A second menu action needs prior proof and freshly verified Developer mode On.' }
   if ($clean.safely_verified) {
     if ($clean.stage -cne 'complete' -or !$clean.action_performed -or !$clean.before_verified -or !$clean.discovery_complete -or $count -ne 1 -or !$clean.control_verified -or !$clean.invoke_completed -or !$clean.after_verified -or $clean.unavailable) { throw 'The observed menu action did not complete safely.' }
   } elseif ($clean.stage -ceq 'complete') { throw 'An unverified menu action cannot claim completion.' }
@@ -165,6 +167,9 @@ function Assert-PickleExtensionRecoveredLayout($Report) {
     if ($hasLayout -eq $hasMenu -or !$hasInitial -or $Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable') { throw 'A recovery needs exactly one typed owned Edge action.' }
     $proof=if ($hasMenu) { ConvertTo-PickleExtensionMenu $Report.edge_menu_observation } else { ConvertTo-PickleExtensionLayout $Report.edge_layout_observation }
     if (!$proof.safely_verified) { throw 'A successful recovery needs a safely verified owned Edge action.' }
+  }
+  if ($keys -ccontains 'edge_load_menu_observation' -or $keys -ccontains 'initial_load_failure') {
+    if (!$hasMenu -or $hasLayout -or $keys -cnotcontains 'edge_load_menu_observation' -or $Report.initial_load_failure -cne 'load-unpacked-unavailable' -or !(ConvertTo-PickleExtensionMenu $Report.edge_load_menu_observation -AfterLoad).safely_verified) { throw 'Load discovery recovery needs its separate safely verified second menu action.' }
   }
 }
 function ConvertTo-PickleExtensionDeveloperObservation($Observation) {
@@ -347,7 +352,8 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
   $numbers+=@('candidate_extension_id_count')
   $fixed.stage+=@('loaded-extension-details');$fixed.extension_identity_proof=@('card','detail-view');$fixed.detail_identity_stage=@('candidate','route','name','id','version','path','recheck','verified')
   $fixed.initial_developer_failure=@('developer-toggle-unavailable')
-  $failures+=@('detail-candidate-invalid','detail-candidate-unavailable','detail-route-unavailable','detail-identity-unavailable','edge-layout-unverified','edge-layout-unavailable','edge-menu-unverified','edge-menu-unavailable')
+  $fixed.initial_load_failure=@('load-unpacked-unavailable')
+  $failures+=@('detail-candidate-invalid','detail-candidate-unavailable','detail-route-unavailable','detail-identity-unavailable','edge-layout-unverified','edge-layout-unavailable','edge-menu-unverified','edge-menu-unavailable','edge-load-menu-unverified','edge-load-menu-unavailable')
   if ($Delivery) {
     $fixed.test=@('windows-stable-extension-reference-delivery');$fixed.scope=@('extension-native-reference-delivery')
     $fixed.stage+=@('delivery-app-ready','delivery-candidate','delivery-connect','delivery-article','delivery-shortcut','delivery-context','delivery-disconnect','delivery-quit')
@@ -363,6 +369,13 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
       $knownFailure=($Report.stage -ceq 'developer-mode' -and $Report.failure -cin @('developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','edge-layout-unverified','edge-layout-unavailable','edge-menu-unverified','edge-menu-unavailable','stage-deadline')) -or ($Report.stage -ceq 'load-unpacked' -and $Report.failure -ceq 'load-unpacked-unavailable')
       if ($Report.browser -cne 'edge' -or !$knownFailure -or $Report.passed -isnot [bool] -or $Report.passed) { throw 'Edge navigation observation is failure-only internal-page evidence.' }
       $clean[$key]=ConvertTo-PickleEdgeNavigation $value
+    }
+    elseif ($key -cin @('edge_load_menu_observation','initial_load_failure')) {
+      $keys=@($Report.PSObject.Properties.Name)
+      if ($Report.browser -cne 'edge' -or $Report.initial_load_failure -cne 'load-unpacked-unavailable' -or $keys -cnotcontains 'edge_load_menu_observation' -or $keys -cnotcontains 'edge_menu_observation' -or $keys -ccontains 'edge_layout_observation' -or $Report.developer_mode_enabled -isnot [bool] -or !$Report.developer_mode_enabled -or $Report.passed -isnot [bool] -or $Report.stage -cnotin @('load-unpacked','owned-folder-picker','folder-picker-path','loaded-extension-details','delivery-candidate','delivery-connect','delivery-article','delivery-shortcut','delivery-context','delivery-disconnect','delivery-quit','browser-cleanup') -or !(ConvertTo-PickleExtensionMenu $Report.edge_menu_observation).safely_verified) { throw 'A second menu record requires the exact original Load discovery failure and prior safe Edge proof.' }
+      $repeat=ConvertTo-PickleExtensionMenu $Report.edge_load_menu_observation -AfterLoad
+      if ($Report.passed -and !$repeat.safely_verified) { throw 'An unsafe second menu action cannot attest success.' }
+      $clean[$key]=if ($key -ceq 'initial_load_failure') { $value } else { $repeat }
     }
     elseif ($key -ceq 'edge_menu_observation') {
       if ($Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable' -or $Report.passed -isnot [bool]) { throw 'Only the original Edge discovery failure can have a menu record.' }

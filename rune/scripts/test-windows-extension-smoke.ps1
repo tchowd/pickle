@@ -110,6 +110,37 @@ $menu=[pscustomobject][ordered]@{stage='complete';action_performed=$true;safely_
 $menuRecovered=$recovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 $menuRecovered.PSObject.Properties.Remove('edge_layout_observation');$menuRecovered | Add-Member edge_menu_observation $menu
 Assert-PickleExtensionStageReport (ConvertTo-PickleExtensionStageReport $menuRecovered) 'edge'
+$loadMenu=$menu | ConvertTo-Json | ConvertFrom-Json
+$loadMenu | Add-Member prior_menu_verified $true;$loadMenu | Add-Member developer_mode_on_verified $true
+$loadRecovered=$menuRecovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$loadRecovered | Add-Member stage 'browser-cleanup';$loadRecovered | Add-Member initial_load_failure 'load-unpacked-unavailable';$loadRecovered | Add-Member edge_load_menu_observation $loadMenu
+$loadRecoveredClean=ConvertTo-PickleExtensionStageReport $loadRecovered
+Assert-PickleExtensionStageReport $loadRecoveredClean 'edge'
+if (!$loadRecoveredClean.edge_menu_observation.safely_verified -or $loadRecoveredClean.initial_developer_failure -cne 'developer-toggle-unavailable' -or $loadRecoveredClean.initial_load_failure -cne 'load-unpacked-unavailable') { throw 'The original menu proof and first Load failure must remain distinct.' }
+foreach ($change in @(@('prior_menu_verified',$false),@('developer_mode_on_verified',$false),@('developer_mode_on_verified','true'))) {
+  $bad=$loadMenu | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionMenu $bad -AfterLoad }
+}
+foreach ($field in @('prior_menu_verified','developer_mode_on_verified')) {
+  $bad=$loadMenu | ConvertTo-Json | ConvertFrom-Json;$bad.PSObject.Properties.Remove($field)
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionMenu $bad -AfterLoad }
+}
+$bad=$loadMenu | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member menu_closed $true
+Assert-ExtensionRefused { ConvertTo-PickleExtensionMenu $bad -AfterLoad }
+foreach ($change in @(@('browser','chrome'),@('stage','developer-mode'),@('initial_load_failure','stage-deadline'),@('developer_mode_enabled',$false))) {
+  $bad=$loadRecovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+}
+foreach ($field in @('edge_menu_observation','edge_load_menu_observation','initial_load_failure')) {
+  $bad=$loadRecovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.PSObject.Properties.Remove($field)
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+}
+$partialLoadMenu=$loadMenu | ConvertTo-Json | ConvertFrom-Json
+$partialLoadMenu.stage='before-invoke';$partialLoadMenu.safely_verified=$false;$partialLoadMenu.invoke_completed=$false;$partialLoadMenu.after_verified=$false;$partialLoadMenu.unavailable=$true
+$failedLoadMenu=$loadRecovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$failedLoadMenu.stage='load-unpacked';$failedLoadMenu.passed=$false;$failedLoadMenu.edge_load_menu_observation=$partialLoadMenu;$failedLoadMenu | Add-Member failure 'edge-load-menu-unverified'
+if (!(ConvertTo-PickleExtensionStageReport $failedLoadMenu).edge_load_menu_observation.action_performed) { throw 'An unverified second menu action must retain partial facts.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $failedLoadMenu 'edge' }
 foreach ($change in @(@('stage','after-document'),@('action_performed',$false),@('safely_verified',$false),@('before_verified',$false),@('discovery_complete',$false),@('candidate_count',2),@('candidate_count','1'),@('control_verified',$false),@('invoke_completed',$false),@('after_verified',$false),@('unavailable',$true))) {
   $bad=$menu | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionMenu $bad }

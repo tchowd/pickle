@@ -493,7 +493,17 @@ public static partial class BrowserExtensionFixtureProgram {
             Report["developer_mode_enabled"]=true;
             stage="load-unpacked";
             AutomationElement load=null;
-            Wait(()=> { load=Named(window,"Load unpacked",ControlType.Button); return load!=null && load.Current.IsEnabled && !load.Current.IsOffscreen; },10,"load-unpacked-unavailable");
+            try { Wait(()=> { load=Named(window,"Load unpacked",ControlType.Button); return load!=null && load.Current.IsEnabled && !load.Current.IsOffscreen; },10,"load-unpacked-unavailable"); }
+            catch(ExtensionStageFailure initialLoad) {
+                if(!BrowserExtensionEdgeNavigationPredicates.MayRepeatAfterLoad(kind,initialLoad.Code,PriorEdgeMenuVerified(),
+                    Report.ContainsKey("developer_mode_enabled") && Object.Equals(Report["developer_mode_enabled"],true),Report.ContainsKey("edge_load_menu_observation"))) throw;
+                Report["initial_load_failure"]=initialLoad.Code;
+                bool performed;bool safe=TryRepeatEdgeMenuAfterLoad(window,out performed);
+                if(!safe) Fail(performed ? "edge-load-menu-unverified" : "edge-load-menu-unavailable");
+                // A second observed Invoke proves no menu state. Repeat ONLY
+                // the original exact button discovery under the same deadline.
+                Wait(()=> { load=Named(window,"Load unpacked",ControlType.Button); return load!=null && load.Current.IsEnabled && !load.Current.IsOffscreen; },10,"load-unpacked-unavailable");
+            }
             Invoke(load); Report["load_unpacked_invoked"]=true;
             IntPtr picker=IntPtr.Zero;
             stage="owned-folder-picker";
