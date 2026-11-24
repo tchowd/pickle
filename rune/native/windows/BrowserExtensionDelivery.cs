@@ -41,6 +41,7 @@ public static class BrowserExtensionDeliveryPredicates {
         return name as string=="com.pickle.reader" && manifest["description"] as string=="Pickle page context" && type as string=="stdio" && path is string && allowed!=null && allowed.Length==1 && allowed[0] as string==origin;
     }
     public static void SelfTest() {
+        BrowserExtensionChromeActionPredicates.SelfTest();
         if(!EligibleReader(true,true,true,true,0,480,180) || EligibleReader(false,true,true,true,0,480,180) ||
             EligibleReader(true,false,true,true,0,480,180) || EligibleReader(true,true,false,true,0,480,180) ||
             EligibleReader(true,true,true,false,0,480,180) || EligibleReader(true,true,true,true,1,480,180) ||
@@ -65,8 +66,129 @@ public static class BrowserExtensionDeliveryPredicates {
     }
 }
 
+public static class BrowserExtensionChromeActionPredicates {
+    public static bool MayObserve(bool full,string kind,string stage,string failure,bool registered,bool article,int shortcut,bool routeKnown,bool readerObserved) {
+        return full && kind=="chrome" && stage=="delivery-context" && failure=="delivery-context-unavailable" && registered && article && shortcut==6 && routeKnown && !readerObserved;
+    }
+    public static bool Role(int value) { return value==50000 || value==50009 || value==50011 || value==50031; }
+    public static int Label(string value) { return value=="Extensions" ? 1 : value=="Pickle — page and video context" ? 2 : 0; }
+    public static void SelfTest() {
+        if(!MayObserve(true,"chrome","delivery-context","delivery-context-unavailable",true,true,6,true,false)) throw new Exception("chrome-action-boundary");
+        if(MayObserve(false,"chrome","delivery-context","delivery-context-unavailable",true,true,6,true,false) ||
+            MayObserve(true,"edge","delivery-context","delivery-context-unavailable",true,true,6,true,false) ||
+            MayObserve(true,"chrome","delivery-connect","delivery-connect-unavailable",true,true,6,true,false) ||
+            MayObserve(true,"chrome","delivery-context","stage-deadline",true,true,6,true,false) ||
+            MayObserve(true,"chrome","delivery-context","delivery-context-unavailable",false,true,6,true,false) ||
+            MayObserve(true,"chrome","delivery-context","delivery-context-unavailable",true,false,6,true,false) ||
+            MayObserve(true,"chrome","delivery-context","delivery-context-unavailable",true,true,5,true,false) ||
+            MayObserve(true,"chrome","delivery-context","delivery-context-unavailable",true,true,6,false,false) ||
+            MayObserve(true,"chrome","delivery-context","delivery-context-unavailable",true,true,6,true,true)) throw new Exception("chrome-action-no-unproved-trigger");
+        if(Label("Extensions")!=1 || Label("Pickle — page and video context")!=2 || Label("Extensions menu")!=0 || Label("Extensions ")!=0 || Label("unknown private label")!=0 || Label(null)!=0) throw new Exception("chrome-action-closed-labels");
+        if(!Role(50000) || !Role(50009) || !Role(50011) || !Role(50031) || Role(50004) || Role(50020) || Role(50030)) throw new Exception("chrome-action-chrome-controls-only");
+    }
+}
+
 #if !PICKLE_PREDICATES
 public static partial class BrowserExtensionFixtureProgram {
+    sealed class ChromeActionReader {
+        readonly IntPtr window,owner;readonly uint pid;readonly DateTime end;readonly AutomationElement root;
+        public ChromeActionReader(IntPtr windowValue,IntPtr ownerValue,uint pidValue,DateTime limit) {window=windowValue;owner=ownerValue;pid=pidValue;end=limit;root=AutomationElement.FromHandle(window);}
+        public bool Within() { return DateTime.UtcNow<end && LayoutWindowBound(window,owner,pid) && Automation.Compare(root,AutomationElement.FromHandle(window)); }
+        public bool Bound(AutomationElement node,bool documentSelf=false,bool passwordLeaf=false) {
+            bool first=true;
+            for(int depth=0;node!=null && depth<32;depth++) {
+                if(!Within() || !browser.Owns(node.Current.ProcessId) || (node.Current.IsPassword && !(first && passwordLeaf))) return false;
+                if(node.Current.ControlType==ControlType.Document && !(first && documentSelf)) return false;
+                if(Automation.Compare(node,root)) return Within();
+                first=false;node=TreeWalker.RawViewWalker.GetParent(node);
+            }return false;
+        }
+        public bool ArticleProof(AutomationElement expected,out AutomationElement document,out List<AutomationElement> chrome,Action<int> count) {
+            document=null;chrome=new List<AutomationElement>();var documents=new List<AutomationElement>();
+            var queue=new Queue<KeyValuePair<AutomationElement,int>>();queue.Enqueue(new KeyValuePair<AutomationElement,int>(root,0));int nodes=0;
+            while(queue.Count>0) {
+                if(!Within() || nodes+queue.Count>512) return false;
+                var entry=queue.Dequeue();var node=entry.Key;count(++nodes);
+                if(entry.Value>24 || !Bound(node,true,true)) return false;
+                if(node.Current.IsPassword || node.Current.ControlType==ControlType.Edit) continue;
+                if(node.Current.ControlType==ControlType.Document) {
+                    // Read only the fixed article URL/title proof, never page
+                    // text, descendants, links, inputs, or arbitrary tab titles.
+                    if(node.Current.IsOffscreen) continue;
+                    object pattern;if(!Bound(node,true) || !node.TryGetCurrentPattern(ValuePattern.Pattern,out pattern) || !Bound(node,true)) return false;
+                    string uri=((ValuePattern)pattern).Current.Value;if(uri==null || uri.Length>4096 || !Bound(node,true)) return false;
+                    if(uri==BrowserExtensionDeliveryPredicates.ArticleUrl) {
+                        string title;if(!BrowserExtensionDetailsPredicates.Read(()=>Bound(node,true),()=>node.Current.Name,out title)) return false;
+                        if(title==BrowserExtensionDeliveryPredicates.ArticleTitle && !node.Current.IsOffscreen && Bound(node,true)) documents.Add(node);
+                    }
+                    continue; // Always prune all document-content subtrees.
+                }
+                chrome.Add(node);
+                if(entry.Value>=24) return false;
+                var child=TreeWalker.RawViewWalker.GetFirstChild(node);
+                while(child!=null) {
+                    if(!Within() || nodes+queue.Count>=512) return false;
+                    queue.Enqueue(new KeyValuePair<AutomationElement,int>(child,entry.Value+1));child=TreeWalker.RawViewWalker.GetNextSibling(child);
+                }
+            }
+            if(documents.Count!=1 || !Within() || (expected!=null && !Automation.Compare(expected,documents[0]))) return false;
+            document=documents[0];return true;
+        }
+        public List<int> Ancestors(AutomationElement node,out bool truncated) {
+            var roles=new List<int>();truncated=true;
+            for(int depth=0;node!=null && depth<8;depth++) {
+                if(!Bound(node)) Fail("uia-element-not-owned");roles.Add(node.Current.ControlType.Id);
+                if(Automation.Compare(node,root)) {truncated=false;break;}
+                node=TreeWalker.RawViewWalker.GetParent(node);
+            }return roles;
+        }
+    }
+    static bool DeliveryReportTrue(string key) {object value;return Report.TryGetValue(key,out value) && value is bool && (bool)value;}
+    static void ObserveChromeActionBoundary(IntPtr window,bool full,string failure) {
+        object kind,rawReveal,rawRoute,rawShortcut;var reveal=Report.TryGetValue("reader_reveal",out rawReveal) ? rawReveal as Dictionary<string,object> : null;
+        bool routeKnown=reveal!=null && reveal.TryGetValue("reader_observed",out rawRoute) && rawRoute is bool;
+        bool readerObserved=routeKnown && (bool)reveal["reader_observed"];
+        int shortcut=Report.TryGetValue("delivery_shortcut_events",out rawShortcut) && rawShortcut is int ? (int)rawShortcut : 0;
+        if(!Report.TryGetValue("browser",out kind) || !(kind is string) || !BrowserExtensionChromeActionPredicates.MayObserve(full,(string)kind,stage,failure,DeliveryReportTrue("native_host_registered") && DeliveryReportTrue("owned_registration_verified"),DeliveryReportTrue("owned_article_verified"),shortcut,routeKnown,readerObserved)) return;
+        var records=new List<Dictionary<string,object>>();var observation=new Dictionary<string,object>{{"stage","before-ownership"},{"incomplete",true},{"unavailable",true},
+            {"before_article_verified",false},{"after_article_verified",false},{"before_nodes",0},{"after_nodes",0},{"nodes",0},{"controls",0},
+            {"matching_count",0},{"extensions_exact_count",0},{"extension_title_exact_count",0},{"unknown_control_count",0},{"property_errors",0},{"truncated",false},{"records",records}};
+        Report["chrome_action_observation"]=observation;IntPtr owner=IntPtr.Zero;
+        // Cooperative allowance only: individual COM calls can outlast it.
+        DateTime end=DateTime.UtcNow.AddMilliseconds(750);if(end>deadline) end=deadline;
+        try {
+            Check();uint pid;if(browser==null || !browser.OwnsWindow(window) || Native.GetWindowThreadProcessId(window,out pid)==0 || pid==0) return;
+            owner=Native.OpenProcess(0x00101000,false,pid);if(DateTime.UtcNow>=end || !LayoutWindowBound(window,owner,pid)) return;
+            var reader=new ChromeActionReader(window,owner,pid,end);AutomationElement document;List<AutomationElement> chrome;
+            observation["stage"]="before-article";
+            if(!reader.ArticleProof(null,out document,out chrome,n=>observation["before_nodes"]=n)) return;
+            observation["before_article_verified"]=true;observation["stage"]="controls";
+            foreach(var node in chrome) {
+                if(!reader.Within() || !reader.Bound(node)) return;observation["nodes"]=(int)observation["nodes"]+1;
+                int role=node.Current.ControlType.Id;if(!BrowserExtensionChromeActionPredicates.Role(role)) continue;
+                string name;if(!BrowserExtensionDetailsPredicates.Read(()=>reader.Bound(node) && node.Current.ControlType.Id==role,()=>node.Current.Name,out name)) return;
+                int flags=BrowserExtensionChromeActionPredicates.Label(name);
+                if(flags==0) {observation["controls"]=(int)observation["controls"]+1;observation["unknown_control_count"]=(int)observation["unknown_control_count"]+1;continue;}
+                Dictionary<string,object> record=null;
+                if(records.Count<16) {
+                    object ignored,pattern;bool invoke=node.TryGetCurrentPattern(InvokePattern.Pattern,out ignored);if(!reader.Bound(node)) return;
+                    bool toggle=node.TryGetCurrentPattern(TogglePattern.Pattern,out pattern);if(!reader.Bound(node)) return;
+                    int toggleState=toggle ? (int)((TogglePattern)pattern).Current.ToggleState : -1;
+                    bool cut;var ancestors=reader.Ancestors(node,out cut);Native.Rect outer;if(!Native.GetWindowRect(window,out outer) || !reader.Bound(node)) return;
+                    var current=node.Current;var bounds=current.BoundingRectangle;if(current.ControlType.Id!=role || !reader.Bound(node)) return;
+                    record=new Dictionary<string,object>{{"role",role},{"extensions_exact",flags==1},{"extension_title_exact",flags==2},{"invoke_supported",invoke},{"toggle_supported",toggle},{"toggle_state",toggleState},
+                        {"enabled",current.IsEnabled},{"offscreen",current.IsOffscreen},{"bounds_flags",BrowserExtensionPredicates.BoundsFlags(bounds.X,bounds.Y,bounds.Width,bounds.Height,outer.Left,outer.Top,outer.Right,outer.Bottom)},
+                        {"ancestor_roles",ancestors},{"ancestors_truncated",cut}};
+                }
+                if(record!=null) records.Add(record);observation["controls"]=(int)observation["controls"]+1;observation["matching_count"]=(int)observation["matching_count"]+1;
+                string field=flags==1 ? "extensions_exact_count" : "extension_title_exact_count";observation[field]=(int)observation[field]+1;observation["truncated"]=(int)observation["matching_count"]>16;
+            }
+            observation["stage"]="after-article";AutomationElement after;List<AutomationElement> unused;
+            if(!reader.ArticleProof(document,out after,out unused,n=>observation["after_nodes"]=n)) return;
+            observation["after_article_verified"]=true;observation["incomplete"]=false;observation["unavailable"]=false;observation["stage"]="complete";
+        } catch {observation["property_errors"]=(int)observation["property_errors"]+1;}
+        finally {if(owner!=IntPtr.Zero) Native.CloseHandle(owner);}
+    }
     static DeliveryApplication deliveryApp;
     static string deliverySupport,deliveryKind,deliveryId;
     static bool deliveryConnectAttempted,deliveryDisconnectAttempted,deliveryDisconnectInvoked,deliveryDisconnected,deliveryOrdinaryExit;

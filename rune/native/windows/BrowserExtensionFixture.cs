@@ -545,6 +545,7 @@ public static partial class BrowserExtensionFixtureProgram {
             stage="browser-cleanup";
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;
+            ObserveChromeActionBoundary(window,delivery,error.Code);
             bool edgeZero=browser!=null && window!=IntPtr.Zero && Report.ContainsKey("browser") && Report.ContainsKey("candidate_extension_id_count") &&
                 Report["candidate_extension_id_count"] is int && BrowserExtensionEdgeIdentityPredicates.MayObserve((string)Report["browser"],stage,error.Code,(int)Report["candidate_extension_id_count"],Report.ContainsKey("folder_picker_closed") && (bool)Report["folder_picker_closed"]);
             if(edgeZero) ObserveEdgePostPickerIdentity(window);

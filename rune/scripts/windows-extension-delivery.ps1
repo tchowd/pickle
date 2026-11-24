@@ -18,16 +18,52 @@ function ConvertTo-PickleDeliveryReaderReveal($Observation) {
   if ($clean.stage -ceq 'complete' -and (!$clean.reader_observed -or !$clean.source_label_observed -or !$clean.context_visible -or !$clean.preview_visible -or !$clean.scope_verified -or $clean.unavailable -or $clean.polls -eq 0)) { throw 'Reader reveal did not complete its route and visibility proof.' }
   return [pscustomobject]$clean
 }
+function ConvertTo-PickleChromeActionObservation($Observation) {
+  $flags=@('incomplete','unavailable','before_article_verified','after_article_verified','truncated')
+  $counts=@('before_nodes','after_nodes','nodes','controls','matching_count','extensions_exact_count','extension_title_exact_count','unknown_control_count','property_errors')
+  $keys=@('stage','records')+$flags+$counts
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count -or $Observation.stage -isnot [string] -or $Observation.stage -cnotin @('before-ownership','before-article','controls','after-article','complete')) { throw 'The Chrome action observation had unknown fields or stage.' }
+  $clean=[ordered]@{stage=$Observation.stage}
+  foreach ($key in $flags) { if ($Observation.$key -isnot [bool]) { throw 'A Chrome action proof flag was not boolean.' };$clean[$key]=$Observation.$key }
+  foreach ($key in $counts) { $value=$Observation.$key;if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 512) { throw 'A Chrome action count exceeded its bound.' };$clean[$key]=$value }
+  $records=@($Observation.records)
+  if ($clean.matching_count -ne $clean.extensions_exact_count+$clean.extension_title_exact_count -or $clean.controls -ne $clean.matching_count+$clean.unknown_control_count -or $clean.controls -gt $clean.nodes -or $clean.nodes -gt $clean.before_nodes -or $records.Count -ne [Math]::Min(16,$clean.matching_count) -or $clean.truncated -ne ($clean.matching_count -gt 16)) { throw 'Chrome action counts disagreed.' }
+  if ((!$clean.before_article_verified -and ($clean.nodes -ne 0 -or $clean.controls -ne 0)) -or ($clean.after_article_verified -and !$clean.before_article_verified)) { throw 'Chrome labels were inspected before exact article proof.' }
+  if (($clean.stage -ceq 'complete' -or !$clean.incomplete -or !$clean.unavailable -or $clean.after_article_verified) -and ($clean.stage -cne 'complete' -or $clean.incomplete -or $clean.unavailable -or !$clean.before_article_verified -or !$clean.after_article_verified -or $clean.before_nodes -eq 0 -or $clean.after_nodes -eq 0 -or $clean.property_errors -ne 0)) { throw 'A partial Chrome action observation claimed completion.' }
+  $recordKeys=@('role','extensions_exact','extension_title_exact','invoke_supported','toggle_supported','toggle_state','enabled','offscreen','bounds_flags','ancestor_roles','ancestors_truncated')
+  $rows=@(foreach ($record in $records) {
+    if (@($record.PSObject.Properties).Count -ne $recordKeys.Count -or @($record.PSObject.Properties.Name | Where-Object { $_ -cnotin $recordKeys }).Count) { throw 'A Chrome action record had unknown fields.' }
+    $row=[ordered]@{}
+    foreach ($key in @('extensions_exact','extension_title_exact','invoke_supported','toggle_supported','enabled','offscreen','ancestors_truncated')) { if ($record.$key -isnot [bool]) { throw 'A Chrome action record flag was not boolean.' };$row[$key]=$record.$key }
+    if ($row.extensions_exact -eq $row.extension_title_exact) { throw 'A Chrome action record lacked one exact fixed label.' }
+    foreach ($key in @('role','toggle_state','bounds_flags')) { $value=$record.$key;if (($value -isnot [int] -and $value -isnot [long])) { throw 'A Chrome action scalar was not an integer.' };$row[$key]=$value }
+    if ($row.role -notin @(50000,50009,50011,50031) -or $row.bounds_flags -lt 0 -or $row.bounds_flags -gt 7 -or ($row.toggle_supported -and $row.toggle_state -notin @(0,1,2)) -or (!$row.toggle_supported -and $row.toggle_state -ne -1)) { throw 'A Chrome action scalar was outside its closed range.' }
+    $ancestors=@($record.ancestor_roles)
+    if ($ancestors.Count -lt 1 -or $ancestors.Count -gt 8 -or $ancestors[0] -ne $row.role) { throw 'Chrome action ancestry was invalid.' }
+    foreach ($role in $ancestors) { if (($role -isnot [int] -and $role -isnot [long]) -or $role -lt 50000 -or $role -gt 50040 -or $role -eq 50030) { throw 'Chrome action ancestry entered document content or had an unknown role.' } }
+    $row.ancestor_roles=$ancestors;[pscustomobject]$row
+  })
+  foreach ($pair in @(@('extensions_exact_count','extensions_exact'),@('extension_title_exact_count','extension_title_exact'))) {
+    $seen=@($rows | Where-Object { $_.($pair[1]) }).Count
+    if ($seen -gt $clean[$pair[0]] -or (!$clean.truncated -and $seen -ne $clean[$pair[0]])) { throw 'Chrome fixed-label counts disagreed with records.' }
+  }
+  $clean.records=$rows;return [pscustomobject]$clean
+}
 function ConvertTo-PickleExtensionDeliveryDriver($Report) {
-  # This one delivery-only observation is closed separately; all other fields
+  # Delivery-only observations are closed separately; all other fields
   # still pass through the unchanged common scalar allowlist.
-  $scalars=[ordered]@{};$reveal=$null
+  $scalars=[ordered]@{};$reveal=$null;$chromeAction=$null
   foreach ($field in $Report.PSObject.Properties) {
     if ($field.Name -ceq 'reader_reveal') { $reveal=ConvertTo-PickleDeliveryReaderReveal $field.Value }
+    elseif ($field.Name -ceq 'chrome_action_observation') {
+      if ($Report.browser -cne 'chrome' -or $Report.passed -isnot [bool] -or $Report.passed -or $Report.stage -cne 'delivery-context' -or $Report.failure -cne 'delivery-context-unavailable' -or $Report.native_host_registered -isnot [bool] -or !$Report.native_host_registered -or $Report.owned_registration_verified -isnot [bool] -or !$Report.owned_registration_verified -or $Report.owned_article_verified -isnot [bool] -or !$Report.owned_article_verified -or ($Report.delivery_shortcut_events -isnot [int] -and $Report.delivery_shortcut_events -isnot [long]) -or $Report.delivery_shortcut_events -ne 6 -or $Report.reader_reveal.reader_observed -isnot [bool] -or $Report.reader_reveal.reader_observed) { throw 'Chrome action discovery requires the exact failed full-delivery boundary.' }
+      $chromeAction=ConvertTo-PickleChromeActionObservation $field.Value
+    }
     else { $scalars[$field.Name]=$field.Value }
   }
   $clean=ConvertTo-PickleExtensionDriverScalars ([pscustomobject]$scalars) $true
   if ($null -ne $reveal) { $clean | Add-Member -NotePropertyName reader_reveal -NotePropertyValue $reveal }
+  if ($null -ne $chromeAction) { $clean | Add-Member -NotePropertyName chrome_action_observation -NotePropertyValue $chromeAction }
   if (($clean.schema -isnot [int] -and $clean.schema -isnot [long]) -or $clean.schema -ne 1 -or $clean.test -cne 'windows-stable-extension-reference-delivery' -or $clean.scope -cne 'extension-native-reference-delivery' -or $clean.browser -cnotin @('chrome','edge') -or $clean.passed -isnot [bool]) { throw 'The delivery driver had the wrong closed scope.' }
   if (@($clean.PSObject.Properties.Name) -ccontains 'native_host_executed') { throw 'Delivery cannot invent direct native-host process observation.' }
   foreach ($key in @('browser_launch_attempted','browser_not_started_cleanup_verified','browser_job_drained','connect_attempted','disconnect_attempted','connect_notice_observed','disconnect_notice_observed','disconnect_no_match_notice_observed')) {

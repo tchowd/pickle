@@ -47,6 +47,42 @@ Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $routeOnly 'chrome
 # authenticated admission, which remain required by the actual success gate.
 $routeOnly=$valid | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$routeOnly.accepted_article_verified=$false;$routeOnly.authenticated_bridge_verified=$false
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $routeOnly 'chrome' }
+$chromeObservation=[pscustomobject]@{stage='complete';incomplete=$false;unavailable=$false;before_article_verified=$true;after_article_verified=$true;before_nodes=10;after_nodes=10;nodes=9;controls=5;matching_count=1;extensions_exact_count=1;extension_title_exact_count=0;unknown_control_count=4;property_errors=0;truncated=$false;records=@(
+  [pscustomobject]@{role=50000;extensions_exact=$true;extension_title_exact=$false;invoke_supported=$true;toggle_supported=$false;toggle_state=-1;enabled=$true;offscreen=$false;bounds_flags=3;ancestor_roles=@(50000,50033,50032);ancestors_truncated=$false})}
+$null=ConvertTo-PickleChromeActionObservation $chromeObservation
+foreach ($change in @(@('stage','unknown'),@('incomplete',$true),@('unavailable',$true),@('before_article_verified',$false),@('after_article_verified',$false),@('before_nodes',0),@('nodes',513),@('controls',6),@('matching_count',2),@('unknown_control_count',3),@('extensions_exact_count','1'),@('property_errors',1),@('truncated',$true))) {
+  $bad=$chromeObservation | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-DeliveryRefused { ConvertTo-PickleChromeActionObservation $bad }
+}
+foreach ($field in @('name','id','url','path','pixels')) {
+  $bad=$chromeObservation | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0] | Add-Member -NotePropertyName $field -NotePropertyValue 'not retained'
+  Assert-DeliveryRefused { ConvertTo-PickleChromeActionObservation $bad }
+}
+foreach ($change in @(@('role',50020),@('toggle_state',0),@('extension_title_exact',$true),@('invoke_supported','true'),@('bounds_flags',8))) {
+  $bad=$chromeObservation | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0].($change[0])=$change[1]
+  Assert-DeliveryRefused { ConvertTo-PickleChromeActionObservation $bad }
+}
+$bad=$chromeObservation | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0].ancestor_roles=@(50000,50030,50032)
+Assert-DeliveryRefused { ConvertTo-PickleChromeActionObservation $bad }
+$unavailableChrome=$chromeObservation | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+$unavailableChrome.stage='before-article';$unavailableChrome.incomplete=$true;$unavailableChrome.unavailable=$true;$unavailableChrome.before_article_verified=$false;$unavailableChrome.after_article_verified=$false;$unavailableChrome.records=@()
+foreach ($field in @('after_nodes','nodes','controls','matching_count','extensions_exact_count','extension_title_exact_count','unknown_control_count')) { $unavailableChrome.$field=0 }
+$null=ConvertTo-PickleChromeActionObservation $unavailableChrome
+$failedChrome=$valid | ConvertTo-Json -Depth 7 | ConvertFrom-Json
+$failedChrome.passed=$false;$failedChrome.full_delivery_verified=$false;$failedChrome.stage='delivery-context';$failedChrome | Add-Member failure 'delivery-context-unavailable'
+$failedChrome | Add-Member owned_article_verified $true -Force;$failedChrome | Add-Member delivery_shortcut_events 6 -Force
+$failedChrome.reader_reveal=[pscustomobject]@{stage='route';reader_observed=$false;source_label_observed=$false;control_verified=$false;focused_control_verified=$false;home_events=0;page_down_events=0;context_visible=$false;preview_visible=$false;scope_verified=$false;polls=42;unavailable=$true}
+$failedChrome | Add-Member chrome_action_observation $chromeObservation
+$classifiedChrome=ConvertTo-PickleExtensionDeliveryDriver $failedChrome
+if ($classifiedChrome.failure -cne 'delivery-context-unavailable' -or !$classifiedChrome.chrome_action_observation.after_article_verified -or $classifiedChrome.passed) { throw 'Chrome discovery changed the original failed delivery outcome.' }
+Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $classifiedChrome 'chrome' }
+foreach ($change in @(@('browser','edge'),@('passed',$true),@('stage','delivery-connect'),@('failure','delivery-connect-unavailable'),@('native_host_registered',$false),@('owned_registration_verified',$false),@('owned_article_verified',$false),@('delivery_shortcut_events',5))) {
+  $bad=$failedChrome | ConvertTo-Json -Depth 9 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-DeliveryRefused { ConvertTo-PickleExtensionDeliveryDriver $bad }
+}
+$bad=$failedChrome | ConvertTo-Json -Depth 9 | ConvertFrom-Json;$bad.reader_reveal.reader_observed=$true
+Assert-DeliveryRefused { ConvertTo-PickleExtensionDeliveryDriver $bad }
+Assert-DeliveryRefused { ConvertTo-PickleExtensionStageReport $failedChrome }
 # Complete product-written proof is sufficient without any UI status notice.
 $noticeOnly=$valid | ConvertTo-Json | ConvertFrom-Json;$noticeOnly.connect_notice_observed=$true
 foreach ($key in @('native_host_registered','owned_registration_verified')) {
