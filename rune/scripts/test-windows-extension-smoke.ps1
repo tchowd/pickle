@@ -31,7 +31,7 @@ $aggregate=@($loop.Parent.Statements | Where-Object { $_.Extent.StartOffset -gt 
 if ($aggregate.Count -ne 1) { throw 'The package must fail after collecting safe setup failures.' }
 $ordered=@($loop.Parent.Statements | Where-Object { $_.Extent.StartOffset -ge $loop.Extent.StartOffset -and $_.Extent.EndOffset -le $aggregate[0].Extent.EndOffset })
 $actualPair=[scriptblock]::Create(($ordered.Extent.Text -join "`n"))
-foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unknown','chrome-delivery-failed-cleanly','formatted-copy-failed')) {
+foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unknown','chrome-delivery-failed-cleanly','popup-failed-cleanly','popup-cleanup-unknown','formatted-copy-failed')) {
   & {
     param($ActualPair,[string]$Scenario)
     $testDirectory='owned-installed-package';$observed=[Collections.Generic.List[string]]::new();$deliveries=[Collections.Generic.List[string]]::new();$extensionFailures=[Collections.Generic.List[string]]::new()
@@ -43,13 +43,15 @@ foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unkn
       if ($Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-cleanup-unknown') { throw 'owned cleanup unknown' }
       return !($Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-failed-cleanly')
     }
-    function Invoke-PickleExtensionDeliveryCore([string]$PackageDirectory,[string]$Browser,[string]$EvidencePath) {
-      if ($PackageDirectory -cne 'owned-installed-package' -or $EvidencePath -cne (Join-Path $PWD "artifacts/windows-extension-$Browser-delivery-native-smoke.json")) { throw 'The delivery call lost its exact package/evidence boundaries.' }
-      $deliveries.Add($Browser)
-      return !($Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-delivery-failed-cleanly')
+    function Invoke-PickleExtensionDeliveryCore([string]$PackageDirectory,[string]$Browser,[string]$EvidencePath,[string]$Trigger='shortcut') {
+      $popup=$Trigger -ceq 'popup';$file=if ($popup) { 'windows-extension-chrome-popup-delivery-native-smoke.json' } else { "windows-extension-$Browser-delivery-native-smoke.json" }
+      if ($Trigger -cnotin @('shortcut','popup') -or ($popup -and ($Browser -cne 'chrome' -or ($deliveries -join ',') -cne 'chrome,edge')) -or $PackageDirectory -cne 'owned-installed-package' -or $EvidencePath -cne (Join-Path $PWD "artifacts/$file")) { throw 'The delivery call lost its separate mode/order/package/evidence boundaries.' }
+      $deliveries.Add($(if ($popup) { 'chrome-popup' } else { $Browser }))
+      if ($popup -and $Scenario -ceq 'popup-cleanup-unknown') { throw 'owned popup cleanup unknown' }
+      return !(($popup -and $Scenario -ceq 'popup-failed-cleanly') -or (!$popup -and $Browser -ceq 'chrome' -and $Scenario -ceq 'chrome-delivery-failed-cleanly'))
     }
     function Invoke-PickleReadingCore($Application,$DataDirectory,$EvidencePath,$Configuration,[string]$Scenario,[switch]$RequireWindowCapture) {
-      if (($observed -join ',') -cne 'chrome,edge' -or $copy.called -ne 0 -or $Application -cne 'owned-app' -or $DataDirectory -cne 'owned-profile' -or $Configuration -cne 'debug' -or $Scenario -cne 'formatted-copy' -or $RequireWindowCapture -or $EvidencePath -cne (Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-formatted-copy-reading.json')) { throw 'The native Copy workflow ran before independent browsers or with different arguments.' }
+      if (($observed -join ',') -cne 'chrome,edge' -or ($deliveries -join ',') -cne 'chrome,edge,chrome-popup' -or $copy.called -ne 0 -or $Application -cne 'owned-app' -or $DataDirectory -cne 'owned-profile' -or $Configuration -cne 'debug' -or $Scenario -cne 'formatted-copy' -or $RequireWindowCapture -or $EvidencePath -cne (Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-formatted-copy-reading.json')) { throw 'The native Copy workflow ran before independent browsers or with different arguments.' }
       $copy.called++
       if ($copyFails) { throw 'owned formatted Copy failed' }
     }
@@ -64,9 +66,9 @@ foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unkn
     $failed=$false;try { & $ActualPair } catch { $failed=$true }
     $expected=if ($Scenario -ceq 'chrome-cleanup-unknown') { 'chrome' } else { 'chrome,edge' }
     if (($observed -join ',') -cne $expected -or $failed -ne ($Scenario -cne 'both-pass')) { throw 'The actual package did not collect safe failures, stop on uncertain cleanup, or fail after a rejected setup.' }
-    $expectedDelivery=if ($Scenario -ceq 'chrome-cleanup-unknown') { '' } else { 'chrome,edge' }
+    $expectedDelivery=if ($Scenario -ceq 'chrome-cleanup-unknown') { '' } else { 'chrome,edge,chrome-popup' }
     if (($deliveries -join ',') -cne $expectedDelivery) { throw 'Delivery must follow each clean component outcome independently, and stop on unsafe cleanup.' }
-    $expectedCopy=if ($Scenario -ceq 'chrome-cleanup-unknown') { 0 } else { 1 }
+    $expectedCopy=if ($Scenario -cin @('chrome-cleanup-unknown','popup-cleanup-unknown')) { 0 } else { 1 }
     $expectedReport=if ($copyFails) { 0 } else { $expectedCopy }
     if ($copy.called -ne $expectedCopy -or $copy.read -ne $expectedReport -or $copy.validated -ne $expectedReport) { throw 'Safe browser failures must allow Copy before aggregate refusal; unsafe cleanup must stop before Copy.' }
   } $actualPair $scenario

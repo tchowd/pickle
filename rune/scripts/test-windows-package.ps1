@@ -158,6 +158,8 @@ if (Test-PickleExtensionSetupGate $Configuration $hasIdentity $PSEdition ([Envir
     if (!(Invoke-PickleExtensionCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-native-smoke.json"))) { $extensionFailures.Add($browser) }
     if (!(Invoke-PickleExtensionDeliveryCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-delivery-native-smoke.json"))) { $extensionFailures.Add("$browser-delivery") }
   }
+  # Separate fresh profile/app/job, additive to both unchanged shortcut modes.
+  if (!(Invoke-PickleExtensionDeliveryCore $testDirectory 'chrome' (Join-Path $PWD 'artifacts/windows-extension-chrome-popup-delivery-native-smoke.json') -Trigger 'popup')) { $extensionFailures.Add('chrome-popup-delivery') }
   # Each browser delegate has certified cleanup before returning a safe failure.
   # Preserve those independent reports before exercising the OS clipboard.
   $copyEvidence=Join-Path $PWD 'artifacts/unpackaged-debug-native-smoke-formatted-copy-reading.json'

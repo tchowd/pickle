@@ -49,12 +49,32 @@ function ConvertTo-PickleChromeActionObservation($Observation) {
   }
   $clean.records=$rows;return [pscustomobject]$clean
 }
+function ConvertTo-PicklePopupDelivery($Observation) {
+  $flags=@('article_verified','toolbar_observed','extension_action_observed','related_surface_verified','popup_origin_verified','popup_title_verified','popup_heading_verified','use_page_observed')
+  $counts=@('toolbar_attempts','toolbar_invocations','extension_action_attempts','extension_action_invocations','use_page_attempts','use_page_invocations')
+  $keys=@('stage','status')+$flags+$counts
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count -or $Observation.stage -isnot [string] -or $Observation.stage -cnotin @('toolbar','extension-menu','popup-document','use-page','sent') -or $Observation.status -isnot [string] -or $Observation.status -cnotin @('unavailable','unknown','initial-help','ready','connection-error','no-article','page-changed','private-tab','open-webpage','origin-rejected','registration-missing','registration-invalid','context-unavailable')) { throw 'The popup receipt had unknown fields or categories.' }
+  $clean=[ordered]@{stage=$Observation.stage;status=$Observation.status}
+  foreach ($key in $flags) { if ($Observation.$key -isnot [bool]) { throw 'A popup proof was not boolean.' };$clean[$key]=$Observation.$key }
+  foreach ($key in $counts) { $value=$Observation.$key;if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 1) { throw 'A popup action exceeded its once-only bound.' };$clean[$key]=$value }
+  foreach ($prefix in @('toolbar','extension_action','use_page')) {
+    if ($clean[$prefix+'_invocations'] -gt $clean[$prefix+'_attempts'] -or ($clean[$prefix+'_attempts'] -gt 0 -and !$clean[$prefix+'_observed'])) { throw 'Popup action counts lacked their observed control proof.' }
+  }
+  if (($clean.toolbar_observed -and !$clean.article_verified) -or ($clean.extension_action_observed -and $clean.toolbar_invocations -ne 1) -or ($clean.related_surface_verified -and $clean.extension_action_invocations -ne 1) -or ($clean.popup_origin_verified -and !$clean.related_surface_verified) -or ($clean.popup_title_verified -and !$clean.popup_origin_verified) -or ($clean.popup_heading_verified -and !$clean.popup_title_verified) -or ($clean.use_page_observed -and !$clean.popup_heading_verified)) { throw 'Popup observations lacked the preceding ownership and origin proof.' }
+  if ($clean.stage -ceq 'sent') {
+    foreach ($key in $flags) { if (!$clean[$key]) { throw 'The popup send lacked its complete control/origin proof.' } }
+    foreach ($key in $counts) { if ($clean[$key] -ne 1) { throw 'The popup send lacked its once-only ordinary actions.' } }
+  } elseif ($clean.use_page_invocations -ne 0 -or $clean.status -cne 'unavailable') { throw 'An incomplete popup receipt claimed a send or popup status.' }
+  return [pscustomobject]$clean
+}
 function ConvertTo-PickleExtensionDeliveryDriver($Report) {
   # Delivery-only observations are closed separately; all other fields
   # still pass through the unchanged common scalar allowlist.
-  $scalars=[ordered]@{};$reveal=$null;$chromeAction=$null
+  $scalars=[ordered]@{};$reveal=$null;$chromeAction=$null;$popup=$null;$trigger=$null
   foreach ($field in $Report.PSObject.Properties) {
-    if ($field.Name -ceq 'reader_reveal') { $reveal=ConvertTo-PickleDeliveryReaderReveal $field.Value }
+    if ($field.Name -ceq 'delivery_trigger') { if ($field.Value -isnot [string] -or $field.Value -cnotin @('shortcut','popup')) { throw 'Unknown delivery trigger.' };$trigger=$field.Value }
+    elseif ($field.Name -ceq 'popup_delivery') { $popup=ConvertTo-PicklePopupDelivery $field.Value }
+    elseif ($field.Name -ceq 'reader_reveal') { $reveal=ConvertTo-PickleDeliveryReaderReveal $field.Value }
     elseif ($field.Name -ceq 'chrome_action_observation') {
       if ($Report.browser -cne 'chrome' -or $Report.passed -isnot [bool] -or $Report.passed -or $Report.stage -cne 'delivery-context' -or $Report.failure -cne 'delivery-context-unavailable' -or $Report.native_host_registered -isnot [bool] -or !$Report.native_host_registered -or $Report.owned_registration_verified -isnot [bool] -or !$Report.owned_registration_verified -or $Report.owned_article_verified -isnot [bool] -or !$Report.owned_article_verified -or ($Report.delivery_shortcut_events -isnot [int] -and $Report.delivery_shortcut_events -isnot [long]) -or $Report.delivery_shortcut_events -ne 6 -or $Report.reader_reveal.reader_observed -isnot [bool] -or $Report.reader_reveal.reader_observed) { throw 'Chrome action discovery requires the exact failed full-delivery boundary.' }
       $chromeAction=ConvertTo-PickleChromeActionObservation $field.Value
@@ -62,6 +82,10 @@ function ConvertTo-PickleExtensionDeliveryDriver($Report) {
     else { $scalars[$field.Name]=$field.Value }
   }
   $clean=ConvertTo-PickleExtensionDriverScalars ([pscustomobject]$scalars) $true
+  if ($null -eq $trigger -or ($trigger -ceq 'popup' -and $clean.browser -cne 'chrome') -or ($trigger -ceq 'shortcut' -and $null -ne $popup) -or ($trigger -ceq 'popup' -and (($clean.delivery_shortcut_events -isnot [int] -and $clean.delivery_shortcut_events -isnot [long]) -or $clean.delivery_shortcut_events -ne 0 -or $null -ne $chromeAction))) { throw 'Delivery trigger evidence was missing, mixed or inconsistent.' }
+  $clean | Add-Member -NotePropertyName delivery_trigger -NotePropertyValue $trigger
+  if ($null -ne $popup) { $clean | Add-Member -NotePropertyName popup_delivery -NotePropertyValue $popup }
+
   if ($null -ne $reveal) { $clean | Add-Member -NotePropertyName reader_reveal -NotePropertyValue $reveal }
   if ($null -ne $chromeAction) { $clean | Add-Member -NotePropertyName chrome_action_observation -NotePropertyValue $chromeAction }
   if (($clean.schema -isnot [int] -and $clean.schema -isnot [long]) -or $clean.schema -ne 1 -or $clean.test -cne 'windows-stable-extension-reference-delivery' -or $clean.scope -cne 'extension-native-reference-delivery' -or $clean.browser -cnotin @('chrome','edge') -or $clean.passed -isnot [bool]) { throw 'The delivery driver had the wrong closed scope.' }
@@ -82,9 +106,10 @@ function Assert-PickleExtensionBrowserCleanup($Report) {
     if ($r.browser_launch_attempted -or $r.browser_job_drained -or $r.connect_attempted -or $r.disconnect_attempted -or $r.passed -or $r.full_delivery_verified -isnot [bool] -or $r.full_delivery_verified -or $r.stage -cnotin @('arguments','delivery-app-ready') -or $r.atomic_job_membership_verified -eq $true -or $r.owned_window_verified -eq $true -or $r.native_host_registered -eq $true) { throw 'A browser constructor attempt or accepted delivery cannot claim not-started cleanup.' }
   } elseif (!$r.browser_launch_attempted -or !$r.browser_job_drained) { throw 'The attempted browser job did not prove complete termination.' }
 }
-function Assert-PickleExtensionDeliveryDriver($Report,[string]$Browser) {
+function Assert-PickleExtensionDeliveryDriver($Report,[string]$Browser,[ValidateSet('shortcut','popup')][string]$Trigger='shortcut') {
   $r=ConvertTo-PickleExtensionDeliveryDriver $Report
-  if ($r.browser -cne $Browser) { throw 'The delivery browser identity changed.' }
+  if ($r.browser -cne $Browser -or $r.delivery_trigger -cne $Trigger) { throw 'The delivery browser or trigger changed.' }
+  if ($Trigger -ceq 'popup' -and ($null -eq $r.popup_delivery -or $r.popup_delivery.stage -cne 'sent')) { throw 'The popup user action was not fully verified.' }
   if (!$r.browser_launch_attempted -or $r.browser_not_started_cleanup_verified) { throw 'Actual delivery requires a launched browser and real job drain.' }
   if (!$r.connect_attempted -or !$r.disconnect_attempted) { throw 'Actual delivery requires the ordinary Connect and Disconnect actions.' }
   if ($null -eq $r.reader_reveal -or $r.reader_reveal.stage -cne 'complete') { throw 'The reader context reveal was not verified.' }
@@ -100,7 +125,7 @@ function Assert-PickleExtensionDeliveryDriver($Report,[string]$Browser) {
   foreach ($key in @('devtools_or_cdp_used','extension_code_modified','native_host_process_start_observed','inference_action_invoked','bridge_token_read','native_window_pixels_verified','selected_text_capture_verified','visible_url_verified')) {
     if ($r.$key -isnot [bool] -or $r.$key) { throw 'The delivery report claimed an unsupported action or evidence scope.' }
   }
-  if (@($r.PSObject.Properties.Name | Where-Object { $_ -cin @('failure','error_kind','error_hresult','failure_observation','edge_policy_observation','window_capture','delivery_cleanup_unavailable') }).Count -or ($r.application_pid -isnot [int] -and $r.application_pid -isnot [long]) -or $r.application_pid -le 0 -or ($r.delivery_shortcut_events -isnot [int] -and $r.delivery_shortcut_events -isnot [long]) -or $r.delivery_shortcut_events -ne 6 -or $r.extension_id -isnot [string] -or $r.extension_id -cnotmatch '^[a-p]{32}$' -or $r.bundled_extension_version -cne '0.1.0') { throw 'The delivery report contained failure or incomplete identity evidence.' }
+  if (@($r.PSObject.Properties.Name | Where-Object { $_ -cin @('failure','error_kind','error_hresult','failure_observation','edge_policy_observation','window_capture','delivery_cleanup_unavailable') }).Count -or ($r.application_pid -isnot [int] -and $r.application_pid -isnot [long]) -or $r.application_pid -le 0 -or ($r.delivery_shortcut_events -isnot [int] -and $r.delivery_shortcut_events -isnot [long]) -or $r.delivery_shortcut_events -ne $(if ($Trigger -ceq 'popup') { 0 } else { 6 }) -or $r.extension_id -isnot [string] -or $r.extension_id -cnotmatch '^[a-p]{32}$' -or $r.bundled_extension_version -cne '0.1.0') { throw 'The delivery report contained failure or incomplete identity evidence.' }
 }
 function ConvertTo-PickleExtensionZeroInference($State) {
   $keys=@('total_requests','show_count','chat_count','source_verified','context_verified','window_capture_required','marker_in_context','rejected','scenario','rejection_stage','rejection_ocr')
@@ -155,10 +180,10 @@ function Restore-PickleExtensionRegistrationBaseline($Baseline) {
     finally { $base.Dispose() }
   }
 }
-function Assert-PickleExtensionDeliveryCleanup($Report,[string]$Browser) {
-  if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-extension-article-delivery' -or $Report.scope -cne 'extension-native-reference-delivery' -or $Report.browser -cne $Browser -or $Report.passed -isnot [bool]) { throw 'The delivery owner report had the wrong scope.' }
+function Assert-PickleExtensionDeliveryCleanup($Report,[string]$Browser,[ValidateSet('shortcut','popup')][string]$Trigger='shortcut') {
+  if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-extension-article-delivery' -or $Report.scope -cne 'extension-native-reference-delivery' -or $Report.browser -cne $Browser -or $Report.trigger -isnot [string] -or $Report.trigger -cnotin @('shortcut','popup') -or $Report.trigger -cne $Trigger -or $Report.passed -isnot [bool]) { throw 'The delivery owner report had the wrong scope.' }
   $driver=ConvertTo-PickleExtensionDeliveryDriver $Report.driver
-  if ($driver.browser -cne $Browser) { throw 'The cleanup browser identity changed.' }
+  if ($driver.browser -cne $Browser -or $driver.delivery_trigger -cne $Trigger) { throw 'The cleanup browser or trigger changed.' }
   Assert-PickleExtensionBrowserCleanup $driver
   foreach ($key in @('owned_processes_stopped','profile_restored','registry_restored','archives_unchanged','bundled_extension_unchanged','lease_released','bridge_descriptor_removed')) { if ($Report.$key -isnot [bool] -or !$Report.$key) { throw 'The delivery owner did not prove complete cleanup.' } }
   if ($Report.application_forced_stop -isnot [bool] -or ($Report.application_forced_stop -and ($Report.ordinary_exit -eq $true -or $Report.passed))) { throw 'Forced application cleanup cannot attest ordinary successful exit.' }
@@ -169,10 +194,10 @@ function Assert-PickleExtensionDeliveryCleanup($Report,[string]$Browser) {
   if ($Report.inference.total_requests -ne $Report.inference.show_count -or $Report.inference.chat_count -ne 0) { throw 'The delivery workflow made an inference or unclassified request.' }
   $null=ConvertTo-PickleExtensionProxyState $Report.proxy
 }
-function Assert-PickleExtensionDeliveryReport($Report,[string]$Browser) {
-  Assert-PickleExtensionDeliveryCleanup $Report $Browser
+function Assert-PickleExtensionDeliveryReport($Report,[string]$Browser,[ValidateSet('shortcut','popup')][string]$Trigger='shortcut') {
+  Assert-PickleExtensionDeliveryCleanup $Report $Browser $Trigger
   if (!$Report.passed -or $Report.full_delivery_verified -isnot [bool] -or !$Report.full_delivery_verified -or $Report.ordinary_exit -isnot [bool] -or !$Report.ordinary_exit) { throw 'Real native delivery was not verified.' }
-  Assert-PickleExtensionDeliveryDriver $Report.driver $Browser
+  Assert-PickleExtensionDeliveryDriver $Report.driver $Browser $Trigger
 }
 function Get-PickleExtensionStrictAttributes([string]$Path) {
   try { return [IO.File]::GetAttributes($Path) }
@@ -245,7 +270,8 @@ function Assert-PickleExtensionPostExitAbsence($Report,[string]$Support,[bool]$A
   $Report.cleanup_stage='registry-state'
   Assert-PickleExtensionPostExitRegistryState $Baseline $Browser
 }
-function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[ValidateSet('chrome','edge')][string]$Browser,[string]$EvidencePath) {
+function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[ValidateSet('chrome','edge')][string]$Browser,[string]$EvidencePath,[ValidateSet('shortcut','popup')][string]$Trigger='shortcut') {
+  if ($Trigger -ceq 'popup' -and $Browser -cne 'chrome') { throw 'The popup scenario is Chrome-only.' }
   if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Native reference delivery runs only on hosted Windows CI.' }
   if (Test-Path -LiteralPath $EvidencePath) { throw 'Delivery evidence must be new.' }
   $null=Assert-PickleReadingDirectory ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath)))
@@ -256,7 +282,7 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
   $work=Join-Path ([IO.Path]::GetTempPath()) ('pickle-extension-delivery-'+[guid]::NewGuid().ToString('N'))
   $null=Assert-PickleReadingDirectory $work;New-Item -ItemType Directory -Path $work | Out-Null
   $profile=Join-Path $work 'browser-profile';New-Item -ItemType Directory -Path $profile | Out-Null
-  $report=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser=$Browser;passed=$false;full_delivery_verified=$false;driver=$null;application_pid=$null;ordinary_exit=$false;application_forced_stop=$false;inference=$null;proxy=$null;owned_processes_stopped=$false;profile_restored=$false;registry_restored=$false;archives_unchanged=$false;bundled_extension_unchanged=$false;lease_released=$false;bridge_descriptor_removed=$false;cleanup_stage='not-started';recovery_directory=$work}
+  $report=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser=$Browser;trigger=$Trigger;passed=$false;full_delivery_verified=$false;driver=$null;application_pid=$null;ordinary_exit=$false;application_forced_stop=$false;inference=$null;proxy=$null;owned_processes_stopped=$false;profile_restored=$false;registry_restored=$false;archives_unchanged=$false;bundled_extension_unchanged=$false;lease_released=$false;bridge_descriptor_removed=$false;cleanup_stage='not-started';recovery_directory=$work}
   $driver=$null;$app=$null;$proxy=$null;$observer=$null;$snapshot=$null;$failed=$false;$stage='prepare'
   try {
     [IO.File]::WriteAllText($EvidencePath,($report | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
@@ -275,13 +301,14 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
     Write-PickleReadingAtomic (Join-Path $support 'settings.json') ([Text.UTF8Encoding]::new($false).GetBytes(($settings | ConvertTo-Json -Depth 5)))
     $stage='start-actual-application';$app=Start-PickleReadingChild $application @();$null=$app.Handle;$report.application_pid=$app.Id
     $stage='actual-extension-delivery';$driverEvidence=Join-Path $work 'driver.json'
-    $driver=Start-PickleReadingChild $fixture @('deliver-reference','--browser',$Browser,'--executable',$browserExe,'--profile',$profile,'--extension',$bundle.Directory,'--proxy-port',([string]$proxyInfo.port),'--evidence',$driverEvidence,'--application',$application,'--application-pid',([string]$app.Id),'--application-start-ticks',([string]$app.StartTime.ToUniversalTime().Ticks),'--support',$support)
+    $driverMode=if ($Trigger -ceq 'popup') { 'deliver-popup-reference' } else { 'deliver-reference' }
+    $driver=Start-PickleReadingChild $fixture @($driverMode,'--browser',$Browser,'--executable',$browserExe,'--profile',$profile,'--extension',$bundle.Directory,'--proxy-port',([string]$proxyInfo.port),'--evidence',$driverEvidence,'--application',$application,'--application-pid',([string]$app.Id),'--application-start-ticks',([string]$app.StartTime.ToUniversalTime().Ticks),'--support',$support)
     $null=$driver.Handle
     if (!$driver.WaitForExit(120000)) { throw 'The owned delivery driver exceeded its deadline.' }
     if (Test-Path -LiteralPath $driverEvidence -PathType Leaf) { $report.driver=ConvertTo-PickleExtensionDeliveryDriver (Read-PickleReadingJson $driverEvidence) }
     if ($null -ne $report.driver -and $report.driver.application_pid -ne $app.Id) { throw 'The delivery driver application identity changed.' }
     if ($driver.ExitCode -ne 0) { throw 'The actual native reference delivery did not complete.' }
-    Assert-PickleExtensionDeliveryDriver $report.driver $Browser
+    Assert-PickleExtensionDeliveryDriver $report.driver $Browser $Trigger
   } catch { $failed=$true;$report.failure_stage=$stage;$report.failure='The controlled native reference delivery did not complete.' }
   finally {
     try {
@@ -322,7 +349,7 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
       $report.cleanup_stage='profile-directory'
       Remove-Item -LiteralPath $profile -Recurse -Force
       $report.cleanup_stage='complete'
-      if (!$failed) { Assert-PickleExtensionDeliveryDriver $report.driver $Browser;$report.full_delivery_verified=$true;$report.passed=$true }
+      if (!$failed) { Assert-PickleExtensionDeliveryDriver $report.driver $Browser $Trigger;$report.full_delivery_verified=$true;$report.passed=$true }
     } catch { $failed=$true;$report.passed=$false;$report.full_delivery_verified=$false;$report.cleanup_failure='Owned delivery cleanup or baseline verification did not complete.' }
     finally {
       foreach ($child in @($driver,$app,$proxy,$observer)) { if ($null -ne $child) { $child.Dispose() } }
@@ -333,16 +360,23 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
   }
   if (!$report.passed) { throw 'The hosted actual native reference delivery failed; no delivery pass was claimed.' }
 }
-function Invoke-PickleExtensionDeliveryCore([string]$PackageDirectory,[ValidateSet('chrome','edge')][string]$Browser,[string]$EvidencePath) {
+function New-PickleExtensionDeliveryStart([string]$PowerShell,[string]$PackageDirectory,[ValidateSet('chrome','edge')][string]$Browser,[string]$EvidencePath,[ValidateSet('shortcut','popup')][string]$Trigger='shortcut') {
+  if ($Trigger -ceq 'popup' -and $Browser -cne 'chrome') { throw 'The popup scenario is Chrome-only.' }
+  $start=New-PickleExtensionCoreStart $PowerShell (Join-Path $PSScriptRoot 'invoke-windows-extension-delivery.ps1') $PackageDirectory $Browser $EvidencePath
+  if ($Trigger -ceq 'popup') { $start.ArgumentList.Add('-Trigger');$start.ArgumentList.Add('popup') }
+  return $start
+}
+function Invoke-PickleExtensionDeliveryCore([string]$PackageDirectory,[ValidateSet('chrome','edge')][string]$Browser,[string]$EvidencePath,[ValidateSet('shortcut','popup')][string]$Trigger='shortcut') {
+  if ($Trigger -ceq 'popup' -and $Browser -cne 'chrome') { throw 'The popup scenario is Chrome-only.' }
   if ($PSEdition -cne 'Core' -or !$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Delivery delegation is limited to hosted Windows PowerShell 7.' }
   $self=[Diagnostics.Process]::GetCurrentProcess();try { $powerShell=$self.MainModule.FileName } finally { $self.Dispose() }
-  $start=New-PickleExtensionCoreStart $powerShell (Join-Path $PSScriptRoot 'invoke-windows-extension-delivery.ps1') $PackageDirectory $Browser $EvidencePath
+  $start=New-PickleExtensionDeliveryStart $powerShell $PackageDirectory $Browser $EvidencePath $Trigger
   $process=[Diagnostics.Process]::Start($start)
   try {
     $null=$process.Handle;$code=Wait-PickleExtensionCore $process
     try { $report=Read-PickleReadingJson $EvidencePath } catch { throw 'The delivery owner did not produce bounded readable evidence.' }
-    Assert-PickleExtensionDeliveryCleanup $report $Browser
+    Assert-PickleExtensionDeliveryCleanup $report $Browser $Trigger
     if ($code -ne 0) { return $false }
-    Assert-PickleExtensionDeliveryReport $report $Browser;return $true
+    Assert-PickleExtensionDeliveryReport $report $Browser $Trigger;return $true
   } finally { try { if (!$process.HasExited) { $process.Kill();if (!$process.WaitForExit(10000)) { throw 'The delivery owner did not stop.' } } } finally { $process.Dispose() } }
 }

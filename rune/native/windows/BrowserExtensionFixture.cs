@@ -424,8 +424,9 @@ public static partial class BrowserExtensionFixtureProgram {
         try {
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted") Fail("requires-hosted-windows-ci");
             string[] names={"--browser","--executable","--profile","--extension","--proxy-port","--evidence"};
-            delivery=args.Length>0 && args[0]=="deliver-reference";
-            if(delivery) InitializeDeliveryReport();
+            bool popupDelivery=args.Length>0 && args[0]=="deliver-popup-reference";
+            delivery=popupDelivery || (args.Length>0 && args[0]=="deliver-reference");
+            if(delivery) InitializeDeliveryReport(popupDelivery);
             if(delivery) names=names.Concat(new[]{"--application","--application-pid","--application-start-ticks","--support"}).ToArray();
             if (args.Length!=1+names.Length*2 || (args[0]!="load" && !delivery)) Fail("invalid-arguments");
             var options=new Dictionary<string,string>(StringComparer.Ordinal);
@@ -434,7 +435,7 @@ public static partial class BrowserExtensionFixtureProgram {
                 options.Add(args[i],args[i+1]);
             }
             evidence=options["--evidence"]; string kind=options["--browser"];
-            if (!BrowserExtensionPredicates.Browser(kind)) Fail("unsupported-browser");
+            if (!BrowserExtensionPredicates.Browser(kind) || (popupDelivery && kind!="chrome")) Fail("unsupported-browser");
             int port; if (!Int32.TryParse(options["--proxy-port"],out port) || port<1 || port>65535) Fail("invalid-proxy-port");
             string exe=RegularPath(options["--executable"]), extension=DirectoryPath(options["--extension"]),profile=DirectoryPath(options["--profile"]);
             if (Directory.EnumerateFileSystemEntries(profile).Any()) Fail("profile-not-empty");

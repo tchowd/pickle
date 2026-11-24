@@ -42,6 +42,7 @@ public static class BrowserExtensionDeliveryPredicates {
     }
     public static void SelfTest() {
         BrowserExtensionChromeActionPredicates.SelfTest();
+        BrowserExtensionPopupPredicates.SelfTest();
         if(!EligibleReader(true,true,true,true,0,480,180) || EligibleReader(false,true,true,true,0,480,180) ||
             EligibleReader(true,false,true,true,0,480,180) || EligibleReader(true,true,false,true,0,480,180) ||
             EligibleReader(true,true,true,false,0,480,180) || EligibleReader(true,true,true,true,1,480,180) ||
@@ -63,6 +64,36 @@ public static class BrowserExtensionDeliveryPredicates {
         manifest["allowed_origins"]=new object[]{origin,"chrome-extension://other/"};if(HostShape(manifest,origin)) throw new Exception("delivery-extra-origin");
         manifest["allowed_origins"]=new object[]{"chrome-extension://other/"};if(HostShape(manifest,origin)) throw new Exception("delivery-wrong-origin");
         manifest["allowed_origins"]=new object[]{origin};manifest["unexpected"]="not retained";if(HostShape(manifest,origin)) throw new Exception("delivery-manifest-extra-field");
+    }
+}
+
+public static class BrowserExtensionPopupPredicates {
+    public const string ExtensionTitle="Pickle — page and video context",Heading="Bring context to Pickle",UsePage="Use this page";
+    public static string Status(string value) {
+        switch(value) {
+        case "Ready in Pickle.":return "ready";
+        case "Browser extension origin rejected.":return "origin-rejected";
+        case "Connect the browser extension in Pickle Settings first.":return "registration-missing";
+        case "Invalid browser host registration.":return "registration-invalid";
+        case "Open Pickle and check that browser context is enabled.":return "context-unavailable";
+        case "Could not connect. Check the Pickle browser setup.":return "connection-error";
+        case "No article found. Try selecting a passage.":return "no-article";
+        case "The page changed. Try again.":return "page-changed";
+        case "Private tabs are not supported.":return "private-tab";
+        case "Open a webpage first.":return "open-webpage";
+        case "For YouTube, open “Show transcript” first. Embedded players may require opening the video’s own page.":return "initial-help";
+        default:return "unknown";
+        }
+    }
+    public static bool Role(bool toolbar,bool popup,int role) {return role==50000 || (!toolbar && !popup && (role==50011 || role==50031));}
+    public static bool Action(int count,bool bound,bool visible,bool enabled,bool geometry,bool invoke) {return count==1 && bound && visible && enabled && geometry && invoke;}
+    public static void SelfTest() {
+        if(Status("Browser extension origin rejected.")!="origin-rejected" || Status("Connect the browser extension in Pickle Settings first.")!="registration-missing" || Status("Invalid browser host registration.")!="registration-invalid" || Status("Open Pickle and check that browser context is enabled.")!="context-unavailable") throw new Exception("popup-closed-host-status");
+        if(Status("Ready in Pickle.")!="ready" || Status("The page changed. Try again.")!="page-changed" || Status("private unknown error")!="unknown" || Status("Ready in Pickle. private")!="unknown") throw new Exception("popup-closed-status");
+        if(!Role(true,false,50000) || !Role(false,false,50011) || !Role(false,false,50031) || !Role(false,true,50000) || Role(true,false,50011) || Role(false,true,50011) || Role(false,false,50004) || Role(false,false,50030)) throw new Exception("popup-closed-action-roles");
+        if(!Action(1,true,true,true,true,true)) throw new Exception("popup-action");
+        foreach(int count in new[]{0,2,512}) if(Action(count,true,true,true,true,true)) throw new Exception("popup-unique-action");
+        for(int i=0;i<5;i++) {var facts=new[]{true,true,true,true,true};facts[i]=false;if(Action(1,facts[0],facts[1],facts[2],facts[3],facts[4])) throw new Exception("popup-no-action-without-proof");}
     }
 }
 
@@ -90,6 +121,112 @@ public static class BrowserExtensionChromeActionPredicates {
 
 #if !PICKLE_PREDICATES
 public static partial class BrowserExtensionFixtureProgram {
+    sealed class ChromePopupSession : IDisposable {
+        sealed class Surface : IDisposable {
+            public readonly IntPtr Window,Owner;public readonly uint Pid;public readonly AutomationElement Root;readonly ChromePopupSession session;
+            public Surface(ChromePopupSession context,IntPtr window) {session=context;Window=window;uint pid;Native.GetWindowThreadProcessId(window,out pid);Pid=pid;Owner=Native.OpenProcess(0x00101000,false,pid);try {Root=AutomationElement.FromHandle(window);if(!Check()) Fail("delivery-context-unavailable");} catch {if(Owner!=IntPtr.Zero) Native.CloseHandle(Owner);throw;}}
+            public bool Check() {uint pid;return session.Time() && session.Foreground() && session.Related(Window) && browser.OwnsLiveProcess(Owner) && Native.GetProcessId(Owner)==Pid && Native.GetWindowThreadProcessId(Window,out pid)!=0 && pid==Pid && Automation.Compare(Root,AutomationElement.FromHandle(Window));}
+            public bool Bound(AutomationElement node,AutomationElement document=null,bool passwordLeaf=false) {
+                bool first=true,seen=document==null;
+                for(int depth=0;node!=null && depth<32;depth++) {
+                    if(!Check() || !browser.Owns(node.Current.ProcessId) || ((node.Current.IsPassword || node.Current.ControlType==ControlType.Edit) && !(first && passwordLeaf))) return false;
+                    if(node.Current.ControlType==ControlType.Document) {if(document==null || !Automation.Compare(node,document)) return false;seen=true;}
+                    if(Automation.Compare(node,Root)) return seen && Check();
+                    IntPtr native=new IntPtr(node.Current.NativeWindowHandle);
+                    if(native!=IntPtr.Zero && Native.GetAncestor(native,2)==native && native!=Window) return false;
+                    first=false;node=TreeWalker.RawViewWalker.GetParent(node);
+                }return false;
+            }
+            public List<AutomationElement> Nodes(AutomationElement scope=null) {
+                int visited=0;var result=new List<AutomationElement>();var queue=new Queue<KeyValuePair<AutomationElement,int>>();queue.Enqueue(new KeyValuePair<AutomationElement,int>(scope??Root,0));
+                while(queue.Count>0) {
+                    if(!Check() || ++visited>512) Fail("delivery-context-unavailable");var entry=queue.Dequeue();var node=entry.Key;
+                    var document=scope??(node.Current.ControlType==ControlType.Document ? node : null);
+                    if(entry.Value>24 || !Bound(node,document,true)) Fail("delivery-context-unavailable");
+                    if(node.Current.IsPassword || node.Current.ControlType==ControlType.Edit) continue;result.Add(node);
+                    if(scope==null && node.Current.ControlType==ControlType.Document) continue;
+                    if(entry.Value>=24) Fail("delivery-context-unavailable");var child=TreeWalker.RawViewWalker.GetFirstChild(node);
+                    while(child!=null) {if(!session.Time() || visited+queue.Count>=512) Fail("delivery-context-unavailable");queue.Enqueue(new KeyValuePair<AutomationElement,int>(child,entry.Value+1));child=TreeWalker.RawViewWalker.GetNextSibling(child);}
+                }return result;
+            }
+            public bool Read(AutomationElement node,AutomationElement document,Func<string> get,out string value,Func<bool> eligible=null) {return BrowserExtensionDetailsPredicates.Read(()=>Bound(node,document) && (eligible==null || eligible()) && Bound(node,document),get,out value);}
+            public AutomationElement Document(string uri,string title) {
+                var found=new List<AutomationElement>();foreach(var node in Nodes()) {
+                    if(node.Current.ControlType!=ControlType.Document || node.Current.IsOffscreen || !Bound(node,node)) continue;
+                    object value;if(!node.TryGetCurrentPattern(ValuePattern.Pattern,out value) || !Bound(node,node)) continue;
+                    string actual;if(!Read(node,node,()=>((ValuePattern)value).Current.Value,out actual)) Fail("delivery-context-unavailable");if(actual!=uri) continue;
+                    string name;if(!Read(node,node,()=>node.Current.Name,out name)) Fail("delivery-context-unavailable");if(name==title) found.Add(node);
+                }if(found.Count>1) Fail("delivery-context-unavailable");return found.SingleOrDefault();
+            }
+            public bool Actionable(AutomationElement node,AutomationElement doc) {
+                if(!Bound(node,doc) || !node.Current.IsEnabled || node.Current.IsOffscreen) return false;Native.Rect rect;if(!Native.GetWindowRect(Window,out rect)) return false;
+                var b=node.Current.BoundingRectangle;object invoke;bool supported=node.TryGetCurrentPattern(InvokePattern.Pattern,out invoke);return BrowserExtensionPopupPredicates.Action(1,Bound(node,doc),!node.Current.IsOffscreen,node.Current.IsEnabled,BrowserExtensionPredicates.BoundsFlags(b.X,b.Y,b.Width,b.Height,rect.Left,rect.Top,rect.Right,rect.Bottom)==3,supported);
+            }
+            public void Invoke(AutomationElement node,AutomationElement doc) {if(!session.Foreground() || !Actionable(node,doc)) Fail("delivery-context-unavailable");object value;if(!node.TryGetCurrentPattern(InvokePattern.Pattern,out value) || !Bound(node,doc) || !session.Foreground()) Fail("delivery-context-unavailable");((InvokePattern)value).Invoke();}
+            public void Dispose() {if(Owner!=IntPtr.Zero) Native.CloseHandle(Owner);}
+        }
+        sealed class Target {public Surface Surface;public AutomationElement Node,Document;}
+        readonly IntPtr main;readonly DateTime end;readonly Dictionary<IntPtr,Surface> surfaces=new Dictionary<IntPtr,Surface>();readonly Dictionary<string,object> observation;
+        Surface primary;AutomationElement article,popupDocument;Surface popupSurface;readonly string popupUri;
+        public ChromePopupSession(IntPtr window,string id,DateTime limit) {
+            main=window;end=limit;popupUri="chrome-extension://"+id+"/popup.html";
+            observation=new Dictionary<string,object>{{"stage","toolbar"},{"article_verified",false},{"toolbar_observed",false},{"toolbar_attempts",0},{"toolbar_invocations",0},
+                {"extension_action_observed",false},{"extension_action_attempts",0},{"extension_action_invocations",0},{"related_surface_verified",false},
+                {"popup_origin_verified",false},{"popup_title_verified",false},{"popup_heading_verified",false},{"use_page_observed",false},{"use_page_attempts",0},{"use_page_invocations",0},{"status","unavailable"}};
+            Report["popup_delivery"]=observation;
+            try {if(!Foreground()) Fail("delivery-context-unavailable");primary=new Surface(this,main);surfaces.Add(main,primary);article=primary.Document(BrowserExtensionDeliveryPredicates.ArticleUrl,BrowserExtensionDeliveryPredicates.ArticleTitle);if(article==null) Fail("delivery-context-unavailable");observation["article_verified"]=true;}
+            catch {Dispose();throw;}
+        }
+        bool Time() {DeliveryCheck();return DateTime.UtcNow<end;}
+        bool Related(IntPtr window) {
+            if(!Time() || window==IntPtr.Zero || !Native.IsWindow(window) || !Native.IsWindowVisible(window) || !browser.OwnsWindow(window)) return false;
+            if(window==main) return Native.GetAncestor(window,2)==main;
+            var seen=new HashSet<IntPtr>();for(int depth=0;window!=IntPtr.Zero && depth<16 && seen.Add(window);depth++) {if(!browser.OwnsWindow(window)) return false;window=Native.GetWindow(window,4);if(window==main) return true;}
+            return false;
+        }
+        bool Foreground() {return Time() && Related(Native.GetForegroundWindow());}
+        List<Surface> Surfaces() {
+            if(!Foreground() || !primary.Check()) Fail("delivery-context-unavailable");var windows=new List<IntPtr>{main};int examined=0;bool unavailable=false;
+            bool complete=Native.EnumWindows(delegate(IntPtr window,IntPtr ignored) {try {if(++examined>256 || !Time()) {unavailable=true;return false;}if(window!=main && Related(window)) {windows.Add(window);if(windows.Count>8) {unavailable=true;return false;}}return true;} catch {unavailable=true;return false;}},IntPtr.Zero);
+            DeliveryCheck();if(!complete || unavailable) Fail("delivery-context-unavailable");var result=new List<Surface>();
+            foreach(var window in windows) {Surface surface;if(surfaces.TryGetValue(window,out surface) && !surface.Check()) {surface.Dispose();surfaces.Remove(window);surface=null;}if(surface==null) {surface=new Surface(this,window);surfaces.Add(window,surface);}result.Add(surface);}return result;
+        }
+        bool Article() {if(!Foreground() || !primary.Check()) return false;var current=primary.Document(BrowserExtensionDeliveryPredicates.ArticleUrl,BrowserExtensionDeliveryPredicates.ArticleTitle);return current!=null && Automation.Compare(current,article);}
+        Target FindAction(string name,bool toolbar,AutomationElement document=null,Surface scoped=null) {
+            var found=new List<Target>();foreach(var surface in scoped!=null ? new List<Surface>{scoped} : toolbar ? new List<Surface>{primary} : Surfaces()) {
+                foreach(var node in surface.Nodes(document)) {
+                    int role=node.Current.ControlType.Id;if(!BrowserExtensionPopupPredicates.Role(toolbar,document!=null,role)) continue;
+                    string label;if(!surface.Read(node,document,()=>node.Current.Name,out label,()=>BrowserExtensionPopupPredicates.Role(toolbar,document!=null,node.Current.ControlType.Id))) Fail("delivery-context-unavailable");
+                    if(label==name && surface.Actionable(node,document)) found.Add(new Target{Surface=surface,Node=node,Document=document});
+                }
+            }if(found.Count>1) Fail("delivery-context-unavailable");return found.SingleOrDefault();
+        }
+        Target WaitAction(string name,bool toolbar,AutomationElement doc=null,Surface surface=null) {do {if(!Time()) break;var found=FindAction(name,toolbar,doc,surface);if(found!=null) return found;Thread.Sleep(100);} while(Time());Fail("delivery-context-unavailable");return null;}
+        void InvokeOnce(Target target,string name,string prefix,bool toolbar) {
+            if(!Article()) Fail("delivery-context-unavailable");var fresh=FindAction(name,toolbar,target.Document,target.Document!=null ? target.Surface : null);
+            if(fresh==null || !Automation.Compare(fresh.Node,target.Node) || fresh.Surface.Window!=target.Surface.Window || !Foreground()) Fail("delivery-context-unavailable");
+            if(prefix=="use_page" && (!Automation.Compare(popupSurface.Document(popupUri,"Pickle"),popupDocument) || !Heading())) Fail("delivery-context-unavailable");
+            observation[prefix+"_observed"]=true;observation[prefix+"_attempts"]=1;fresh.Surface.Invoke(fresh.Node,fresh.Document);observation[prefix+"_invocations"]=1;
+        }
+        public void Send() {
+            InvokeOnce(WaitAction("Extensions",true),"Extensions","toolbar",true);
+            observation["stage"]="extension-menu";InvokeOnce(WaitAction(BrowserExtensionPopupPredicates.ExtensionTitle,false),BrowserExtensionPopupPredicates.ExtensionTitle,"extension_action",false);
+            observation["stage"]="popup-document";
+            do {if(!Time()) break;var found=new List<Target>();foreach(var surface in Surfaces()) {var doc=surface.Document(popupUri,"Pickle");if(doc!=null) found.Add(new Target{Surface=surface,Document=doc});}if(found.Count>1) Fail("delivery-context-unavailable");if(found.Count==1) {popupSurface=found[0].Surface;popupDocument=found[0].Document;break;}Thread.Sleep(100);} while(Time());
+            if(popupDocument==null || !Article()) Fail("delivery-context-unavailable");observation["related_surface_verified"]=true;observation["popup_origin_verified"]=true;observation["popup_title_verified"]=true;
+            if(!Heading()) Fail("delivery-context-unavailable");observation["popup_heading_verified"]=true;observation["stage"]="use-page";
+            var action=WaitAction(BrowserExtensionPopupPredicates.UsePage,false,popupDocument,popupSurface);
+            if(!popupSurface.Check() || !Automation.Compare(popupSurface.Document(popupUri,"Pickle"),popupDocument) || !Heading()) Fail("delivery-context-unavailable");
+            InvokeOnce(action,BrowserExtensionPopupPredicates.UsePage,"use_page",false);observation["stage"]="sent";PollStatus();
+        }
+        bool Heading() {int count=0;foreach(var node in popupSurface.Nodes(popupDocument)) {if(node.Current.ControlType!=ControlType.Text) continue;string label;if(!popupSurface.Read(node,popupDocument,()=>node.Current.Name,out label,()=>node.Current.ControlType==ControlType.Text)) return false;if(label==BrowserExtensionPopupPredicates.Heading) count++;}return count==1;}
+        public void PollStatus() {
+            try {if(!Foreground() || popupSurface==null || !popupSurface.Check()) return;var doc=popupSurface.Document(popupUri,"Pickle");if(doc==null || !Automation.Compare(doc,popupDocument)) return;
+                foreach(var node in popupSurface.Nodes(doc)) {if(node.Current.ControlType!=ControlType.Text) continue;string value;if(!popupSurface.Read(node,doc,()=>node.Current.Name,out value,()=>node.Current.ControlType==ControlType.Text)) return;string category=BrowserExtensionPopupPredicates.Status(value);if(category!="unknown" && (category!="initial-help" || (string)observation["status"]=="unavailable")) observation["status"]=category;}
+            } catch { /* Status may disappear when accepted context opens Pickle. */ }
+        }
+        public void Dispose() {foreach(var surface in surfaces.Values) surface.Dispose();surfaces.Clear();}
+    }
     sealed class ChromeActionReader {
         readonly IntPtr window,owner;readonly uint pid;readonly DateTime end;readonly AutomationElement root;
         public ChromeActionReader(IntPtr windowValue,IntPtr ownerValue,uint pidValue,DateTime limit) {window=windowValue;owner=ownerValue;pid=pidValue;end=limit;root=AutomationElement.FromHandle(window);}
@@ -191,6 +328,7 @@ public static partial class BrowserExtensionFixtureProgram {
     }
     static DeliveryApplication deliveryApp;
     static string deliverySupport,deliveryKind,deliveryId;
+    static bool deliveryPopup;
     static bool deliveryConnectAttempted,deliveryDisconnectAttempted,deliveryDisconnectInvoked,deliveryDisconnected,deliveryOrdinaryExit;
     static DateTime deliveryCleanupDeadline;
     static bool DeliveryStopped { get { return deliveryOrdinaryExit && deliveryDisconnected; } }
@@ -200,7 +338,8 @@ public static partial class BrowserExtensionFixtureProgram {
         do { DeliveryCheck();try { if(test()) return; } catch(ElementNotAvailableException) { }Thread.Sleep(100); } while(DateTime.UtcNow<end);
         Fail(failure);
     }
-    static void InitializeDeliveryReport() {
+    static void InitializeDeliveryReport(bool popup) {
+        deliveryPopup=popup;Report["delivery_trigger"]=popup ? "popup" : "shortcut";Report["delivery_shortcut_events"]=0;
         Report["test"]="windows-stable-extension-reference-delivery";Report["scope"]="extension-native-reference-delivery";
         Report.Remove("native_host_executed");Report["native_host_process_start_observed"]=false;Report["native_host_route_verified"]=false;
         Report["app_launched"]=false;Report["inference_action_invoked"]=false;Report["bridge_token_read"]=false;
@@ -242,19 +381,26 @@ public static partial class BrowserExtensionFixtureProgram {
         Report["native_host_registered"]=true;Report["owned_registration_verified"]=true;
         stage="delivery-article";
         NavigateArticle(window);
-        stage="delivery-shortcut";Native.BrowserSendPage(window);Report["delivery_shortcut_events"]=6;
+        if(!deliveryPopup) {stage="delivery-shortcut";Native.BrowserSendPage(window);Report["delivery_shortcut_events"]=6;}
         stage="delivery-context";
-        // Same original 15-second context deadline; no second delivery attempt.
+        // One context deadline. Popup discovery/actions share it; no replay of
+        // either delivery trigger and no renewed wait after opening the popup.
         DateTime contextEnd=DateTime.UtcNow.AddSeconds(15);if(contextEnd>deadline) contextEnd=deadline;
-        deliveryApp.RevealReaderContext(contextEnd);
-        // Ordinary disclosure action only: reveal the whole retained reference
-        // and scroll its section into view, without requesting any AI work.
-        deliveryApp.Invoke("preview-full-context");Report["context_preview_revealed"]=true;
-        DeliveryWait(()=> {
-            var context=deliveryApp.Find("session-context");
-            return context!=null && !context.Current.IsOffscreen && BrowserExtensionDeliveryPredicates.Article(deliveryApp.Texts(context,true));
-        },10,"delivery-context-unavailable");
-        if(deliveryApp.Find("answer")!=null || deliveryApp.Find("answer-draft")!=null || deliveryApp.Find("consent-continue")!=null) Fail("delivery-unexpected-reading");
+        using(var popup=deliveryPopup ? new ChromePopupSession(window,id,contextEnd) : null) {
+            try {
+                if(popup!=null) popup.Send();
+                deliveryApp.RevealReaderContext(contextEnd,popup==null ? (Action)null : popup.PollStatus);
+                // Ordinary disclosure only; retain the existing separate 10s
+                // full-reference proof. Status never substitutes for admission.
+                deliveryApp.Invoke("preview-full-context");Report["context_preview_revealed"]=true;
+                DeliveryWait(()=> {
+                    if(popup!=null) popup.PollStatus();
+                    var context=deliveryApp.Find("session-context");
+                    return context!=null && !context.Current.IsOffscreen && BrowserExtensionDeliveryPredicates.Article(deliveryApp.Texts(context,true));
+                },10,"delivery-context-unavailable");
+                if(deliveryApp.Find("answer")!=null || deliveryApp.Find("answer-draft")!=null || deliveryApp.Find("consent-continue")!=null) Fail("delivery-unexpected-reading");
+            } finally {if(popup!=null) popup.PollStatus();}
+        }
         Report["accepted_article_verified"]=true;Report["native_host_route_verified"]=true;Report["authenticated_bridge_verified"]=true;
         // Preserve accepted route facts even if later Disconnect/Quit fails.
         // This establishes origin-bound delivery, not browser details metadata.
@@ -488,7 +634,7 @@ public static partial class BrowserExtensionFixtureProgram {
             var focused=AutomationElement.FocusedElement;
             return focused!=null && Automation.Compare(focused,control) && InsideReader(focused,reader,end) && Native.GetForegroundWindow()==window;
         }
-        public void RevealReaderContext(DateTime end) {
+        public void RevealReaderContext(DateTime end,Action observe=null) {
             var observation=new Dictionary<string,object>{{"stage","route"},{"reader_observed",false},{"source_label_observed",false},
                 {"control_verified",false},{"focused_control_verified",false},{"home_events",0},{"page_down_events",0},
                 {"context_visible",false},{"preview_visible",false},{"scope_verified",false},{"polls",0},{"unavailable",false}};
@@ -496,7 +642,7 @@ public static partial class BrowserExtensionFixtureProgram {
             AutomationElement reader=null,control=null;
             try {
                 while(DateTime.UtcNow<end && (int)observation["polls"]<150) {
-                    DeliveryCheck();observation["polls"]=(int)observation["polls"]+1;
+                    DeliveryCheck();if(observe!=null) observe();observation["polls"]=(int)observation["polls"]+1;
                     Verify();if(!OwnsWindow(window)) Fail("delivery-app-owner-changed");
                     if(reader==null) {
                         reader=Find("reader-scroll",end);
