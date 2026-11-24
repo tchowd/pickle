@@ -26,6 +26,9 @@ public static class BrowserExtensionDeliveryPredicates {
     public static bool BrowserNeverStarted(bool attempted,bool hasJob,bool drained) { return !attempted && !hasJob && !drained; }
     public static bool UniqueEligibleReader(int count) { return count==1; }
     public static bool ShouldInvokeDisconnect(bool connectAttempted,bool disconnectAttempted) { return connectAttempted && !disconnectAttempted; }
+    public static bool ReaderFocusCandidate(string id,int role,bool inside,bool visible,bool enabled,bool focusable,bool bounds) {
+        return (id=="simplify" || id=="explain-term-submit") && role==50000 && inside && visible && enabled && focusable && bounds;
+    }
     public static bool Article(IEnumerable<string> labels) {
         var values=labels.Select(Normalize).ToArray();
         return values.Contains(ArticleTitle+" · article") && values.Contains(ArticleText);
@@ -44,6 +47,11 @@ public static class BrowserExtensionDeliveryPredicates {
             EligibleReader(true,true,true,true,0,479,180) || EligibleReader(true,true,true,true,0,480,179)) throw new Exception("delivery-reader-eligibility");
         if(!UniqueEligibleReader(1) || UniqueEligibleReader(0) || UniqueEligibleReader(2) || UniqueEligibleReader(256)) throw new Exception("delivery-reader-uniqueness");
         if(!ShouldInvokeDisconnect(true,false) || ShouldInvokeDisconnect(false,false) || ShouldInvokeDisconnect(true,true)) throw new Exception("delivery-disconnect-after-attempt-once");
+        if(!ReaderFocusCandidate("simplify",50000,true,true,true,true,true) || !ReaderFocusCandidate("explain-term-submit",50000,true,true,true,true,true) ||
+            ReaderFocusCandidate("open-settings",50000,true,true,true,true,true) || ReaderFocusCandidate("simplify",50004,true,true,true,true,true) ||
+            ReaderFocusCandidate("simplify",50000,false,true,true,true,true) || ReaderFocusCandidate("simplify",50000,true,false,true,true,true) ||
+            ReaderFocusCandidate("simplify",50000,true,true,false,true,true) || ReaderFocusCandidate("simplify",50000,true,true,true,false,true) ||
+            ReaderFocusCandidate("simplify",50000,true,true,true,true,false)) throw new Exception("delivery-reader-focus-candidate");
         if(!BrowserNeverStarted(false,false,false) || BrowserNeverStarted(true,false,false) ||
             BrowserNeverStarted(false,true,false) || BrowserNeverStarted(false,false,true) || BrowserNeverStarted(true,true,true)) throw new Exception("delivery-browser-not-started");
         if(!Article(new[]{ArticleTitle+" · article",ArticleText}) || Article(new[]{ArticleTitle+" · article"}) || Article(new[]{ArticleText}) ||
@@ -114,7 +122,9 @@ public static partial class BrowserExtensionFixtureProgram {
         NavigateArticle(window);
         stage="delivery-shortcut";Native.BrowserSendPage(window);Report["delivery_shortcut_events"]=6;
         stage="delivery-context";
-        DeliveryWait(()=>deliveryApp.Find("session-context")!=null,15,"delivery-context-unavailable");
+        // Same original 15-second context deadline; no second delivery attempt.
+        DateTime contextEnd=DateTime.UtcNow.AddSeconds(15);if(contextEnd>deadline) contextEnd=deadline;
+        deliveryApp.RevealReaderContext(contextEnd);
         // Ordinary disclosure action only: reveal the whole retained reference
         // and scroll its section into view, without requesting any AI work.
         deliveryApp.Invoke("preview-full-context");Report["context_preview_revealed"]=true;
@@ -298,23 +308,26 @@ public static partial class BrowserExtensionFixtureProgram {
             Verify();
             if(found.Count>1) Fail("delivery-app-window-ambiguous");window=BrowserExtensionDeliveryPredicates.UniqueEligibleReader(found.Count) ? found[0] : IntPtr.Zero;return window;
         }
-        bool Bound(AutomationElement node,bool passwordMetadata=false) {
+        void Until(DateTime? end) {DeliveryCheck();if(end.HasValue && DateTime.UtcNow>=end.Value) Fail("delivery-context-unavailable");}
+        bool Bound(AutomationElement node,bool passwordMetadata=false,DateTime? end=null) {
+            Until(end);
             if(node==null || !OwnsWindow(window)) return false;var root=AutomationElement.FromHandle(window);
-            for(int depth=0;node!=null && depth<64;depth++) { DeliveryCheck();if(node.Current.ProcessId!=process.Id || (!passwordMetadata && node.Current.IsPassword)) return false;if(Automation.Compare(node,root)) return true;node=TreeWalker.RawViewWalker.GetParent(node); }return false;
+            for(int depth=0;node!=null && depth<64;depth++) { Until(end);if(node.Current.ProcessId!=process.Id || (!passwordMetadata && node.Current.IsPassword)) return false;if(Automation.Compare(node,root)) return true;node=TreeWalker.RawViewWalker.GetParent(node); }return false;
         }
-        List<AutomationElement> Nodes(AutomationElement root) {
+        List<AutomationElement> Nodes(AutomationElement root,DateTime? end=null) {
             var queue=new Queue<AutomationElement>();var result=new List<AutomationElement>();queue.Enqueue(root);
             while(queue.Count>0) {
-                DeliveryCheck();if(result.Count+queue.Count>1024) Fail("delivery-app-tree-bound");var node=queue.Dequeue();if(!Bound(node,true)) Fail("delivery-app-element-not-owned");
+                Until(end);if(result.Count+queue.Count>1024) Fail("delivery-app-tree-bound");var node=queue.Dequeue();if(!Bound(node,true,end)) Fail("delivery-app-element-not-owned");
                 // Credentials are not part of this scenario. Prune the exact
                 // owned password branch before strings, values or children.
                 if(node.Current.IsPassword) continue;result.Add(node);
-                var child=TreeWalker.RawViewWalker.GetFirstChild(node);while(child!=null) { DeliveryCheck();if(result.Count+queue.Count>=1024) Fail("delivery-app-tree-bound");queue.Enqueue(child);child=TreeWalker.RawViewWalker.GetNextSibling(child); }
+                var child=TreeWalker.RawViewWalker.GetFirstChild(node);while(child!=null) { Until(end);if(result.Count+queue.Count>=1024) Fail("delivery-app-tree-bound");queue.Enqueue(child);child=TreeWalker.RawViewWalker.GetNextSibling(child); }
             }return result;
         }
-        public AutomationElement Find(string id) {
+        public AutomationElement Find(string id,DateTime? end=null) {
+            Until(end);
             if(window==IntPtr.Zero && Window()==IntPtr.Zero) return null;
-            var matches=Nodes(AutomationElement.FromHandle(window)).Where(n=>Bound(n) && n.Current.AutomationId==id).ToArray();if(matches.Length>1) Fail("delivery-app-control-ambiguous");return matches.SingleOrDefault();
+            var matches=Nodes(AutomationElement.FromHandle(window),end).Where(n=>Bound(n,false,end) && n.Current.AutomationId==id).ToArray();if(matches.Length>1) Fail("delivery-app-control-ambiguous");return matches.SingleOrDefault();
         }
         public IEnumerable<string> Texts(AutomationElement root,bool visibleOnly=false) {
             foreach(var node in Nodes(root)) { if(!Bound(node)) Fail("delivery-app-element-not-owned");if(node.Current.ControlType!=ControlType.Text) continue;
@@ -323,6 +336,93 @@ public static partial class BrowserExtensionFixtureProgram {
             }
         }
         public bool HasText(string expected) { return Texts(AutomationElement.FromHandle(window)).Any(value=>value==expected); }
+        bool InsideReader(AutomationElement node,AutomationElement reader,DateTime end) {
+            if(DateTime.UtcNow>=end || !Bound(node,false,end) || !Bound(reader,false,end)) return false;
+            for(int depth=0;node!=null && depth<64;depth++) {
+                if(DateTime.UtcNow>=end || !Bound(node,false,end)) return false;
+                if(Automation.Compare(node,reader)) return true;
+                node=TreeWalker.RawViewWalker.GetParent(node);
+            }
+            return false;
+        }
+        bool ReaderLabel(AutomationElement reader,DateTime end) {
+            int found=0;
+            foreach(var node in Nodes(reader,end)) {
+                if(DateTime.UtcNow>=end) return false;
+                if(node.Current.ControlType!=ControlType.Text) continue;
+                if(!InsideReader(node,reader,end)) return false;string name=node.Current.Name;
+                if(!InsideReader(node,reader,end)) return false;
+                if(name=="Browser reference") found++;
+            }
+            return found==1;
+        }
+        bool ReaderScope(AutomationElement reader,DateTime end) {
+            if(DateTime.UtcNow>=end || !Bound(reader,false,end)) return false;
+            var current=Find("reader-scroll",end);return current!=null && Automation.Compare(current,reader) && Bound(current,false,end);
+        }
+        bool FocusedReader(AutomationElement control,AutomationElement reader,DateTime end) {
+            if(!ReaderScope(reader,end) || Native.GetForegroundWindow()!=window || !InsideReader(control,reader,end)) return false;
+            if(control.Current.ControlType!=ControlType.Button || !control.Current.IsEnabled || !control.Current.IsKeyboardFocusable) return false;
+            var focused=AutomationElement.FocusedElement;
+            return focused!=null && Automation.Compare(focused,control) && InsideReader(focused,reader,end) && Native.GetForegroundWindow()==window;
+        }
+        public void RevealReaderContext(DateTime end) {
+            var observation=new Dictionary<string,object>{{"stage","route"},{"reader_observed",false},{"source_label_observed",false},
+                {"control_verified",false},{"focused_control_verified",false},{"home_events",0},{"page_down_events",0},
+                {"context_visible",false},{"preview_visible",false},{"scope_verified",false},{"polls",0},{"unavailable",false}};
+            Report["reader_reveal"]=observation;
+            AutomationElement reader=null,control=null;
+            try {
+                while(DateTime.UtcNow<end && (int)observation["polls"]<150) {
+                    DeliveryCheck();observation["polls"]=(int)observation["polls"]+1;
+                    Verify();if(!OwnsWindow(window)) Fail("delivery-app-owner-changed");
+                    if(reader==null) {
+                        reader=Find("reader-scroll",end);
+                        if(reader==null) {Thread.Sleep(100);continue;}
+                        observation["reader_observed"]=true;
+                        if(!ReaderLabel(reader,end)) {reader=null;Thread.Sleep(100);continue;}
+                        observation["source_label_observed"]=true;
+                    }
+                    if(!ReaderScope(reader,end)) Fail("delivery-app-element-not-owned");
+                    var context=Find("session-context",end);var preview=Find("preview-full-context",end);
+                    bool contextVisible=context!=null && InsideReader(context,reader,end) && !context.Current.IsOffscreen;
+                    bool previewVisible=preview!=null && InsideReader(preview,reader,end) && !preview.Current.IsOffscreen && preview.Current.IsEnabled;
+                    observation["context_visible"]=contextVisible;observation["preview_visible"]=previewVisible;
+                    if(contextVisible && previewVisible && ReaderScope(reader,end)) {
+                        observation["scope_verified"]=true;observation["stage"]="complete";return;
+                    }
+                    observation["stage"]="control";
+                    if(control==null) {
+                        foreach(string id in new[]{"simplify","explain-term-submit"}) {
+                            var candidate=Find(id,end);if(candidate==null || !InsideReader(candidate,reader,end)) continue;
+                            Native.Rect outer;if(!Native.GetWindowRect(window,out outer)) Fail("delivery-app-owner-changed");
+                            var bounds=candidate.Current.BoundingRectangle;
+                            bool insideBounds=BrowserExtensionPredicates.BoundsFlags(bounds.X,bounds.Y,bounds.Width,bounds.Height,outer.Left,outer.Top,outer.Right,outer.Bottom)==3;
+                            if(!BrowserExtensionDeliveryPredicates.ReaderFocusCandidate(id,candidate.Current.ControlType.Id,InsideReader(candidate,reader,end),!candidate.Current.IsOffscreen,candidate.Current.IsEnabled,candidate.Current.IsKeyboardFocusable,insideBounds)) continue;
+                            control=candidate;observation["control_verified"]=true;break;
+                        }
+                        if(control==null) {Thread.Sleep(100);continue;}
+                        if(!ReaderScope(reader,end) || !InsideReader(control,reader,end)) Fail("delivery-app-element-not-owned");
+                        Native.SetForegroundWindow(window);
+                        if(Native.GetForegroundWindow()!=window || !InsideReader(control,reader,end)) Fail("delivery-app-focus-unavailable");
+                        control.SetFocus();
+                    }
+                    if(!FocusedReader(control,reader,end)) {Thread.Sleep(100);continue;}
+                    observation["focused_control_verified"]=true;observation["stage"]="scroll";
+                    // Retain real focus in this scroll ancestor while paging;
+                    // focus may legitimately become offscreen after PageDown.
+                    if((int)observation["home_events"]==0) {
+                        if(!FocusedReader(control,reader,end)) Fail("delivery-input-target-changed");if(DateTime.UtcNow>=end) Fail("delivery-context-unavailable");
+                        Native.DeliveryKey(window,OwnsWindow,0x24,false,true);observation["home_events"]=2;
+                    } else if((int)observation["page_down_events"]<12) {
+                        if(!FocusedReader(control,reader,end)) Fail("delivery-input-target-changed");if(DateTime.UtcNow>=end) Fail("delivery-context-unavailable");
+                        Native.DeliveryKey(window,OwnsWindow,0x22,false,true);observation["page_down_events"]=(int)observation["page_down_events"]+2;
+                    }
+                    Thread.Sleep(100);
+                }
+                Fail("delivery-context-unavailable");
+            } catch {observation["unavailable"]=true;throw;}
+        }
         public void Focus() { if(!OwnsWindow(window)) Fail("delivery-app-owner-changed");Native.SetForegroundWindow(window);DeliveryWait(()=>OwnsWindow(window) && Native.GetForegroundWindow()==window,3,"delivery-app-focus-unavailable"); }
         AutomationElement Control(string id) {
             Focus();

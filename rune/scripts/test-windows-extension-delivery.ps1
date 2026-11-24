@@ -25,8 +25,28 @@ $falseFlags+=@('extension_card_identity_verified','extension_details_identity_ve
 foreach ($key in $trueFlags) { $valid[$key]=$true };foreach ($key in $falseFlags) { $valid[$key]=$false }
 $noticeFlags=@('connect_notice_observed','disconnect_notice_observed','disconnect_no_match_notice_observed')
 foreach ($key in $noticeFlags) { $valid[$key]=$false }
+$valid.reader_reveal=[ordered]@{stage='complete';reader_observed=$true;source_label_observed=$true;control_verified=$true;focused_control_verified=$true;home_events=2;page_down_events=2;context_visible=$true;preview_visible=$true;scope_verified=$true;polls=3;unavailable=$false}
 $valid=$valid | ConvertTo-Json -Depth 5 | ConvertFrom-Json
 Assert-PickleExtensionDeliveryDriver $valid 'chrome'
+$alreadyVisible=$valid | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$alreadyVisible.reader_reveal.home_events=0;$alreadyVisible.reader_reveal.page_down_events=0;$alreadyVisible.reader_reveal.control_verified=$false;$alreadyVisible.reader_reveal.focused_control_verified=$false
+Assert-PickleExtensionDeliveryDriver $alreadyVisible 'chrome'
+foreach ($change in @(@('stage','unknown'),@('reader_observed',$false),@('source_label_observed',$false),@('context_visible',$false),@('preview_visible',$false),@('scope_verified',$false),@('focused_control_verified',$false),@('control_verified',$false),@('unavailable',$true),@('home_events',4),@('home_events',0),@('page_down_events',13),@('page_down_events',1),@('polls',151),@('polls',0),@('polls','3'),@('reader_observed','true'))) {
+  $bad=$valid.reader_reveal | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-DeliveryRefused { ConvertTo-PickleDeliveryReaderReveal $bad }
+}
+$bad=$valid.reader_reveal | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member text 'untrusted context must never be retained'
+Assert-DeliveryRefused { ConvertTo-PickleDeliveryReaderReveal $bad }
+$bad=$valid.reader_reveal | ConvertTo-Json | ConvertFrom-Json;$bad.PSObject.Properties.Remove('scope_verified')
+Assert-DeliveryRefused { ConvertTo-PickleDeliveryReaderReveal $bad }
+$routeOnly=$valid | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$routeOnly.reader_reveal.stage='scroll';$routeOnly.reader_reveal.context_visible=$false;$routeOnly.reader_reveal.preview_visible=$false;$routeOnly.reader_reveal.scope_verified=$false;$routeOnly.reader_reveal.unavailable=$true
+$null=ConvertTo-PickleExtensionDeliveryDriver $routeOnly
+Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $routeOnly 'chrome' }
+# Even completed reveal/route flags cannot substitute for exact article and
+# authenticated admission, which remain required by the actual success gate.
+$routeOnly=$valid | ConvertTo-Json -Depth 5 | ConvertFrom-Json;$routeOnly.accepted_article_verified=$false;$routeOnly.authenticated_bridge_verified=$false
+Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $routeOnly 'chrome' }
 # Complete product-written proof is sufficient without any UI status notice.
 $noticeOnly=$valid | ConvertTo-Json | ConvertFrom-Json;$noticeOnly.connect_notice_observed=$true
 foreach ($key in @('native_host_registered','owned_registration_verified')) {

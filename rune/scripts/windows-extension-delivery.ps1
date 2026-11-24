@@ -1,8 +1,33 @@
 # Separate hosted-only native delivery contract. Never weakens load-only scope.
 . (Join-Path $PSScriptRoot 'windows-extension-smoke.ps1')
 
+function ConvertTo-PickleDeliveryReaderReveal($Observation) {
+  $bools=@('reader_observed','source_label_observed','control_verified','focused_control_verified','context_visible','preview_visible','scope_verified','unavailable')
+  $keys=@('stage','home_events','page_down_events','polls')+$bools
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count -or $Observation.stage -isnot [string] -or $Observation.stage -cnotin @('route','control','scroll','complete')) { throw 'The reader reveal observation had unknown fields or stage.' }
+  $clean=[ordered]@{stage=$Observation.stage}
+  foreach ($key in $bools) { if ($Observation.$key -isnot [bool]) { throw 'A reader reveal flag was not boolean.' };$clean[$key]=$Observation.$key }
+  foreach ($key in @('home_events','page_down_events','polls')) {
+    $value=$Observation.$key
+    if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 150) { throw 'A reader reveal count was invalid.' }
+    $clean[$key]=$value
+  }
+  if ($clean.home_events -notin @(0,2) -or $clean.page_down_events -gt 12 -or $clean.page_down_events%2 -ne 0 -or ($clean.page_down_events -gt 0 -and $clean.home_events -ne 2)) { throw 'Reader reveal exceeded its ordinary key action bound.' }
+  if (($clean.control_verified -and (!$clean.reader_observed -or !$clean.source_label_observed)) -or ($clean.focused_control_verified -and !$clean.control_verified) -or ($clean.home_events -gt 0 -and !$clean.focused_control_verified)) { throw 'Reader keys were not bound to the owned reader control.' }
+  if (($clean.source_label_observed -and !$clean.reader_observed) -or (($clean.scope_verified -or $clean.context_visible -or $clean.preview_visible) -and !$clean.reader_observed)) { throw 'Reader observations lacked their route proof.' }
+  if ($clean.stage -ceq 'complete' -and (!$clean.reader_observed -or !$clean.source_label_observed -or !$clean.context_visible -or !$clean.preview_visible -or !$clean.scope_verified -or $clean.unavailable -or $clean.polls -eq 0)) { throw 'Reader reveal did not complete its route and visibility proof.' }
+  return [pscustomobject]$clean
+}
 function ConvertTo-PickleExtensionDeliveryDriver($Report) {
-  $clean=ConvertTo-PickleExtensionDriverScalars $Report $true
+  # This one delivery-only observation is closed separately; all other fields
+  # still pass through the unchanged common scalar allowlist.
+  $scalars=[ordered]@{};$reveal=$null
+  foreach ($field in $Report.PSObject.Properties) {
+    if ($field.Name -ceq 'reader_reveal') { $reveal=ConvertTo-PickleDeliveryReaderReveal $field.Value }
+    else { $scalars[$field.Name]=$field.Value }
+  }
+  $clean=ConvertTo-PickleExtensionDriverScalars ([pscustomobject]$scalars) $true
+  if ($null -ne $reveal) { $clean | Add-Member -NotePropertyName reader_reveal -NotePropertyValue $reveal }
   if (($clean.schema -isnot [int] -and $clean.schema -isnot [long]) -or $clean.schema -ne 1 -or $clean.test -cne 'windows-stable-extension-reference-delivery' -or $clean.scope -cne 'extension-native-reference-delivery' -or $clean.browser -cnotin @('chrome','edge') -or $clean.passed -isnot [bool]) { throw 'The delivery driver had the wrong closed scope.' }
   if (@($clean.PSObject.Properties.Name) -ccontains 'native_host_executed') { throw 'Delivery cannot invent direct native-host process observation.' }
   foreach ($key in @('browser_launch_attempted','browser_not_started_cleanup_verified','browser_job_drained','connect_attempted','disconnect_attempted','connect_notice_observed','disconnect_notice_observed','disconnect_no_match_notice_observed')) {
@@ -26,6 +51,7 @@ function Assert-PickleExtensionDeliveryDriver($Report,[string]$Browser) {
   if ($r.browser -cne $Browser) { throw 'The delivery browser identity changed.' }
   if (!$r.browser_launch_attempted -or $r.browser_not_started_cleanup_verified) { throw 'Actual delivery requires a launched browser and real job drain.' }
   if (!$r.connect_attempted -or !$r.disconnect_attempted) { throw 'Actual delivery requires the ordinary Connect and Disconnect actions.' }
+  if ($null -eq $r.reader_reveal -or $r.reader_reveal.stage -cne 'complete') { throw 'The reader context reveal was not verified.' }
   foreach ($key in @('passed','full_delivery_verified','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_loaded','browser_job_drained','app_launched','initial_compose_ready','native_host_registered','owned_registration_verified','owned_article_verified','context_preview_revealed','accepted_article_verified','native_host_route_verified','authenticated_bridge_verified','ordinary_disconnect_verified','ordinary_quit_verified')) {
     if ($r.$key -isnot [bool] -or !$r.$key) { throw 'The actual extension delivery chain did not complete.' }
   }
