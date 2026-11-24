@@ -229,6 +229,34 @@ try {
   Assert-ReadingRefused { ConvertTo-PickleReadingFixtureFailure $diagnostic 18 }
   $diagnostic | Add-Member -NotePropertyName message -NotePropertyValue 'unexpected-sensitive-source'
   Assert-ReadingRefused { ConvertTo-PickleReadingFixtureFailure $diagnostic 17 }
+  $context=[ordered]@{schema=1;status='complete';category='context-timeout';discovery_nodes=40;discovery_complete=$true;foreground_before_verified=$true;foreground_after_verified=$true;section_count=1;nodes=12;ocr_header_count=0;pending_count=0;preview_control_count=0;analyze_control_count=0;known_notice_count=1;unknown_text_count=2;errors=0}
+  $cleanContext=ConvertTo-PickleReadingContextObservation ($context | ConvertTo-Json | ConvertFrom-Json)
+  if ($cleanContext.category -cne 'context-timeout' -or $cleanContext.nodes -ne 12) { throw 'The fixed existing context notice was not preserved.' }
+  foreach ($change in @(@('schema',1.0),@('schema','1'),@('status','ready'),@('category','private arbitrary notice'),@('nodes',129),@('nodes',-1),@('nodes',12.0),@('nodes','12'),@('section_count',3),@('errors',1),@('known_notice_count',0),@('analyze_control_count',13),@('discovery_nodes',513),@('discovery_nodes',0),@('discovery_complete',$false),@('discovery_complete','true'),@('foreground_before_verified',$false),@('foreground_after_verified',$false))) {
+    $bad=$context | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+    Assert-ReadingRefused { ConvertTo-PickleReadingContextObservation $bad }
+  }
+  $bad=$context | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member -NotePropertyName text -NotePropertyValue 'private OCR text'
+  Assert-ReadingRefused { ConvertTo-PickleReadingContextObservation $bad }
+  $bad=$context | ConvertTo-Json | ConvertFrom-Json;$bad.PSObject.Properties.Remove('errors')
+  Assert-ReadingRefused { ConvertTo-PickleReadingContextObservation $bad }
+  $returned=$context | ConvertTo-Json | ConvertFrom-Json;$returned.category='capture-returned';$returned.ocr_header_count=1;$returned.known_notice_count=0;$returned.preview_control_count=1;$returned.analyze_control_count=1
+  $null=ConvertTo-PickleReadingContextObservation $returned # Page object, NOT proof of nonempty OCR.
+  $returned.pending_count=1;Assert-ReadingRefused { ConvertTo-PickleReadingContextObservation $returned }
+  $partial=$context | ConvertTo-Json | ConvertFrom-Json;$partial.status='partial';$partial.errors=1
+  $null=ConvertTo-PickleReadingContextObservation $partial
+  $undiscovered=$context | ConvertTo-Json | ConvertFrom-Json;$undiscovered.status='unavailable';$undiscovered.discovery_complete=$false;$undiscovered.foreground_after_verified=$false
+  foreach ($key in @('nodes','ocr_header_count','pending_count','preview_control_count','analyze_control_count','known_notice_count','unknown_text_count')) { $undiscovered.$key=0 };$undiscovered.category='unknown'
+  $null=ConvertTo-PickleReadingContextObservation $undiscovered
+  $driver=[pscustomobject]@{passed=$false;failure='completed-answer-unavailable';stage='reading';context_observation=($context | ConvertTo-Json | ConvertFrom-Json)}
+  Save-PickleReadingContextObservation $driver
+  if ($driver.failure -cne 'completed-answer-unavailable' -or $driver.stage -cne 'reading' -or $driver.context_observation_status -cne 'validated') { throw 'Context observation replaced the primary failure.' }
+  $driver.context_observation=[pscustomobject]@{message='private arbitrary notice'}
+  Save-PickleReadingContextObservation $driver
+  if ($driver.failure -cne 'completed-answer-unavailable' -or $driver.context_observation_status -cne 'invalid-or-unreadable' -or 'context_observation' -cin @($driver.PSObject.Properties.Name)) { throw 'Unsafe context evidence escaped or replaced the primary failure.' }
+  $success=[pscustomobject]@{passed=$true;context_observation=($context | ConvertTo-Json | ConvertFrom-Json)}
+  Save-PickleReadingContextObservation $success
+  if ($success.context_observation_status -cne 'invalid-or-unreadable' -or 'context_observation' -cin @($success.PSObject.Properties.Name)) { throw 'A failure diagnostic was accepted as success evidence.' }
   if ((ConvertTo-PickleReadingRelative ('BrowserBridge'+[char]92+'connection.json')) -cne 'BrowserBridge/connection.json') { throw 'Windows profile separators must normalize before control exclusions.' }
   $data=Join-Path $root 'data';$backup=Join-Path $root 'backup'
   New-Item -ItemType Directory -Path (Join-Path $data 'BrowserBridge') -Force | Out-Null

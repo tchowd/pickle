@@ -33,6 +33,30 @@ public static class ReadingFixturePredicates {
         return values!=null && values.All(value=>value!=null &&
             value.IndexOf(PixelMarker,StringComparison.OrdinalIgnoreCase)<0);
     }
+    // Closed UI notice classification only. Unknown strings never become evidence.
+    public static string ContextNotice(string value) {
+        switch(value) {
+        case "This source window could not be captured or read locally. Continue with the passage or use the browser extension.": return "capture-unavailable";
+        case "Page capture was cancelled.": return "cancelled";
+        case "Local Windows OCR requires a package-identified Pickle installation. This unpackaged build cannot capture page references; continue with selected text or use the browser extension.": return "package-unavailable";
+        case "The previous window capture is still stopping. Continue with the passage or retry.": return "capture-busy";
+        case "Page capture timed out. Continue with the selected passage.": return "capture-timeout";
+        case "Page capture timed out. Reading will use your passage.": return "context-timeout";
+        case "Windows on-device OCR is unavailable. Install a supported OCR language or use the selected passage.": return "ocr-unavailable";
+        case "The screenshot is too detailed to retain. Continue with the passage.": return "image-too-large";
+        default: return null;
+        }
+    }
+    public static string ContextCategory(int headers,int pending,IEnumerable<string> notices) {
+        var kinds=notices.Distinct().ToArray();
+        if(headers>1 || pending>1 || kinds.Length>1 || (headers>0 && (pending>0 || kinds.Length>0)) || (pending>0 && kinds.Length>0)) return "ambiguous";
+        if(kinds.Length==1) return kinds[0];
+        if(headers==1) return "capture-returned"; // Does NOT assert nonempty OCR.
+        return pending==1 ? "pending" : "unknown";
+    }
+    public static bool ContextMayReadLabels(bool complete,int sections,bool foreground) {
+        return complete && sections==1 && foreground;
+    }
     public static string ErrorKind(Exception error) {
         if (error is TypeInitializationException) return "type-initialization";
         if (error is System.DllNotFoundException) return "native-library-unavailable";
@@ -96,6 +120,26 @@ public static class ReadingFixturePredicates {
         return SavedEntry(normalized,selected,FollowAnswer);
     }
     public static void SelfTest() {
+        string[] captureNotices={
+            "This source window could not be captured or read locally. Continue with the passage or use the browser extension.",
+            "Page capture was cancelled.",
+            "Local Windows OCR requires a package-identified Pickle installation. This unpackaged build cannot capture page references; continue with selected text or use the browser extension.",
+            "The previous window capture is still stopping. Continue with the passage or retry.",
+            "Page capture timed out. Continue with the selected passage.",
+            "Page capture timed out. Reading will use your passage.",
+            "Windows on-device OCR is unavailable. Install a supported OCR language or use the selected passage.",
+            "The screenshot is too detailed to retain. Continue with the passage."};
+        string[] categories={"capture-unavailable","cancelled","package-unavailable","capture-busy","capture-timeout","context-timeout","ocr-unavailable","image-too-large"};
+        for(int i=0;i<captureNotices.Length;i++) {
+            if(ContextNotice(captureNotices[i])!=categories[i] || ContextCategory(0,0,new[]{categories[i]})!=categories[i]) throw new Exception("context-notice");
+            if(ContextNotice(captureNotices[i]+" private suffix")!=null || ContextNotice(" "+captureNotices[i])!=null) throw new Exception("context-notice-exact");
+        }
+        if(ContextNotice("private OCR content")!=null || ContextNotice(null)!=null ||
+            ContextCategory(0,0,new string[0])!="unknown" || ContextCategory(1,0,new string[0])!="capture-returned" ||
+            ContextCategory(0,1,new string[0])!="pending" || ContextCategory(1,1,new string[0])!="ambiguous" ||
+            ContextCategory(0,0,new[]{"cancelled","ocr-unavailable"})!="ambiguous") throw new Exception("context-classification");
+        if(!ContextMayReadLabels(true,1,true) || ContextMayReadLabels(false,1,true) ||
+            ContextMayReadLabels(true,0,true) || ContextMayReadLabels(true,2,true) || ContextMayReadLabels(true,1,false)) throw new Exception("context-label-admission");
         const string chosen="Caf\u00e9 selected passage.";
         if (!Contract("BEFORE",chosen,"AFTER","A controlled answer.")) throw new Exception("contract");
         if (Contract("BEFORE","Cafe selection","AFTER","answer")) throw new Exception("unicode");
@@ -408,6 +452,93 @@ public static class ReadingFixtureProgram {
             if (name.Length>0) texts.Add(name);
         }
         return texts.ToArray();
+    }
+    static bool ContextBound(AutomationElement element,AutomationElement section,AutomationElement root,IntPtr app,int pid,Process process,DateTime end) {
+        bool within=section==null;
+        for(int depth=0;element!=null && depth<32;depth++) {
+            if(DateTime.UtcNow>=end || process.HasExited || !Owned(app,pid) || Native.GetForegroundWindow()!=app ||
+                element.Current.ProcessId!=pid || element.Current.IsPassword) return false;
+            if(section!=null && Automation.Compare(element,section)) within=true;
+            if(Automation.Compare(element,root)) return within;
+            element=TreeWalker.RawViewWalker.GetParent(element);
+        }
+        return false;
+    }
+    static void ObserveContextFailure(IntPtr app,int pid,Process application) {
+        // Only the disposable hosted fixture. No actions, retries, text retention,
+        // screenshot, or additional capture. This observes existing UI state;
+        // missing/offscreen nodes never establish cancellation or empty OCR.
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" ||
+            Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted") return;
+        var result=new Dictionary<string,object>{{"schema",1},{"status","unavailable"},{"category","unknown"},
+            {"discovery_nodes",0},{"discovery_complete",false},{"foreground_before_verified",false},{"foreground_after_verified",false},
+            {"section_count",0},{"nodes",0},{"ocr_header_count",0},{"pending_count",0},
+            {"preview_control_count",0},{"analyze_control_count",0},{"known_notice_count",0},{"unknown_text_count",0},{"errors",0}};
+        evidence["context_observation"]=result; // Retain bounded prefix if a later property fails.
+        // Cooperative deadline checks bound traversal work; UIA COM calls do not
+        // provide a hard latency guarantee. The outer driver lifetime is unchanged.
+        DateTime end=DateTime.UtcNow.AddMilliseconds(350); if(overall<end) end=overall;
+        var notices=new List<string>();
+        try {
+            if(DateTime.UtcNow>=end || application.HasExited || !Owned(app,pid) || Native.GetForegroundWindow()!=app) return;
+            result["foreground_before_verified"]=true;
+            var root=Root(app,pid);
+            AutomationElement section=null;
+            var discovery=new Queue<Tuple<AutomationElement,int>>();discovery.Enqueue(Tuple.Create(root,0));bool discoveryInterrupted=false;
+            while(discovery.Count>0 && (int)result["discovery_nodes"]<512 && DateTime.UtcNow<end) {
+                var item=discovery.Dequeue();var node=item.Item1;
+                if(!ContextBound(node,null,root,app,pid,application,end)) {discoveryInterrupted=true;break;}
+                result["discovery_nodes"]=(int)result["discovery_nodes"]+1;
+                string id=node.Current.AutomationId;
+                if(!ContextBound(node,null,root,app,pid,application,end)) {discoveryInterrupted=true;break;}
+                if(id=="session-context") {section=node;result["section_count"]=Math.Min(2,(int)result["section_count"]+1);}
+                if(item.Item2>=24) {discoveryInterrupted=true;break;}
+                var child=TreeWalker.RawViewWalker.GetFirstChild(node);
+                while(child!=null && discovery.Count+(int)result["discovery_nodes"]<512 && DateTime.UtcNow<end) {
+                    discovery.Enqueue(Tuple.Create(child,item.Item2+1));child=TreeWalker.RawViewWalker.GetNextSibling(child);
+                }
+                if(child!=null) {discoveryInterrupted=true;break;}
+            }
+            bool discovered=!discoveryInterrupted && discovery.Count==0 && DateTime.UtcNow<end && ContextBound(root,null,root,app,pid,application,end);
+            result["discovery_complete"]=discovered;
+            if(!ReadingFixturePredicates.ContextMayReadLabels(discovered,(int)result["section_count"],Native.GetForegroundWindow()==app)) return;
+            if(!ContextBound(section,null,root,app,pid,application,end)) return;
+            var queue=new Queue<Tuple<AutomationElement,int>>();queue.Enqueue(Tuple.Create(section,0));
+            result["status"]="partial";bool interrupted=false;
+            while(queue.Count>0 && (int)result["nodes"]<128 && DateTime.UtcNow<end) {
+                var item=queue.Dequeue();var node=item.Item1;
+                if(!ContextBound(node,section,root,app,pid,application,end)) {result["errors"]=(int)result["errors"]+1;interrupted=true;break;}
+                result["nodes"]=(int)result["nodes"]+1;
+                string id=node.Current.AutomationId;
+                if(id=="preview-full-context") result["preview_control_count"]=(int)result["preview_control_count"]+1;
+                if(id=="analyze-visuals") result["analyze_control_count"]=(int)result["analyze_control_count"]+1;
+                if(node.Current.ControlType==ControlType.Text) {
+                    if(!ContextBound(node,section,root,app,pid,application,end)) {interrupted=true;break;}
+                    string name=node.Current.Name;
+                    if(!ContextBound(node,section,root,app,pid,application,end)) {interrupted=true;break;}
+                    if(name=="Source-window OCR (may contain errors)" || name=="Source-window OCR excerpt (truncated)") result["ocr_header_count"]=(int)result["ocr_header_count"]+1;
+                    else if(name=="Reading or recording context\u2026") result["pending_count"]=(int)result["pending_count"]+1;
+                    else {
+                        string category=ReadingFixturePredicates.ContextNotice(name);
+                        if(category!=null) {notices.Add(category);result["known_notice_count"]=(int)result["known_notice_count"]+1;}
+                        else result["unknown_text_count"]=(int)result["unknown_text_count"]+1;
+                    }
+                }
+                if(item.Item2>=16) {interrupted=true;break;}
+                var child=TreeWalker.RawViewWalker.GetFirstChild(node);
+                while(child!=null && queue.Count+(int)result["nodes"]<128 && DateTime.UtcNow<end) {
+                    queue.Enqueue(Tuple.Create(child,item.Item2+1));
+                    child=TreeWalker.RawViewWalker.GetNextSibling(child);
+                }
+                if(child!=null) {interrupted=true;break;}
+            }
+            bool finalProof=ContextBound(section,null,root,app,pid,application,end) && Native.GetForegroundWindow()==app;
+            result["foreground_after_verified"]=finalProof;
+            if(!interrupted && queue.Count==0 && DateTime.UtcNow<end && (int)result["errors"]==0 && finalProof) result["status"]="complete";
+        } catch {result["errors"]=(int)result["errors"]+1;}
+        finally {
+            result["category"]=ReadingFixturePredicates.ContextCategory((int)result["ocr_header_count"],(int)result["pending_count"],notices);
+        }
     }
     static void Invoke(AutomationElement element,int pid) {
         if (element==null || element.Current.ProcessId!=pid || !element.Current.IsEnabled) Fail("invoke-not-owned-or-enabled");
@@ -851,7 +982,7 @@ public static class ReadingFixtureProgram {
             Server(options["--server-state"],false); evidence["consent_before_network_verified"]=true;
             stage="reading";
             Invoke(consent,appPid);
-            Wait(()=> {
+            try { Wait(()=> {
                 if (application.HasExited) Fail("application-exited-during-reading");
                 root=Root(app,appPid);
                 var turn=explain ? Find(root,"turn-0",appPid) : root;
@@ -860,7 +991,13 @@ public static class ReadingFixtureProgram {
                 return CompletedAnswer(answer,appPid,contract.Answer,formatted) &&
                     Find(root,"cancel-request",appPid)==null && Find(root,"answer-draft",appPid)==null &&
                     Find(root,"copy-answer",appPid)!=null && Find(root,"save-answer",appPid)!=null;
-            },20,"completed-answer-unavailable");
+            },20,"completed-answer-unavailable"); }
+            catch(ReadingFixtureFailure failure) {
+                if(failure.Code=="completed-answer-unavailable") {
+                    try {ObserveContextFailure(app,appPid,application);} catch { /* Never replace the primary failure. */ }
+                }
+                throw;
+            }
             Server(options["--server-state"],true); evidence["provider_source_verified"]=true; evidence["completed_answer_verified"]=true;
             if (explain) evidence["accepted_explain_turn_verified"]=true;
             if(formatted) CopyRoundTrip(app,appPid,application,"copy-answer");

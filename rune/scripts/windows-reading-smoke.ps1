@@ -325,6 +325,47 @@ function ConvertTo-PickleReadingFixtureFailure($Value,[int]$ExpectedPid) {
   }
   return $clean
 }
+function ConvertTo-PickleReadingContextObservation($Value) {
+  $counts=@('discovery_nodes','section_count','nodes','ocr_header_count','pending_count','preview_control_count','analyze_control_count','known_notice_count','unknown_text_count','errors')
+  $flags=@('discovery_complete','foreground_before_verified','foreground_after_verified')
+  $keys=@('schema','status','category')+$counts+$flags
+  $actual=@($Value.PSObject.Properties.Name)
+  if ($actual.Count -ne $keys.Count -or @($actual | Where-Object { $_ -cnotin $keys }).Count -or @($keys | Where-Object { $_ -cnotin $actual }).Count) { throw 'Invalid context observation fields.' }
+  if (!(($Value.schema -is [int]) -or ($Value.schema -is [long])) -or $Value.schema -ne 1 -or $Value.status -isnot [string] -or $Value.status -cnotin @('unavailable','partial','complete') -or $Value.category -isnot [string] -or $Value.category -cnotin @('unknown','ambiguous','pending','capture-returned','capture-unavailable','cancelled','package-unavailable','capture-busy','capture-timeout','context-timeout','ocr-unavailable','image-too-large')) { throw 'Invalid context observation category.' }
+  $clean=[ordered]@{schema=1;status=$Value.status;category=$Value.category}
+  foreach ($key in $flags) {
+    if ($Value.$key -isnot [bool]) { throw 'Invalid context observation proof flag.' }
+    $clean[$key]=$Value.$key
+  }
+  foreach ($key in $counts) {
+    $n=$Value.$key
+    $maximum=128;if ($key -ceq 'discovery_nodes') { $maximum=512 };if ($key -ceq 'section_count') { $maximum=2 }
+    if (!(($n -is [int]) -or ($n -is [long])) -or $n -lt 0 -or $n -gt $maximum) { throw 'Invalid context observation count.' }
+    $clean[$key]=[int]$n
+  }
+  if ($clean.section_count -gt $clean.discovery_nodes -or ($clean.discovery_complete -and ($clean.discovery_nodes -eq 0 -or !$clean.foreground_before_verified))) { throw 'Invalid bounded context discovery proof.' }
+  if ($clean.nodes -gt 0 -and (!$clean.discovery_complete -or $clean.section_count -ne 1 -or !$clean.foreground_before_verified)) { throw 'Context labels were read before unique bounded discovery.' }
+  foreach ($key in @('ocr_header_count','pending_count','preview_control_count','analyze_control_count','known_notice_count','unknown_text_count')) {
+    if ($clean[$key] -gt $clean.nodes) { throw 'Context observation exceeded its inspected node count.' }
+  }
+  if ($clean.status -ceq 'complete' -and ($clean.section_count -ne 1 -or $clean.errors -ne 0 -or !$clean.discovery_complete -or !$clean.foreground_before_verified -or !$clean.foreground_after_verified)) { throw 'Incomplete context observation claimed completion.' }
+  if ($clean.category -ceq 'capture-returned' -and ($clean.ocr_header_count -ne 1 -or $clean.pending_count -ne 0 -or $clean.known_notice_count -ne 0)) { throw 'Context observation did not establish a returned page.' }
+  if ($clean.category -ceq 'pending' -and ($clean.pending_count -ne 1 -or $clean.ocr_header_count -ne 0 -or $clean.known_notice_count -ne 0)) { throw 'Context observation did not establish pending work.' }
+  if ($clean.category -cnotin @('unknown','ambiguous','pending','capture-returned') -and $clean.known_notice_count -eq 0) { throw 'Context observation did not observe its known notice.' }
+  return $clean
+}
+function Save-PickleReadingContextObservation($Driver) {
+  if ($null -eq $Driver -or 'context_observation' -cnotin @($Driver.PSObject.Properties.Name)) { return }
+  try {
+    if ($Driver.passed -isnot [bool] -or $Driver.passed) { throw 'Failure-only observation appeared on a passing driver.' }
+    $clean=ConvertTo-PickleReadingContextObservation $Driver.context_observation
+    $Driver.context_observation=$clean
+    $Driver | Add-Member -NotePropertyName context_observation_status -NotePropertyValue 'validated' -Force
+  } catch {
+    $Driver.PSObject.Properties.Remove('context_observation')
+    $Driver | Add-Member -NotePropertyName context_observation_status -NotePropertyValue 'invalid-or-unreadable' -Force
+  }
+}
 function Add-PickleReadingCleanupFailure($Evidence,[ref]$Primary,[string]$Code) {
   $Evidence.cleanup_categories=@($Evidence.cleanup_categories)+$Code
   if (!$Primary.Value) { $Primary.Value='Owned reading cleanup failed.' }
@@ -585,6 +626,7 @@ function Assert-PickleInstalledReadingWorkflow([string]$Application,[string]$Dat
       if (!$evidence.driver -and (Test-Path -LiteralPath (Join-Path $work 'driver-evidence.json') -PathType Leaf)) { try { $evidence.driver=Read-PickleReadingJson (Join-Path $work 'driver-evidence.json') } catch {} }
       if (!$evidence.restart_driver -and (Test-Path -LiteralPath (Join-Path $work 'saved-driver-evidence.json') -PathType Leaf)) { try { $evidence.restart_driver=Read-PickleReadingJson (Join-Path $work 'saved-driver-evidence.json') } catch {} }
       if (!$evidence.server -and (Test-Path -LiteralPath (Join-Path $work 'server-state.json') -PathType Leaf)) { try { $evidence.server=Read-PickleReadingJson (Join-Path $work 'server-state.json') } catch {} }
+      Save-PickleReadingContextObservation $evidence.driver
       Save-PickleReadingProcessState $evidence 'fixture' $fixture $fixtureExe
       Save-PickleReadingProcessState $evidence 'server' $server $python
       Save-PickleReadingProcessState $evidence 'driver' $driver $fixtureExe
