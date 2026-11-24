@@ -410,7 +410,11 @@ public static partial class BrowserExtensionFixtureProgram {
         Fail(code);
     }
     [MTAThread] public static int Main(string[] args) {
-        if (args.Length==1 && args[0]=="--self-test") { BrowserExtensionPredicates.SelfTest(); return 0; }
+        if (args.Length==1 && args[0]=="--self-test") {
+            BrowserExtensionPredicates.SelfTest();
+            if(ErrorKind(new ElementNotAvailableException())!="element-not-available") throw new InvalidOperationException("native-element-error-kind");
+            return 0;
+        }
         if (args.Length==1 && args[0]=="--edge-navigation-self-test") { BrowserExtensionEdgeNavigationPredicates.SelfTest(); return 0; }
         if (args.Length==1 && args[0]=="--delivery-self-test") { BrowserExtensionDeliveryPredicates.SelfTest(); return 0; }
         if (args.Length==1 && args[0]=="--details-self-test") { BrowserExtensionDetailsPredicates.SelfTest(); return 0; }
@@ -531,6 +535,8 @@ public static partial class BrowserExtensionFixtureProgram {
             stage="browser-cleanup";
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;
+            if(browser!=null && window!=IntPtr.Zero && stage=="load-unpacked" && error.Code=="load-unpacked-unavailable" &&
+                Report.ContainsKey("browser") && (string)Report["browser"]=="edge") ObserveEdgeNavigation(window);
             if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card" || stage=="loaded-extension-details")) {
                 if(stage=="developer-mode" && Report.ContainsKey("browser") && (string)Report["browser"]=="edge") ObserveEdgeNavigation(window);
                 if(Report.ContainsKey("browser") && (string)Report["browser"]=="edge") { try { ObserveEdgePolicies(); } catch { } }
@@ -552,6 +558,7 @@ public static partial class BrowserExtensionFixtureProgram {
         return loaded && drained && (!delivery || (delivered && DeliveryStopped)) ? 0 : 1;
     }
     static string ErrorKind(Exception error) {
+        if(error is ElementNotAvailableException) return "element-not-available";
         if(error is COMException) return "com";if(error is UnauthorizedAccessException) return "access-denied";
         if(error is IOException) return "io";if(error is ArgumentException) return "argument";return "other";
     }
@@ -700,7 +707,7 @@ public static partial class BrowserExtensionFixtureProgram {
         },5,"committed-internal-uri-unavailable");
         Report["committed_internal_uri_verified"]=true;
         Native.Escape(window);Report["navigation_escape_events"]=2;
-        if(!ExtensionsDocument(window)) Fail("extensions-document-changed");
+        Wait(()=>ExtensionsDocument(window),5,"extensions-document-changed");
     }
     static void ObserveDeveloper(IntPtr window,string kind,string key) {
         var nodes=Tree(window);var candidates=new List<Dictionary<string,object>>();

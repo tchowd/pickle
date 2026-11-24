@@ -91,6 +91,14 @@ foreach ($pair in @(@('failure','native-operation-failed'),@('error_kind','com')
   $null=ConvertTo-PickleExtensionStageReport $bad
   Assert-ExtensionRefused { Assert-PickleExtensionStageReport $bad 'chrome' }
 }
+$stale=$valid | ConvertTo-Json | ConvertFrom-Json
+$stale.passed=$false;$stale | Add-Member stage 'ordinary-navigation'
+$stale | Add-Member failure 'native-operation-failed';$stale | Add-Member error_kind 'element-not-available';$stale | Add-Member error_hresult ([int]-2147220991)
+$staleClean=ConvertTo-PickleExtensionStageReport $stale
+if ($staleClean.error_kind -cne 'element-not-available' -or $staleClean.error_hresult -ne -2147220991) { throw 'Stale native element classification was lost.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $staleClean 'chrome' }
+$stale.error_kind='ElementNotAvailableException with raw details'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $stale }
 $layout=[ordered]@{stage='complete';action_performed=$true;safely_verified=$true;before_verified=$true;set_window_pos_succeeded=$true;after_verified=$true;unavailable=$false;requested_outer_width=1280;requested_outer_height=800;before_client_width=988;before_client_height=692;after_client_width=1264;after_client_height=762;after_outer_width=1280;after_outer_height=800} | ConvertTo-Json | ConvertFrom-Json
 $layoutClean=ConvertTo-PickleExtensionLayout $layout
 if (!$layoutClean.safely_verified -or $layoutClean.after_outer_width -ne 1280) { throw 'The sole safely verified resize changed.' }
@@ -176,6 +184,15 @@ $failedNavigation=$valid | ConvertTo-Json | ConvertFrom-Json;$failedNavigation.b
 $failedNavigation | Add-Member -NotePropertyName stage -NotePropertyValue 'developer-mode'
 $failedNavigation | Add-Member -NotePropertyName failure -NotePropertyValue 'developer-toggle-unavailable'
 $failedNavigation | Add-Member -NotePropertyName edge_navigation_observation -NotePropertyValue $navigation
+$loadDiscovery=$failedNavigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$loadDiscovery.stage='load-unpacked';$loadDiscovery.failure='load-unpacked-unavailable'
+$loadClean=ConvertTo-PickleExtensionStageReport $loadDiscovery
+if ($loadClean.stage -cne 'load-unpacked' -or $loadClean.failure -cne 'load-unpacked-unavailable' -or !$loadClean.edge_navigation_observation.proof_verified) { throw 'The exact failed Load unpacked discovery lost its bounded page observation.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $loadClean 'edge' }
+foreach ($change in @(@('browser','chrome'),@('passed',$true),@('stage','ordinary-navigation'),@('stage','folder-picker-path'),@('stage','loaded-extension-details'),@('failure','developer-toggle-unavailable'),@('failure','stage-deadline'),@('failure','native-operation-failed'))) {
+  $bad=$loadDiscovery | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+}
 $null=ConvertTo-PickleExtensionStageReport $failedNavigation
 foreach ($change in @(@('browser','chrome'),@('passed',$true),@('stage','browser-cleanup'))) {
   $bad=$failedNavigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
