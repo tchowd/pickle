@@ -152,10 +152,179 @@ unsafe fn nullable_automation_element(
     status.ok()?;
     Ok(element)
 }
-struct ComGuard;
+// Test-only per-call lifecycle metadata. No COM object or capture content is
+// shared with the caller. Phase names come only from these fieldless enums.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerCallerExit {
+    Pending,
+    Waiting,
+    PreCancelled,
+    Busy,
+    SpawnFailed,
+    Cancelled,
+    Deadline,
+    Disconnected,
+    DeliveredOk,
+    DeliveredError,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerPhase {
+    NotStarted,
+    SpawnRequested,
+    ThreadStarted,
+    MtaInitializing,
+    MtaInitReturned,
+    WorkRunning,
+    WorkReturned,
+    ComTeardownEntering,
+    ComTeardownReturned,
+    SendEntering,
+    SendReturned,
+    DeliveryResultDropEntering,
+    DeliveryResultDropReturned,
+    FlightReleased,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerTaskPhase {
+    NotStarted,
+    ReaderConstructing,
+    ReaderReady,
+    Observing,
+    ObservationReturned,
+    VerificationReturned,
+    ObjectDropEntering,
+    ObjectDropReturned,
+}
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct WorkerSnapshot {
+    caller_exit: WorkerCallerExit,
+    worker_phase: WorkerPhase,
+    task_phase: WorkerTaskPhase,
+    last_observation_index: Option<u8>,
+    mta_hresult: Option<i32>,
+    receiver_connected: Option<bool>,
+    events: [WorkerPhase; 16],
+    event_count: usize,
+    events_truncated: bool,
+}
+#[cfg(test)]
+impl WorkerSnapshot {
+    fn lifecycle_complete(&self) -> bool {
+        self.worker_phase == WorkerPhase::FlightReleased
+    }
+    fn json(&self) -> serde_json::Value {
+        // Receiving a result does not prove the sender's Flight has dropped.
+        // Partial records intentionally contain no read/capture counters.
+        serde_json::json!({
+            "caller_exit":format!("{:?}",self.caller_exit),
+            "worker_phase":format!("{:?}",self.worker_phase),
+            "task_phase":format!("{:?}",self.task_phase),
+            "last_observation_index":self.last_observation_index,
+            "mta_hresult":self.mta_hresult,
+            "receiver_connected":self.receiver_connected,
+            "partial":!self.lifecycle_complete(),
+            "lifecycle_complete":self.lifecycle_complete(),
+            "events":self.events[..self.event_count].iter().map(|phase|format!("{phase:?}")).collect::<Vec<_>>(),
+            "events_truncated":self.events_truncated,
+        })
+    }
+}
+#[cfg(test)]
+#[derive(Clone)]
+struct DocumentWorkerProbe(std::sync::Arc<(std::sync::Mutex<WorkerSnapshot>, std::sync::Condvar)>);
+#[cfg(test)]
+impl Default for DocumentWorkerProbe {
+    fn default() -> Self {
+        Self(std::sync::Arc::new((
+            std::sync::Mutex::new(WorkerSnapshot {
+                caller_exit: WorkerCallerExit::Pending,
+                worker_phase: WorkerPhase::NotStarted,
+                task_phase: WorkerTaskPhase::NotStarted,
+                last_observation_index: None,
+                mta_hresult: None,
+                receiver_connected: None,
+                events: [WorkerPhase::NotStarted; 16],
+                event_count: 0,
+                events_truncated: false,
+            }),
+            std::sync::Condvar::new(),
+        )))
+    }
+}
+#[cfg(test)]
+impl DocumentWorkerProbe {
+    fn update(&self, change: impl FnOnce(&mut WorkerSnapshot)) {
+        let mut value = self
+            .0
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        change(&mut value);
+        self.0.1.notify_all();
+    }
+    fn caller(&self, exit: WorkerCallerExit) {
+        self.update(|value| value.caller_exit = exit);
+    }
+    fn phase(&self, phase: WorkerPhase) {
+        self.update(|value| {
+            value.worker_phase = phase;
+            if value.event_count < value.events.len() {
+                value.events[value.event_count] = phase;
+                value.event_count += 1;
+            } else {
+                value.events_truncated = true;
+            }
+        });
+    }
+    fn task(&self, phase: WorkerTaskPhase, index: Option<u8>) {
+        self.update(|value| {
+            value.task_phase = phase;
+            if index.is_some() {
+                value.last_observation_index = index;
+            }
+        });
+    }
+    fn snapshot(&self) -> WorkerSnapshot {
+        *self
+            .0
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    fn wait_released(&self, timeout: Duration) -> bool {
+        let value = self
+            .0
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.0
+            .1
+            .wait_timeout_while(value, timeout, |value| !value.lifecycle_complete())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0
+            .lifecycle_complete()
+    }
+}
+
+struct ComGuard {
+    #[cfg(test)]
+    probe: Option<DocumentWorkerProbe>,
+}
 impl Drop for ComGuard {
     fn drop(&mut self) {
+        #[cfg(test)]
+        if let Some(probe) = &self.probe {
+            probe.phase(WorkerPhase::ComTeardownEntering);
+        }
         unsafe { CoUninitialize() }
+        #[cfg(test)]
+        if let Some(probe) = &self.probe {
+            probe.phase(WorkerPhase::ComTeardownReturned);
+        }
     }
 }
 
@@ -190,48 +359,171 @@ fn on_document_worker<T: Send + 'static>(
     cancel: CancellationToken,
     work: impl FnOnce() -> Result<T, PlatformError> + Send + 'static,
 ) -> Result<T, PlatformError> {
+    on_document_worker_inner(
+        cancel,
+        work,
+        #[cfg(test)]
+        None,
+    )
+}
+
+#[cfg(test)]
+fn on_document_worker_observed<T: Send + 'static>(
+    cancel: CancellationToken,
+    probe: DocumentWorkerProbe,
+    work: impl FnOnce() -> Result<T, PlatformError> + Send + 'static,
+) -> Result<T, PlatformError> {
+    on_document_worker_inner(cancel, work, Some(probe))
+}
+
+fn on_document_worker_inner<T: Send + 'static>(
+    cancel: CancellationToken,
+    work: impl FnOnce() -> Result<T, PlatformError> + Send + 'static,
+    #[cfg(test)] probe: Option<DocumentWorkerProbe>,
+) -> Result<T, PlatformError> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static ACTIVE: AtomicBool = AtomicBool::new(false);
-    if cancel.is_cancelled()
-        || ACTIVE
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-    {
+    if cancel.is_cancelled() {
+        #[cfg(test)]
+        if let Some(probe) = &probe {
+            probe.caller(WorkerCallerExit::PreCancelled);
+        }
         return Err(unavailable());
     }
+    if ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        #[cfg(test)]
+        if let Some(probe) = &probe {
+            probe.caller(WorkerCallerExit::Busy);
+        }
+        return Err(unavailable());
+    }
+    #[cfg(test)]
+    if let Some(probe) = &probe {
+        probe.caller(WorkerCallerExit::Waiting);
+        probe.phase(WorkerPhase::SpawnRequested);
+    }
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    #[cfg(test)]
+    let worker_probe = probe.clone();
     let worker = std::thread::Builder::new()
         .name("pickle-browser-document".into())
         .spawn(move || {
-            struct Flight;
+            struct Flight {
+                #[cfg(test)]
+                probe: Option<DocumentWorkerProbe>,
+            }
             impl Drop for Flight {
                 fn drop(&mut self) {
                     ACTIVE.store(false, Ordering::Release);
+                    #[cfg(test)]
+                    if let Some(probe) = &self.probe {
+                        probe.phase(WorkerPhase::FlightReleased);
+                    }
                 }
             }
-            let _flight = Flight;
+            #[cfg(test)]
+            let probe = worker_probe;
+            let _flight = Flight {
+                #[cfg(test)]
+                probe: probe.clone(),
+            };
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.phase(WorkerPhase::ThreadStarted);
+            }
             let result = (|| {
-                unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
-                    .ok()
-                    .map_err(|_| unavailable())?;
-                let _com = ComGuard;
-                work()
+                #[cfg(test)]
+                if let Some(probe) = &probe {
+                    probe.phase(WorkerPhase::MtaInitializing);
+                }
+                let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+                #[cfg(test)]
+                if let Some(probe) = &probe {
+                    probe.update(|value| value.mta_hresult = Some(initialized.0));
+                    probe.phase(WorkerPhase::MtaInitReturned);
+                }
+                initialized.ok().map_err(|_| unavailable())?;
+                let _com = ComGuard {
+                    #[cfg(test)]
+                    probe: probe.clone(),
+                };
+                #[cfg(test)]
+                if let Some(probe) = &probe {
+                    probe.phase(WorkerPhase::WorkRunning);
+                }
+                let result = work();
+                #[cfg(test)]
+                if let Some(probe) = &probe {
+                    probe.phase(WorkerPhase::WorkReturned);
+                }
+                result
             })();
-            let _ = sender.send(result);
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.phase(WorkerPhase::SendEntering);
+            }
+            let delivery = sender.send(result);
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.update(|value| value.receiver_connected = Some(delivery.is_ok()));
+                probe.phase(WorkerPhase::SendReturned);
+                probe.phase(WorkerPhase::DeliveryResultDropEntering);
+            }
+            // This drops the send result; it contains an unsent payload only
+            // when receiver_connected is false.
+            drop(delivery);
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.phase(WorkerPhase::DeliveryResultDropReturned);
+            }
         });
     if worker.is_err() {
         ACTIVE.store(false, Ordering::Release);
+        #[cfg(test)]
+        if let Some(probe) = &probe {
+            probe.caller(WorkerCallerExit::SpawnFailed);
+        }
         return Err(unavailable());
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if cancel.is_cancelled() || Instant::now() >= deadline {
+        if cancel.is_cancelled() {
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.caller(WorkerCallerExit::Cancelled);
+            }
+            return Err(unavailable());
+        }
+        if Instant::now() >= deadline {
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.caller(WorkerCallerExit::Deadline);
+            }
             return Err(unavailable());
         }
         match receiver.recv_timeout(Duration::from_millis(25)) {
-            Ok(result) => return result,
+            Ok(result) => {
+                #[cfg(test)]
+                if let Some(probe) = &probe {
+                    probe.caller(if result.is_ok() {
+                        WorkerCallerExit::DeliveredOk
+                    } else {
+                        WorkerCallerExit::DeliveredError
+                    });
+                }
+                return result;
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(_) => return Err(unavailable()),
+            Err(_) => {
+                #[cfg(test)]
+                if let Some(probe) = &probe {
+                    probe.caller(WorkerCallerExit::Disconnected);
+                }
+                return Err(unavailable());
+            }
         }
     }
 }

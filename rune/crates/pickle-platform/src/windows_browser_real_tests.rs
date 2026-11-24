@@ -736,20 +736,32 @@ struct Attempt {
     elapsed_ms: u128,
     observations: Vec<serde_json::Value>,
 }
-fn attempt(source: CapturedSelection, expected: String) -> Result<Attempt, PlatformError> {
+fn attempt(
+    source: CapturedSelection,
+    expected: String,
+) -> (Result<Attempt, PlatformError>, WorkerSnapshot) {
     let cancel = CancellationToken::new();
     let token = cancel.clone();
     let started = Instant::now();
-    on_document_worker(cancel, move || {
+    let probe = DocumentWorkerProbe::default();
+    let task_probe = probe.clone();
+    let outcome = on_document_worker_observed(cancel, probe.clone(), move || {
+        task_probe.task(WorkerTaskPhase::ReaderConstructing, None);
         let reader = DocumentReader::new(&source, token.clone())?;
+        task_probe.task(WorkerTaskPhase::ReaderReady, None);
         let captures = Cell::new(0usize);
+        let observation_index = Cell::new(0u8);
         let observations = RefCell::new(vec![]);
         let result = verified_capture(
             &source,
             &expected,
             &token,
             || {
+                let index = observation_index.get() + 1;
+                observation_index.set(index);
+                task_probe.task(WorkerTaskPhase::Observing, Some(index));
                 let value = reader.observe();
+                task_probe.task(WorkerTaskPhase::ObservationReturned, Some(index));
                 let diagnostic = reader.failure_diagnostics();
                 let mut record = serde_json::json!({"stage":reader.failure_stage(),"accepted":value.is_ok(),"url_matches_expected":value.as_ref().is_ok_and(|value|document_urls_match(&expected,&value.url))});
                 for key in [
@@ -792,13 +804,21 @@ fn attempt(source: CapturedSelection, expected: String) -> Result<Attempt, Platf
                 Ok(())
             },
         );
-        Ok(Attempt {
+        task_probe.task(WorkerTaskPhase::VerificationReturned, None);
+        let outcome = Attempt {
             accepted: result.is_ok(),
             captures: captures.get(),
             elapsed_ms: started.elapsed().as_millis(),
             observations: observations.into_inner(),
-        })
-    })
+        };
+        // Explicitly bracket the same worker-owned release that previously
+        // happened at closure return. No COM reference reaches the caller.
+        task_probe.task(WorkerTaskPhase::ObjectDropEntering, None);
+        drop(reader);
+        task_probe.task(WorkerTaskPhase::ObjectDropReturned, None);
+        Ok(outcome)
+    });
+    (outcome, probe.snapshot())
 }
 
 #[test]
@@ -889,6 +909,7 @@ fn installed_chrome_and_edge_document_urls() {
         let startup_ms = startup.elapsed().as_millis();
         let hwnd = HWND(source.source_window.unwrap() as *mut _);
         let mut attempts = vec![];
+        let mut lifecycles = vec![];
         let mut accepted = false;
         let mut native_source = None;
         for number in 0..3 {
@@ -912,7 +933,12 @@ fn installed_chrome_and_edge_document_urls() {
             assert!(browser.child().contains_pid(target.source_pid).unwrap());
             native_source = Some(target.clone());
             let began = Instant::now();
-            let outcome = attempt(target, expected.clone());
+            let (outcome, lifecycle) = attempt(target, expected.clone());
+            // A separate small record cannot be lost merely because three
+            // completed reader observations fill the per-record byte bound.
+            let lifecycle = lifecycle.json();
+            log.write(serde_json::json!({"browser":name,"stage":"worker-lifecycle","attempt":number+1,"lifecycle":lifecycle}));
+            lifecycles.push(lifecycle);
             let value = match outcome {
                 Ok(value) => {
                     let record = serde_json::json!({"attempt":number+1,"first_document_attempt":number==0,"accepted":value.accepted,"captures":value.captures,"elapsed_ms":value.elapsed_ms,"observations":value.observations});
@@ -957,11 +983,12 @@ fn installed_chrome_and_edge_document_urls() {
             "Installed browser document adapter unavailable after recorded bounded attempts"
         );
         log.step(name, "mismatch-check");
-        let mismatch = attempt(
+        let (mismatch, mismatch_lifecycle) = attempt(
             native_source.unwrap(),
             expected.replace("#route-one", "#route-two"),
-        )
-        .unwrap();
+        );
+        log.write(serde_json::json!({"browser":name,"stage":"mismatch-worker-lifecycle","lifecycle":mismatch_lifecycle.json()}));
+        let mismatch = mismatch.unwrap();
         assert!(!mismatch.accepted);
         assert_eq!(mismatch.captures, 0);
         assert!(
@@ -978,7 +1005,7 @@ fn installed_chrome_and_edge_document_urls() {
         let first_accepted = attempts
             .first()
             .is_some_and(|value| value["accepted"] == true);
-        reports.push(serde_json::json!({"browser":name,"file_version":version,"owned_profile":true,"owned_profile_directory_observed":true,"atomic_job_containment":true,"pid_hwnd_path_membership_verified":true,"resolver_bound":true,"startup_ms":startup_ms,"attempts":attempts,"passed_first_document_attempt":first_accepted,"accepted_after_retry":!first_accepted,"expected_url_accepted":true,"mismatched_fragment_refused_without_capture":true,"mismatch_observations":mismatch.observations,"misleading_page_title_input_link":true,"owned_processes_stopped":true,"forced_accessibility_flags":false,"devtools_or_cdp_used":false}));
+        reports.push(serde_json::json!({"browser":name,"file_version":version,"owned_profile":true,"owned_profile_directory_observed":true,"atomic_job_containment":true,"pid_hwnd_path_membership_verified":true,"resolver_bound":true,"startup_ms":startup_ms,"attempts":attempts,"worker_lifecycles":lifecycles,"passed_first_document_attempt":first_accepted,"accepted_after_retry":!first_accepted,"expected_url_accepted":true,"mismatched_fragment_refused_without_capture":true,"mismatch_observations":mismatch.observations,"mismatch_worker_lifecycle":mismatch_lifecycle.json(),"misleading_page_title_input_link":true,"owned_processes_stopped":true,"forced_accessibility_flags":false,"devtools_or_cdp_used":false}));
     }
     log.step("fixture", "stopping-server");
     server.finish();

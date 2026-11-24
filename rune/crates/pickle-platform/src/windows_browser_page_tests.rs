@@ -530,17 +530,159 @@ fn verify(source: CapturedSelection, phase: &'static str) -> Result<Verification
 }
 
 fn wait_admission_recovery() {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    wait_admission_recovery_until(Instant::now() + Duration::from_secs(5));
+}
+
+fn wait_admission_recovery_until(deadline: Instant) {
     loop {
-        if on_document_worker(CancellationToken::new(), || Ok(())).is_ok() {
-            break;
-        }
         assert!(
             Instant::now() < deadline,
             "Isolated document worker did not release admission after finishing"
         );
+        if on_document_worker(CancellationToken::new(), || Ok(())).is_ok() {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+#[test]
+fn observed_worker_lifecycle_distinguishes_admission_teardown_and_unfinished_object_drop() {
+    // The same ACTIVE and fixture lock are used by the actual browser/provider
+    // checks. These gates never hold admission while either owns foreground.
+    let _fixture_lock = native_browser_fixture_lock();
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let probe = DocumentWorkerProbe::default();
+    let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let work_called = called.clone();
+    assert!(
+        on_document_worker_observed(cancelled, probe.clone(), move || {
+            work_called.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        })
+        .is_err()
+    );
+    assert!(!called.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(probe.snapshot().caller_exit, WorkerCallerExit::PreCancelled);
+    assert_eq!(probe.snapshot().mta_hresult, None);
+    assert_eq!(probe.snapshot().event_count, 0);
+
+    let probe = DocumentWorkerProbe::default();
+    assert_eq!(
+        on_document_worker_observed(CancellationToken::new(), probe.clone(), || Ok(37)).unwrap(),
+        37
+    );
+    let delivered_snapshot = probe.snapshot();
+    assert_eq!(
+        delivered_snapshot.caller_exit,
+        WorkerCallerExit::DeliveredOk
+    );
+    // Do not turn a received result into an assertion that the sender already
+    // released its flight. Either ordering is valid on the actual OS threads.
+    assert_eq!(
+        delivered_snapshot.json()["partial"],
+        !delivered_snapshot.lifecycle_complete()
+    );
+    assert!(probe.wait_released(Duration::from_secs(5)));
+    let complete = probe.snapshot();
+    assert!(complete.mta_hresult.is_some_and(|status| status >= 0));
+    assert_eq!(complete.receiver_connected, Some(true));
+    assert!(!complete.events_truncated);
+    assert_eq!(
+        &complete.events[..complete.event_count],
+        &[
+            WorkerPhase::SpawnRequested,
+            WorkerPhase::ThreadStarted,
+            WorkerPhase::MtaInitializing,
+            WorkerPhase::MtaInitReturned,
+            WorkerPhase::WorkRunning,
+            WorkerPhase::WorkReturned,
+            WorkerPhase::ComTeardownEntering,
+            WorkerPhase::ComTeardownReturned,
+            WorkerPhase::SendEntering,
+            WorkerPhase::SendReturned,
+            WorkerPhase::DeliveryResultDropEntering,
+            WorkerPhase::DeliveryResultDropReturned,
+            WorkerPhase::FlightReleased,
+        ]
+    );
+
+    let probe = DocumentWorkerProbe::default();
+    assert!(
+        on_document_worker_observed::<()>(CancellationToken::new(), probe.clone(), || Err(
+            unavailable()
+        ))
+        .is_err()
+    );
+    assert!(probe.wait_released(Duration::from_secs(5)));
+    let failed = probe.snapshot();
+    assert_eq!(failed.caller_exit, WorkerCallerExit::DeliveredError);
+    assert!(failed.events[..failed.event_count].contains(&WorkerPhase::ComTeardownReturned));
+
+    let probe = DocumentWorkerProbe::default();
+    assert!(
+        on_document_worker_observed::<()>(CancellationToken::new(), probe.clone(), || {
+            panic!("owned worker unwind fixture");
+        })
+        .is_err()
+    );
+    assert!(probe.wait_released(Duration::from_secs(5)));
+    let unwound = probe.snapshot();
+    assert_eq!(unwound.caller_exit, WorkerCallerExit::Disconnected);
+    assert!(unwound.events[..unwound.event_count].contains(&WorkerPhase::ComTeardownReturned));
+    assert!(!unwound.events[..unwound.event_count].contains(&WorkerPhase::WorkReturned));
+
+    // A real work-local destructor blocks before work() returns. This is a
+    // synthetic resource gate, not a claim to simulate a blocked COM release.
+    struct OwnedDropGate {
+        probe: DocumentWorkerProbe,
+        entered: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl Drop for OwnedDropGate {
+        fn drop(&mut self) {
+            self.probe.task(WorkerTaskPhase::ObjectDropEntering, None);
+            let _ = self.entered.send(());
+            let _ = self.release.recv();
+            self.probe.task(WorkerTaskPhase::ObjectDropReturned, None);
+        }
+    }
+    let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let probe = DocumentWorkerProbe::default();
+    let task_probe = probe.clone();
+    let result = on_document_worker_observed(CancellationToken::new(), probe.clone(), move || {
+        let _owned = OwnedDropGate {
+            probe: task_probe,
+            entered: entered_tx,
+            release: release_rx,
+        };
+        Ok(())
+    });
+    let entered = entered_rx.recv_timeout(Duration::from_secs(1));
+    let partial = probe.snapshot();
+    let release_sent = release_tx.send(());
+    let released = probe.wait_released(Duration::from_secs(5));
+    assert!(entered.is_ok());
+    assert!(release_sent.is_ok());
+    assert!(released);
+    assert!(result.is_err());
+    assert_eq!(partial.caller_exit, WorkerCallerExit::Deadline);
+    assert_eq!(partial.worker_phase, WorkerPhase::WorkRunning);
+    assert_eq!(partial.task_phase, WorkerTaskPhase::ObjectDropEntering);
+    let json = partial.json();
+    assert_eq!(json["partial"], true);
+    assert_eq!(json["lifecycle_complete"], false);
+    for private in ["reads", "capture_count", "url", "text", "pid", "path"] {
+        assert!(json.get(private).is_none());
+    }
+    assert!(serde_json::to_vec(&json).unwrap().len() < 2048);
+    assert_eq!(probe.snapshot().caller_exit, WorkerCallerExit::Deadline);
+    assert_eq!(
+        probe.snapshot().task_phase,
+        WorkerTaskPhase::ObjectDropReturned
+    );
 }
 
 #[test]
@@ -992,23 +1134,53 @@ fn owned_native_document_provider() {
     // Deterministic outer timeout and cancellation while the isolated MTA is
     // actually live, independent of UIA's own short RPC transaction timeouts.
     let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let timeout_probe = DocumentWorkerProbe::default();
+    let timeout_token = CancellationToken::new();
     let started = Instant::now();
     trace.step("worker-timeout", "observing");
-    assert!(
-        on_document_worker(CancellationToken::new(), move || {
+    let outcome =
+        on_document_worker_observed(timeout_token.clone(), timeout_probe.clone(), move || {
             let _ = release_rx.recv();
             Ok(())
-        })
-        .is_err()
-    );
+        });
     let outer_timeout_ms = started.elapsed().as_millis();
+    let timeout_snapshot = timeout_probe.snapshot();
+    let busy_probe = DocumentWorkerProbe::default();
+    let entered_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let entered_busy_work = entered_busy.clone();
+    let busy =
+        on_document_worker_observed(CancellationToken::new(), busy_probe.clone(), move || {
+            entered_busy_work.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        });
+    // Always release owned delayed work before asserting its recorded state.
+    release_tx.send(()).unwrap();
+    let recovery_deadline = Instant::now() + Duration::from_secs(5);
+    let released =
+        timeout_probe.wait_released(recovery_deadline.saturating_duration_since(Instant::now()));
+    wait_admission_recovery_until(recovery_deadline);
+    assert!(outcome.is_err());
     assert!((1800..3500).contains(&outer_timeout_ms));
     assert!(
-        on_document_worker(CancellationToken::new(), || Ok(())).is_err(),
+        !timeout_token.is_cancelled(),
+        "Observation must not change the direct caller's token semantics"
+    );
+    assert_eq!(timeout_snapshot.caller_exit, WorkerCallerExit::Deadline);
+    assert_eq!(timeout_snapshot.worker_phase, WorkerPhase::WorkRunning);
+    assert_eq!(timeout_snapshot.json()["partial"], true);
+    assert!(
+        busy.is_err(),
         "Admission must remain held by the unfinished worker"
     );
-    release_tx.send(()).unwrap();
-    wait_admission_recovery();
+    assert!(!entered_busy.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(busy_probe.snapshot().caller_exit, WorkerCallerExit::Busy);
+    assert_eq!(busy_probe.snapshot().event_count, 0);
+    assert!(released);
+    assert_eq!(
+        timeout_probe.snapshot().caller_exit,
+        WorkerCallerExit::Deadline
+    );
+    assert_eq!(timeout_probe.snapshot().receiver_connected, Some(false));
     trace.step("worker-timeout", "admission-recovered");
 
     let cancel = CancellationToken::new();
@@ -1021,19 +1193,33 @@ fn owned_native_document_provider() {
     });
     let started = Instant::now();
     trace.step("worker-cancel", "observing");
-    assert!(
-        on_document_worker(cancel, move || {
-            entered_tx.send(()).unwrap();
-            let _ = release_rx.recv();
-            Ok(())
-        })
-        .is_err()
-    );
-    assert!(started.elapsed() < Duration::from_millis(1000));
-    cancelling.join().unwrap();
-    assert!(on_document_worker(CancellationToken::new(), || Ok(())).is_err());
+    let cancel_probe = DocumentWorkerProbe::default();
+    let outcome = on_document_worker_observed(cancel, cancel_probe.clone(), move || {
+        entered_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+        Ok(())
+    });
+    let cancel_elapsed = started.elapsed();
+    let cancel_snapshot = cancel_probe.snapshot();
+    let cancelling_result = cancelling.join();
+    let busy = on_document_worker(CancellationToken::new(), || Ok(()));
     release_tx.send(()).unwrap();
-    wait_admission_recovery();
+    let recovery_deadline = Instant::now() + Duration::from_secs(5);
+    let released =
+        cancel_probe.wait_released(recovery_deadline.saturating_duration_since(Instant::now()));
+    wait_admission_recovery_until(recovery_deadline);
+    assert!(outcome.is_err());
+    assert!(cancel_elapsed < Duration::from_millis(1000));
+    cancelling_result.unwrap();
+    assert!(busy.is_err());
+    assert_eq!(cancel_snapshot.caller_exit, WorkerCallerExit::Cancelled);
+    assert_eq!(cancel_snapshot.worker_phase, WorkerPhase::WorkRunning);
+    assert!(cancel_snapshot.json()["partial"].as_bool().unwrap());
+    assert!(released);
+    assert_eq!(
+        cancel_probe.snapshot().caller_exit,
+        WorkerCallerExit::Cancelled
+    );
     trace.step("worker-cancel", "admission-recovered");
 
     trace.step("fixture", "cleanup");
