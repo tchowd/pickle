@@ -43,6 +43,8 @@ public static class ReadingFixturePredicates {
         case "Page capture timed out. Continue with the selected passage.": return "capture-timeout";
         case "Page capture timed out. Reading will use your passage.": return "context-timeout";
         case "Windows on-device OCR is unavailable. Install a supported OCR language or use the selected passage.": return "ocr-unavailable";
+        case "Reading source-window text timed out. Continue with the selected passage.": return "ocr-timeout";
+        case "Windows could not read text from this source window. Continue with the selected passage.": return "ocr-failed";
         case "The screenshot is too detailed to retain. Continue with the passage.": return "image-too-large";
         default: return null;
         }
@@ -128,8 +130,10 @@ public static class ReadingFixturePredicates {
             "Page capture timed out. Continue with the selected passage.",
             "Page capture timed out. Reading will use your passage.",
             "Windows on-device OCR is unavailable. Install a supported OCR language or use the selected passage.",
+            "Reading source-window text timed out. Continue with the selected passage.",
+            "Windows could not read text from this source window. Continue with the selected passage.",
             "The screenshot is too detailed to retain. Continue with the passage."};
-        string[] categories={"capture-unavailable","cancelled","package-unavailable","capture-busy","capture-timeout","context-timeout","ocr-unavailable","image-too-large"};
+        string[] categories={"capture-unavailable","cancelled","package-unavailable","capture-busy","capture-timeout","context-timeout","ocr-unavailable","ocr-timeout","ocr-failed","image-too-large"};
         for(int i=0;i<captureNotices.Length;i++) {
             if(ContextNotice(captureNotices[i])!=categories[i] || ContextCategory(0,0,new[]{categories[i]})!=categories[i]) throw new Exception("context-notice");
             if(ContextNotice(captureNotices[i]+" private suffix")!=null || ContextNotice(" "+captureNotices[i])!=null) throw new Exception("context-notice-exact");

@@ -331,7 +331,7 @@ function ConvertTo-PickleReadingContextObservation($Value) {
   $keys=@('schema','status','category')+$counts+$flags
   $actual=@($Value.PSObject.Properties.Name)
   if ($actual.Count -ne $keys.Count -or @($actual | Where-Object { $_ -cnotin $keys }).Count -or @($keys | Where-Object { $_ -cnotin $actual }).Count) { throw 'Invalid context observation fields.' }
-  if (!(($Value.schema -is [int]) -or ($Value.schema -is [long])) -or $Value.schema -ne 1 -or $Value.status -isnot [string] -or $Value.status -cnotin @('unavailable','partial','complete') -or $Value.category -isnot [string] -or $Value.category -cnotin @('unknown','ambiguous','pending','capture-returned','capture-unavailable','cancelled','package-unavailable','capture-busy','capture-timeout','context-timeout','ocr-unavailable','image-too-large')) { throw 'Invalid context observation category.' }
+  if (!(($Value.schema -is [int]) -or ($Value.schema -is [long])) -or $Value.schema -ne 1 -or $Value.status -isnot [string] -or $Value.status -cnotin @('unavailable','partial','complete') -or $Value.category -isnot [string] -or $Value.category -cnotin @('unknown','ambiguous','pending','capture-returned','capture-unavailable','cancelled','package-unavailable','capture-busy','capture-timeout','context-timeout','ocr-unavailable','ocr-timeout','ocr-failed','image-too-large')) { throw 'Invalid context observation category.' }
   $clean=[ordered]@{schema=1;status=$Value.status;category=$Value.category}
   foreach ($key in $flags) {
     if ($Value.$key -isnot [bool]) { throw 'Invalid context observation proof flag.' }

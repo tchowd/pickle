@@ -15,7 +15,7 @@ use windows::{
     Media::Ocr::OcrEngine,
     Storage::Streams::DataWriter,
     Win32::{
-        Foundation::{HMODULE, HWND},
+        Foundation::{ERROR_CANCELLED, ERROR_TIMEOUT, HMODULE, HWND},
         Graphics::{Direct3D::D3D_DRIVER_TYPE_HARDWARE, Direct3D11::*, Dxgi::IDXGIDevice},
         System::WinRT::{
             Direct3D11::*, Graphics::Capture::IGraphicsCaptureItemInterop, RO_INIT_MULTITHREADED,
@@ -23,7 +23,7 @@ use windows::{
         },
         UI::WindowsAndMessaging::GetWindowThreadProcessId,
     },
-    core::{Interface, factory},
+    core::{HRESULT, Interface, factory},
 };
 
 fn unavailable() -> PlatformError {
@@ -204,7 +204,10 @@ fn capture(
         image::imageops::FilterType::Triangle,
     );
     stage(observer, "ocr");
-    let text=recognize(&ocr_image,cancel).map_err(|error|{failed(observer,error.code().0);PlatformError("Windows on-device OCR is unavailable. Install a supported OCR language or use the selected passage.".into())})?;
+    let text = recognize(&ocr_image, cancel).map_err(|error| {
+        failed(observer, error.code().0);
+        PlatformError(ocr_failure_notice(error.code()).into())
+    })?;
     if cancel.is_cancelled() {
         return Err(PlatformError("Page capture was cancelled.".into()));
     }
@@ -474,6 +477,30 @@ pub(super) fn ocr_software_bitmap(
     Ok(bitmap)
 }
 
+// Local stop conditions have no failed Win32 call whose last error can be read.
+fn ocr_stop_error(cancelled: bool, timed_out: bool) -> Option<windows::core::Error> {
+    let code = if cancelled {
+        ERROR_CANCELLED
+    } else if timed_out {
+        ERROR_TIMEOUT
+    } else {
+        return None;
+    };
+    Some(windows::core::Error::from_hresult(HRESULT::from_win32(
+        code.0,
+    )))
+}
+
+fn ocr_failure_notice(code: HRESULT) -> &'static str {
+    if code == HRESULT::from_win32(ERROR_CANCELLED.0) {
+        "Page capture was cancelled."
+    } else if code == HRESULT::from_win32(ERROR_TIMEOUT.0) {
+        "Reading source-window text timed out. Continue with the selected passage."
+    } else {
+        "Windows could not read text from this source window. Continue with the selected passage."
+    }
+}
+
 pub(super) fn recognize_software_bitmap(
     bitmap: &SoftwareBitmap,
     cancel: &tokio_util::sync::CancellationToken,
@@ -484,9 +511,9 @@ pub(super) fn recognize_software_bitmap(
     let deadline = Instant::now() + timeout;
     // WinRT AsyncStatus::Started has value zero; bindings expose it from windows-future.
     while operation.Status()?.0 == 0 {
-        if cancel.is_cancelled() || Instant::now() >= deadline {
+        if let Some(error) = ocr_stop_error(cancel.is_cancelled(), Instant::now() >= deadline) {
             let _ = operation.Cancel();
-            return Err(windows::core::Error::from_thread());
+            return Err(error);
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -498,6 +525,29 @@ pub(super) fn recognize_software_bitmap(
 #[cfg(test)]
 mod observer_tests {
     use super::*;
+    #[test]
+    fn local_ocr_stop_codes_and_notices_do_not_depend_on_thread_last_error() {
+        assert!(ocr_stop_error(false, false).is_none());
+        let timeout = ocr_stop_error(false, true).unwrap();
+        assert_eq!(timeout.code().0, 0x800705b4u32 as i32);
+        assert_eq!(
+            ocr_failure_notice(timeout.code()),
+            "Reading source-window text timed out. Continue with the selected passage."
+        );
+        for deadline_reached in [false, true] {
+            let cancelled = ocr_stop_error(true, deadline_reached).unwrap();
+            assert_eq!(cancelled.code().0, 0x800704c7u32 as i32);
+            assert_eq!(
+                ocr_failure_notice(cancelled.code()),
+                "Page capture was cancelled."
+            );
+        }
+        assert_eq!(
+            ocr_failure_notice(HRESULT(0x80070057u32 as i32)),
+            "Windows could not read text from this source window. Continue with the selected passage."
+        );
+    }
+
     #[test]
     fn first_native_failure_stays_latched_after_late_worker_progress() {
         let sink = Arc::new(CaptureDiagnostics::new());

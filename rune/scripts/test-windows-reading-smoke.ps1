@@ -232,6 +232,17 @@ try {
   $context=[ordered]@{schema=1;status='complete';category='context-timeout';discovery_nodes=40;discovery_complete=$true;foreground_before_verified=$true;foreground_after_verified=$true;section_count=1;nodes=12;ocr_header_count=0;pending_count=0;preview_control_count=0;analyze_control_count=0;known_notice_count=1;unknown_text_count=2;errors=0}
   $cleanContext=ConvertTo-PickleReadingContextObservation ($context | ConvertTo-Json | ConvertFrom-Json)
   if ($cleanContext.category -cne 'context-timeout' -or $cleanContext.nodes -ne 12) { throw 'The fixed existing context notice was not preserved.' }
+  foreach ($category in @('cancelled','ocr-timeout','ocr-failed','ocr-unavailable')) {
+    $classified=$context | ConvertTo-Json | ConvertFrom-Json;$classified.category=$category
+    $cleanClassified=ConvertTo-PickleReadingContextObservation $classified
+    if ($cleanClassified.category -cne $category) { throw 'A fixed OCR failure category was not preserved.' }
+    $classified.known_notice_count=0
+    Assert-ReadingRefused { ConvertTo-PickleReadingContextObservation $classified }
+  }
+  foreach ($category in @('ocr-timeout private suffix','OCR-failed','0x800705b4')) {
+    $classified=$context | ConvertTo-Json | ConvertFrom-Json;$classified.category=$category
+    Assert-ReadingRefused { ConvertTo-PickleReadingContextObservation $classified }
+  }
   foreach ($change in @(@('schema',1.0),@('schema','1'),@('status','ready'),@('category','private arbitrary notice'),@('nodes',129),@('nodes',-1),@('nodes',12.0),@('nodes','12'),@('section_count',3),@('errors',1),@('known_notice_count',0),@('analyze_control_count',13),@('discovery_nodes',513),@('discovery_nodes',0),@('discovery_complete',$false),@('discovery_complete','true'),@('foreground_before_verified',$false),@('foreground_after_verified',$false))) {
     $bad=$context | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
     Assert-ReadingRefused { ConvertTo-PickleReadingContextObservation $bad }
