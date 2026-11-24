@@ -2,8 +2,8 @@
 // This observer never invokes, edits, resizes, navigates, or changes policy.
 using System;
 using System.Text.RegularExpressions;
-#if !PICKLE_PREDICATES
 using System.Collections.Generic;
+#if !PICKLE_PREDICATES
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
 #endif
@@ -56,13 +56,35 @@ public static class BrowserExtensionEdgeIdentityPredicates {
             ((stage=="loaded-extension-details" && failure=="detail-candidate-unavailable") ||
              (stage=="delivery-candidate" && failure=="loaded-extension-id-unavailable"));
     }
+    public static string KnownErrorKind(string value) {
+        switch(value) {
+        case "Failed to load extension": return "failed-to-load";
+        case "Error loading extension": return "error-loading";
+        case "Manifest file is missing or unreadable": return "manifest-unreadable";
+        case "Manifest is not valid JSON": return "manifest-invalid-json";
+        case "Could not load manifest": return "manifest-load-failed";
+        default: return null;
+        }
+    }
+    public static void FirstException(IDictionary<string,object> observation,string phase,string kind,int hresult,string stageCode) {
+        if(observation["first_error_kind"]!=null) return;
+        observation["first_error_phase"]=phase;
+        if(stageCode!=null) {
+            observation["first_error_kind"]="stage-failure";
+            observation["first_stage_failure"]=stageCode=="stage-deadline" || stageCode=="uia-element-not-owned" || stageCode=="uia-window-not-owned" ? stageCode : "other-stage-failure";
+            // A deliberate fixture refusal has no failed native API HRESULT.
+            observation["first_error_hresult"]=null;
+        } else {
+            observation["first_error_kind"]=kind;
+            observation["first_error_hresult"]=hresult;
+        }
+    }
     public static int LabelFlags(string value) {
         if(value==null || value.Length>4096) return 0;
         int flags=(value=="Pickle — page and video context" ? 1 : 0) | (value=="0.1.0" ? 2 : 0);
         if(BrowserExtensionPredicates.ExtensionId(value)) flags|=4;
         else if(BrowserExtensionPredicates.IdFromLabel(value)!=null) flags|=8;
-        foreach(string known in new[]{"Failed to load extension","Error loading extension","Manifest file is missing or unreadable","Manifest is not valid JSON","Could not load manifest"})
-            if(value==known) flags|=16;
+        if(KnownErrorKind(value)!=null) flags|=16;
         return flags;
     }
     public static void SelfTest() {
@@ -71,6 +93,20 @@ public static class BrowserExtensionEdgeIdentityPredicates {
         foreach(string kind in new[]{"chrome",""}) if(MayObserve(kind,"delivery-candidate","loaded-extension-id-unavailable",0,true)) throw new Exception("edge-identity-edge-only");
         if(MayObserve("edge","delivery-candidate","loaded-extension-id-unavailable",1,true) || MayObserve("edge","delivery-candidate","loaded-extension-id-unavailable",0,false) ||
             MayObserve("edge","delivery-connect","delivery-connect-unavailable",0,true) || MayObserve("edge","loaded-extension-details","detail-identity-unavailable",0,true)) throw new Exception("edge-identity-exact-boundary");
+        string[] labels={"Failed to load extension","Error loading extension","Manifest file is missing or unreadable","Manifest is not valid JSON","Could not load manifest"};
+        string[] errors={"failed-to-load","error-loading","manifest-unreadable","manifest-invalid-json","manifest-load-failed"};
+        for(int i=0;i<labels.Length;i++) {
+            if(KnownErrorKind(labels[i])!=errors[i] || LabelFlags(labels[i])!=16 || KnownErrorKind(labels[i]+" private suffix")!=null || KnownErrorKind(labels[i].ToUpperInvariant())!=null) throw new Exception("edge-error-exact-kind");
+        }
+        var first=new Dictionary<string,object>{{"first_error_kind",null},{"first_error_phase",null},{"first_error_hresult",null},{"first_stage_failure",null}};
+        FirstException(first,"name","element-not-available",unchecked((int)0x80040201),null);
+        FirstException(first,"next-sibling","com",-1,null);
+        if((string)first["first_error_kind"]!="element-not-available" || (string)first["first_error_phase"]!="name" || (int)first["first_error_hresult"]!=unchecked((int)0x80040201) || first["first_stage_failure"]!=null) throw new Exception("edge-first-exception-primary");
+        foreach(string code in new[]{"stage-deadline","uia-element-not-owned","uia-window-not-owned","private unexpected code"}) {
+            var refusal=new Dictionary<string,object>{{"first_error_kind",null},{"first_error_phase",null},{"first_error_hresult",null},{"first_stage_failure",null}};
+            FirstException(refusal,"node-binding","other",123,code);
+            if((string)refusal["first_error_kind"]!="stage-failure" || refusal["first_error_hresult"]!=null || (string)refusal["first_stage_failure"]!=(code=="private unexpected code" ? "other-stage-failure" : code)) throw new Exception("edge-deliberate-refusal-no-native-code");
+        }
         const string id="abcdefghijklmnopabcdefghijklmnop";
         if(LabelFlags("Pickle — page and video context")!=1 || LabelFlags("0.1.0")!=2 || LabelFlags(id)!=4 || LabelFlags("ID: "+id)!=8 || LabelFlags("Failed to load extension")!=16) throw new Exception("edge-identity-closed-flags");
         foreach(string unknown in new[]{null,"private unrelated text","0.1.0 extra","Pickle — page and video context other","Failed to load extension: unknown detail","https://example.test/"+id,"ID: "+id+" private",new string('x',4097)})
@@ -84,43 +120,47 @@ public static partial class BrowserExtensionFixtureProgram {
         var records=new List<Dictionary<string,object>>();
         var observation=new Dictionary<string,object>{{"stage","before-ownership"},{"incomplete",true},{"proof_verified",false},
             {"nodes",0},{"property_errors",0},{"title_exact_count",0},{"version_exact_count",0},{"id_syntax_count",0},
-            {"extension_id_group_count",0},{"known_error_count",0},{"unclassified_text_count",0},{"matching_count",0},{"truncated",false},{"records",records}};
+            {"extension_id_group_count",0},{"known_error_count",0},{"unclassified_text_count",0},{"matching_count",0},{"truncated",false},{"records",records},
+            {"first_error_kind",null},{"first_error_hresult",null},{"first_error_phase",null},{"first_stage_failure",null}};
         Report["edge_identity_observation"]=observation;
-        IntPtr owner=IntPtr.Zero;
+        IntPtr owner=IntPtr.Zero;string phase="deadline";
         try {
-            Check();uint pid;
+            Check();uint pid;phase="window-ownership";
             if(browser==null || !browser.OwnsWindow(window) || Native.GetWindowThreadProcessId(window,out pid)==0 || pid==0) return;
-            owner=Native.OpenProcess(0x00101000,false,pid);if(!LayoutWindowBound(window,owner,pid)) return;
+            phase="owner-process";owner=Native.OpenProcess(0x00101000,false,pid);
+            phase="window-binding";if(!LayoutWindowBound(window,owner,pid)) return;
             observation["stage"]="before-document";AutomationElement root,document;string uri;
             // Existing bounded (1024-node) discovery proves the sole committed
             // internal page. The subsequent observer scans only that document.
-            if(!LayoutPage(window,owner,pid,null,null,null,out root,out document,out uri)) return;
+            phase="document-binding";if(!LayoutPage(window,owner,pid,null,null,null,out root,out document,out uri)) return;
             var queue=new Queue<KeyValuePair<AutomationElement,int>>();queue.Enqueue(new KeyValuePair<AutomationElement,int>(document,0));
             observation["stage"]="traversal";
             while(queue.Count>0) {
-                Check();if((int)observation["nodes"]+queue.Count>256 || !LayoutWindowBound(window,owner,pid)) return;
+                phase="deadline";Check();phase="window-binding";if((int)observation["nodes"]+queue.Count>256 || !LayoutWindowBound(window,owner,pid)) return;
                 var entry=queue.Dequeue();var node=entry.Key;observation["nodes"]=(int)observation["nodes"]+1;
-                if(entry.Value>16 || !EdgeNavigationBound(node,document,root,window,true)) return;
-                if(node.Current.IsPassword) continue;
-                int role=node.Current.ControlType.Id;
-                if(role==50004 || (role==50030 && !Automation.Compare(node,document))) continue;
-                Func<bool> bound=()=>LayoutWindowBound(window,owner,pid) && EdgeNavigationBound(node,document,root,window,false);
-                string aid;if(!BrowserExtensionDetailsPredicates.Read(bound,()=>node.Current.AutomationId,out aid)) return;
-                bool group=role==50026 && aid=="extension-id";int flags=0;
+                phase="node-binding";if(entry.Value>16 || !EdgeNavigationBound(node,document,root,window,true)) return;
+                phase="password";if(node.Current.IsPassword) continue;
+                phase="control-type";int role=node.Current.ControlType.Id;
+                phase="document-identity";if(role==50004 || (role==50030 && !Automation.Compare(node,document))) continue;
+                Func<bool> bound=()=>{phase="node-binding";return LayoutWindowBound(window,owner,pid) && EdgeNavigationBound(node,document,root,window,false);};
+                string aid;if(!BrowserExtensionDetailsPredicates.Read(bound,()=>{phase="automation-id";return node.Current.AutomationId;},out aid)) return;
+                bool group=role==50026 && aid=="extension-id";int flags=0;string knownError=null;
                 if(role!=50030) {
-                    string label;if(!BrowserExtensionDetailsPredicates.Read(bound,()=>node.Current.Name,out label)) return;
+                    string label;if(!BrowserExtensionDetailsPredicates.Read(bound,()=>{phase="name";return node.Current.Name;},out label)) return;
                     flags=BrowserExtensionEdgeIdentityPredicates.LabelFlags(label);
+                    knownError=BrowserExtensionEdgeIdentityPredicates.KnownErrorKind(label);
                 }
-                if(!bound() || node.Current.ControlType.Id!=role) return;
+                if(!bound()) return;phase="control-type";if(node.Current.ControlType.Id!=role) return;
                 if(flags!=0 || group) {
                     Dictionary<string,object> record=null;
                     if(records.Count<16) {
-                        bool ancestorsTruncated;var ancestors=EdgeNavigationAncestors(node,document,root,window,out ancestorsTruncated);
-                        Native.Rect outer;if(!Native.GetWindowRect(window,out outer) || !bound()) return;
-                        var bounds=node.Current.BoundingRectangle;bool offscreen=node.Current.IsOffscreen;
+                        phase="ancestors";bool ancestorsTruncated;var ancestors=EdgeNavigationAncestors(node,document,root,window,out ancestorsTruncated);
+                        phase="window-bounds";Native.Rect outer;if(!Native.GetWindowRect(window,out outer) || !bound()) return;
+                        phase="node-bounds";var bounds=node.Current.BoundingRectangle;
+                        phase="node-offscreen";bool offscreen=node.Current.IsOffscreen;
                         if(!bound() || ancestors.Count==0 || ancestors[0]!=role) return;
                         record=new Dictionary<string,object>{{"role",role},{"title_exact",(flags&1)!=0},{"version_exact",(flags&2)!=0},
-                            {"id_syntax",(flags&4)!=0 ? 1 : (flags&8)!=0 ? 2 : 0},{"extension_id_group",group},{"known_error_exact",(flags&16)!=0},
+                            {"id_syntax",(flags&4)!=0 ? 1 : (flags&8)!=0 ? 2 : 0},{"extension_id_group",group},{"known_error_exact",(flags&16)!=0},{"known_error_kind",knownError},
                             {"offscreen",offscreen},{"bounds_flags",BrowserExtensionPredicates.BoundsFlags(bounds.X,bounds.Y,bounds.Width,bounds.Height,outer.Left,outer.Top,outer.Right,outer.Bottom)},
                             {"ancestor_roles",ancestors},{"ancestors_truncated",ancestorsTruncated}};
                     }
@@ -136,16 +176,20 @@ public static partial class BrowserExtensionFixtureProgram {
                     observation["truncated"]=(int)observation["matching_count"]>16;
                 } else if(role==50020) observation["unclassified_text_count"]=(int)observation["unclassified_text_count"]+1;
                 if(entry.Value>=16) return;
-                var child=TreeWalker.RawViewWalker.GetFirstChild(node);
+                phase="first-child";var child=TreeWalker.RawViewWalker.GetFirstChild(node);
                 while(child!=null) {
-                    Check();if((int)observation["nodes"]+queue.Count>=256 || !EdgeNavigationBound(child,document,root,window,true)) return;
-                    queue.Enqueue(new KeyValuePair<AutomationElement,int>(child,entry.Value+1));child=TreeWalker.RawViewWalker.GetNextSibling(child);
+                    phase="deadline";Check();phase="child-binding";if((int)observation["nodes"]+queue.Count>=256 || !EdgeNavigationBound(child,document,root,window,true)) return;
+                    queue.Enqueue(new KeyValuePair<AutomationElement,int>(child,entry.Value+1));phase="next-sibling";child=TreeWalker.RawViewWalker.GetNextSibling(child);
                 }
             }
-            Check();observation["stage"]="after-document";AutomationElement afterRoot,afterDocument;string afterUri;
-            if(!LayoutPage(window,owner,pid,root,document,uri,out afterRoot,out afterDocument,out afterUri)) return;
+            phase="deadline";Check();observation["stage"]="after-document";AutomationElement afterRoot,afterDocument;string afterUri;
+            phase="document-recheck";if(!LayoutPage(window,owner,pid,root,document,uri,out afterRoot,out afterDocument,out afterUri)) return;
             observation["proof_verified"]=true;observation["incomplete"]=false;observation["stage"]="complete";
-        } catch {observation["property_errors"]=(int)observation["property_errors"]+1;}
+        } catch(Exception error) {
+            observation["property_errors"]=(int)observation["property_errors"]+1;
+            var refusal=error as ExtensionStageFailure;
+            BrowserExtensionEdgeIdentityPredicates.FirstException(observation,phase,ErrorKind(error),error.HResult,refusal==null ? null : refusal.Code);
+        }
         finally {if(owner!=IntPtr.Zero) Native.CloseHandle(owner);}
     }
     static bool EdgeNavigationBound(AutomationElement node,AutomationElement document,

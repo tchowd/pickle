@@ -340,7 +340,8 @@ function ConvertTo-PickleEdgeNavigation($Observation) {
 }
 function ConvertTo-PickleEdgeIdentityObservation($Observation) {
   $counts=@('nodes','property_errors','title_exact_count','version_exact_count','id_syntax_count','extension_id_group_count','known_error_count','unclassified_text_count','matching_count')
-  $keys=@('stage','incomplete','proof_verified','truncated','records')+$counts
+  $errorKeys=@('first_error_kind','first_error_hresult','first_error_phase','first_stage_failure')
+  $keys=@('stage','incomplete','proof_verified','truncated','records')+$counts+$errorKeys
   if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count -or $Observation.stage -isnot [string] -or $Observation.stage -cnotin @('before-ownership','before-document','traversal','after-document','complete')) { throw 'The Edge identity observation contained unknown fields or stage.' }
   $clean=[ordered]@{stage=$Observation.stage}
   foreach ($key in @('incomplete','proof_verified','truncated')) { if ($Observation.$key -isnot [bool]) { throw 'An Edge identity proof flag was not boolean.' };$clean[$key]=$Observation.$key }
@@ -348,14 +349,29 @@ function ConvertTo-PickleEdgeIdentityObservation($Observation) {
   foreach ($key in @('property_errors','title_exact_count','version_exact_count','id_syntax_count','extension_id_group_count','known_error_count','unclassified_text_count','matching_count')) {
     if ($key -cne 'property_errors' -and $clean[$key] -gt $clean.nodes) { throw 'An identity count exceeded observed nodes.' }
   }
+  $errorKind=$Observation.first_error_kind;$errorPhase=$Observation.first_error_phase;$errorHr=$Observation.first_error_hresult;$stageFailure=$Observation.first_stage_failure
+  if ($null -eq $errorKind) {
+    if ($null -ne $errorPhase -or $null -ne $errorHr -or $null -ne $stageFailure -or $clean.property_errors -ne 0) { throw 'An identity exception prefix was incomplete.' }
+  } else {
+    if ($errorKind -isnot [string] -or $errorKind -cnotin @('element-not-available','com','access-denied','io','argument','other','stage-failure') -or $errorPhase -isnot [string] -or $errorPhase -cnotin @('deadline','window-ownership','owner-process','window-binding','document-binding','node-binding','password','control-type','document-identity','automation-id','name','ancestors','window-bounds','node-bounds','node-offscreen','first-child','child-binding','next-sibling','document-recheck') -or $clean.property_errors -eq 0 -or !$clean.incomplete -or $clean.proof_verified -or $clean.stage -ceq 'complete') { throw 'Invalid identity exception classification.' }
+    if ($errorKind -ceq 'stage-failure') {
+      if ($null -ne $errorHr -or $stageFailure -isnot [string] -or $stageFailure -cnotin @('stage-deadline','uia-element-not-owned','uia-window-not-owned','other-stage-failure')) { throw 'A fixture refusal invented a native HRESULT or leaked a code.' }
+    } elseif ($null -ne $stageFailure -or ($errorHr -isnot [int] -and $errorHr -isnot [long]) -or $errorHr -lt [int]::MinValue -or $errorHr -gt [int]::MaxValue) { throw 'An identity exception did not retain its actual signed HRESULT.' }
+  }
+  foreach ($key in $errorKeys) { $clean[$key]=$Observation.$key }
   $records=@($Observation.records)
   if ($records.Count -ne [Math]::Min(16,$clean.matching_count) -or $clean.truncated -ne ($clean.matching_count -gt 16) -or $clean.unclassified_text_count+$clean.matching_count -gt $clean.nodes) { throw 'Edge identity record counts disagreed.' }
   if (($clean.proof_verified -or !$clean.incomplete -or $clean.stage -ceq 'complete') -and (!$clean.proof_verified -or $clean.incomplete -or $clean.stage -cne 'complete' -or $clean.property_errors -ne 0 -or $clean.nodes -eq 0)) { throw 'A partial identity observation claimed complete proof.' }
-  $recordKeys=@('role','title_exact','version_exact','id_syntax','extension_id_group','known_error_exact','offscreen','bounds_flags','ancestor_roles','ancestors_truncated')
+  $recordKeys=@('role','title_exact','version_exact','id_syntax','extension_id_group','known_error_exact','known_error_kind','offscreen','bounds_flags','ancestor_roles','ancestors_truncated')
   $rows=@(foreach ($record in $records) {
     if (@($record.PSObject.Properties).Count -ne $recordKeys.Count -or @($record.PSObject.Properties.Name | Where-Object { $_ -cnotin $recordKeys }).Count) { throw 'An identity record contained unknown fields.' }
     $row=[ordered]@{}
     foreach ($key in @('title_exact','version_exact','extension_id_group','known_error_exact','offscreen','ancestors_truncated')) { if ($record.$key -isnot [bool]) { throw 'An identity record flag was not boolean.' };$row[$key]=$record.$key }
+    $errorLabel=$record.known_error_kind
+    if ($row.known_error_exact) {
+      if ($errorLabel -isnot [string] -or $errorLabel -cnotin @('failed-to-load','error-loading','manifest-unreadable','manifest-invalid-json','manifest-load-failed')) { throw 'An exact load error had no closed label.' }
+    } elseif ($null -ne $errorLabel) { throw 'An unrelated identity label claimed a load error.' }
+    $row.known_error_kind=$errorLabel
     foreach ($key in @('role','id_syntax','bounds_flags')) {
       $value=$record.$key
       if (($value -isnot [int] -and $value -isnot [long]) -or ($key -ceq 'role' -and ($value -lt 50000 -or $value -gt 50040)) -or ($key -ceq 'id_syntax' -and ($value -lt 0 -or $value -gt 2)) -or ($key -ceq 'bounds_flags' -and ($value -lt 0 -or $value -gt 7))) { throw 'An identity record number was outside its closed range.' }

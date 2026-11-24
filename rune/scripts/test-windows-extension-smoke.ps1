@@ -225,9 +225,9 @@ foreach ($change in @(@('browser','chrome'),@('passed',$true),@('stage','ordinar
   Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
 }
 $null=ConvertTo-PickleExtensionStageReport $failedNavigation
-$identity=[pscustomobject]@{stage='complete';incomplete=$false;proof_verified=$true;nodes=5;property_errors=0;title_exact_count=1;version_exact_count=0;id_syntax_count=1;extension_id_group_count=0;known_error_count=0;unclassified_text_count=2;matching_count=2;truncated=$false;records=@(
-  [pscustomobject]@{role=50020;title_exact=$true;version_exact=$false;id_syntax=0;extension_id_group=$false;known_error_exact=$false;offscreen=$false;bounds_flags=3;ancestor_roles=@(50020,50026,50030);ancestors_truncated=$false},
-  [pscustomobject]@{role=50020;title_exact=$false;version_exact=$false;id_syntax=2;extension_id_group=$false;known_error_exact=$false;offscreen=$false;bounds_flags=3;ancestor_roles=@(50020,50026,50030);ancestors_truncated=$false})}
+$identity=[pscustomobject]@{stage='complete';incomplete=$false;proof_verified=$true;nodes=5;property_errors=0;title_exact_count=1;version_exact_count=0;id_syntax_count=1;extension_id_group_count=0;known_error_count=0;unclassified_text_count=2;matching_count=2;truncated=$false;first_error_kind=$null;first_error_hresult=$null;first_error_phase=$null;first_stage_failure=$null;records=@(
+  [pscustomobject]@{role=50020;title_exact=$true;version_exact=$false;id_syntax=0;extension_id_group=$false;known_error_exact=$false;known_error_kind=$null;offscreen=$false;bounds_flags=3;ancestor_roles=@(50020,50026,50030);ancestors_truncated=$false},
+  [pscustomobject]@{role=50020;title_exact=$false;version_exact=$false;id_syntax=2;extension_id_group=$false;known_error_exact=$false;known_error_kind=$null;offscreen=$false;bounds_flags=3;ancestor_roles=@(50020,50026,50030);ancestors_truncated=$false})}
 $identityClean=ConvertTo-PickleEdgeIdentityObservation $identity
 if ($identityClean.title_exact_count -ne 1 -or $identityClean.id_syntax_count -ne 1 -or $identityClean.extension_id_group_count -ne 0) { throw 'Independent closed labels were lost when the assumed ID group was absent.' }
 foreach ($change in @(@('stage','unknown'),@('incomplete',$true),@('proof_verified',$false),@('nodes',257),@('nodes',1),@('nodes','5'),@('matching_count',1),@('title_exact_count',0),@('id_syntax_count',0),@('truncated',$true),@('property_errors',1))) {
@@ -247,7 +247,31 @@ Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
 $bad=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0].ancestor_roles=@(50020,50026)
 Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
 $identityPartial=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$identityPartial.stage='traversal';$identityPartial.incomplete=$true;$identityPartial.proof_verified=$false;$identityPartial.property_errors=1
+$identityPartial.first_error_kind='element-not-available';$identityPartial.first_error_hresult=-2147220991;$identityPartial.first_error_phase='name'
 $null=ConvertTo-PickleEdgeIdentityObservation $identityPartial
+foreach ($change in @(@('first_error_kind','raw private exception'),@('first_error_kind',$null),@('first_error_phase','private operation'),@('first_error_hresult',-2147220991.0),@('first_error_hresult','-2147220991'),@('first_error_hresult',2147483648),@('first_error_hresult',$null),@('first_stage_failure','stage-deadline'),@('incomplete',$false),@('proof_verified',$true),@('property_errors',0))) {
+  $bad=$identityPartial | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+}
+$stageError=$identityPartial | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$stageError.first_error_kind='stage-failure';$stageError.first_error_hresult=$null;$stageError.first_error_phase='deadline';$stageError.first_stage_failure='stage-deadline'
+$null=ConvertTo-PickleEdgeIdentityObservation $stageError
+foreach ($change in @(@('first_stage_failure','private code'),@('first_stage_failure',$null),@('first_error_hresult',0))) {
+  $bad=$stageError | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+}
+foreach ($label in @('failed-to-load','error-loading','manifest-unreadable','manifest-invalid-json','manifest-load-failed')) {
+  $labelled=$identityPartial | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+  $labelled.title_exact_count=0;$labelled.known_error_count=1;$labelled.records[0].title_exact=$false;$labelled.records[0].known_error_exact=$true;$labelled.records[0].known_error_kind=$label
+  $cleanLabel=ConvertTo-PickleEdgeIdentityObservation $labelled
+  if ($cleanLabel.records[0].known_error_kind -cne $label) { throw 'The exact load error classification was lost.' }
+  foreach ($badLabel in @('private raw error','FAILED-TO-LOAD',$null)) {
+    $bad=$labelled | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.records[0].known_error_kind=$badLabel
+    Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+  }
+}
+$bad=$identity | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.records[0].known_error_kind='failed-to-load'
+Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
 $zero=[pscustomobject]@{schema=1;test='windows-stable-bundled-extension-load';scope='bundled-extension-load-only';browser='edge';passed=$false;full_delivery_verified=$false;stage='loaded-extension-details';failure='detail-candidate-unavailable';folder_picker_closed=$true;candidate_extension_id_count=0;edge_identity_observation=$identity}
 $zeroClean=ConvertTo-PickleExtensionStageReport $zero
 if ($zeroClean.failure -cne 'detail-candidate-unavailable' -or $zeroClean.passed -or !$zeroClean.edge_identity_observation.proof_verified) { throw 'Read-only identity diagnostics changed the original failure.' }
