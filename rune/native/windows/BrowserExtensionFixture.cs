@@ -416,7 +416,7 @@ public static partial class BrowserExtensionFixtureProgram {
         if (args.Length==1 && args[0]=="--details-self-test") { BrowserExtensionDetailsPredicates.SelfTest(); return 0; }
         if (args.Length==1 && args[0]=="--layout-self-test") { BrowserExtensionLayoutPredicates.SelfTest(); return 0; }
         if(args.Length>0 && args[0]=="--capture-owned-window") return CaptureChild(args);
-        bool loaded=false,drained=false,delivery=false,delivered=false;IntPtr window=IntPtr.Zero;
+        bool loaded=false,drained=false,delivery=false,delivered=false,browserLaunchAttempted=false;IntPtr window=IntPtr.Zero;
         try {
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted") Fail("requires-hosted-windows-ci");
             string[] names={"--browser","--executable","--profile","--extension","--proxy-port","--evidence"};
@@ -447,6 +447,8 @@ public static partial class BrowserExtensionFixtureProgram {
             deadline=DateTime.UtcNow.AddSeconds(90);
             if(delivery) { stage="delivery-app-ready";PrepareDelivery(options); }
             stage="launch-contained-browser";
+            browserLaunchAttempted=true;
+            if(delivery) Report["browser_launch_attempted"]=true;
             browser=new BrowserJob(exe,profile,kind+"://extensions/",port);
             Report["atomic_job_membership_verified"]=true;
             stage="owned-browser-window";
@@ -541,6 +543,7 @@ public static partial class BrowserExtensionFixtureProgram {
             if (browser!=null) { try { drained=browser.Close(); } catch { drained=false; } browser.Dispose(); }
             if(delivery) FinishDelivery();
             Report["browser_job_drained"]=drained;
+            if(delivery) Report["browser_not_started_cleanup_verified"]=BrowserExtensionDeliveryPredicates.BrowserNeverStarted(browserLaunchAttempted,browser!=null,drained);
             bool complete=loaded && drained && (!delivery || (delivered && DeliveryStopped));
             if(delivery) Report["full_delivery_verified"]=complete;
             Report["stage"]=stage;Report["passed"]=complete;

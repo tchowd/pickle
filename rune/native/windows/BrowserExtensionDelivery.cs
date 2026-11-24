@@ -20,6 +20,11 @@ public static class BrowserExtensionDeliveryPredicates {
     public const string ArticleTitle="Owned extension article";
     public const string ArticleText="Café shuttle service may reduce waiting on this route in dry weather. Evidence from one route does not establish reliability in rain.";
     public static string Normalize(string value) { return Regex.Replace(value??"",@"\s+"," ").Trim(); }
+    public static bool EligibleReader(bool exactOwner,bool visible,bool geometryKnown,bool cloakKnown,int cloaked,long width,long height) {
+        return exactOwner && visible && geometryKnown && cloakKnown && cloaked==0 && width>=480 && height>=180;
+    }
+    public static bool BrowserNeverStarted(bool attempted,bool hasJob,bool drained) { return !attempted && !hasJob && !drained; }
+    public static bool UniqueEligibleReader(int count) { return count==1; }
     public static bool Article(IEnumerable<string> labels) {
         var values=labels.Select(Normalize).ToArray();
         return values.Contains(ArticleTitle+" · article") && values.Contains(ArticleText);
@@ -32,6 +37,13 @@ public static class BrowserExtensionDeliveryPredicates {
         return name as string=="com.pickle.reader" && manifest["description"] as string=="Pickle page context" && type as string=="stdio" && path is string && allowed!=null && allowed.Length==1 && allowed[0] as string==origin;
     }
     public static void SelfTest() {
+        if(!EligibleReader(true,true,true,true,0,480,180) || EligibleReader(false,true,true,true,0,480,180) ||
+            EligibleReader(true,false,true,true,0,480,180) || EligibleReader(true,true,false,true,0,480,180) ||
+            EligibleReader(true,true,true,false,0,480,180) || EligibleReader(true,true,true,true,1,480,180) ||
+            EligibleReader(true,true,true,true,0,479,180) || EligibleReader(true,true,true,true,0,480,179)) throw new Exception("delivery-reader-eligibility");
+        if(!UniqueEligibleReader(1) || UniqueEligibleReader(0) || UniqueEligibleReader(2) || UniqueEligibleReader(256)) throw new Exception("delivery-reader-uniqueness");
+        if(!BrowserNeverStarted(false,false,false) || BrowserNeverStarted(true,false,false) ||
+            BrowserNeverStarted(false,true,false) || BrowserNeverStarted(false,false,true) || BrowserNeverStarted(true,true,true)) throw new Exception("delivery-browser-not-started");
         if(!Article(new[]{ArticleTitle+" · article",ArticleText}) || Article(new[]{ArticleTitle+" · article"}) || Article(new[]{ArticleText}) ||
             Article(new[]{ArticleTitle+" · video transcript",ArticleText}) || Article(new[]{ArticleTitle+" · article",ArticleText+" unexpected"})) throw new Exception("delivery-exact-context");
         const string origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
@@ -64,6 +76,7 @@ public static partial class BrowserExtensionFixtureProgram {
         Report["extension_loaded"]=false;Report["extension_card_identity_verified"]=false;
         Report["extension_details_identity_verified"]=false;Report["owned_extension_folder_verified"]=false;
         Report["extension_name_found"]=false;Report["extension_version_found"]=false;
+        Report["browser_launch_attempted"]=false;Report["browser_not_started_cleanup_verified"]=false;
     }
     static void PrepareDelivery(Dictionary<string,string> options) {
         deliverySupport=DirectoryPath(options["--support"]);
@@ -216,10 +229,23 @@ public static partial class BrowserExtensionFixtureProgram {
         }
         public bool OwnsWindow(IntPtr value) { uint pid;if(value==IntPtr.Zero || !Native.IsWindow(value) || Native.GetWindowThreadProcessId(value,out pid)==0 || pid!=(uint)process.Id || Native.GetAncestor(value,2)!=value) return false;Verify();return true; }
         public IntPtr Window() {
-            Verify();var found=new List<IntPtr>();bool unavailable=false;int observed=0;
-            Native.EnumWindows(delegate(IntPtr candidate,IntPtr ignored) { try { if(++observed>256) { unavailable=true;return false; }if(Native.IsWindowVisible(candidate) && OwnsWindow(candidate)) found.Add(candidate);return true; } catch { unavailable=true;return false; } },IntPtr.Zero);
+            Verify();var found=new List<IntPtr>();bool unavailable=false;int observed=0,visible=0;
+            bool enumerated=Native.EnumWindows(delegate(IntPtr candidate,IntPtr ignored) { try {
+                if(++observed>256) { unavailable=true;return false; }
+                if(Native.IsWindowVisible(candidate) && OwnsWindow(candidate)) {
+                    visible++;Native.Rect rect;int cloaked;
+                    // Match the already exercised ordinary-reading selector,
+                    // while refusing unknown native geometry/cloaking outright.
+                    if(!Native.GetWindowRect(candidate,out rect) || Native.DeliveryWindowCloak(candidate,14,out cloaked,4)!=0) {unavailable=true;return false;}
+                    if(BrowserExtensionDeliveryPredicates.EligibleReader(true,true,true,true,cloaked,(long)rect.Right-rect.Left,(long)rect.Bottom-rect.Top)) found.Add(candidate);
+                }
+                return true;
+            } catch { unavailable=true;return false; } },IntPtr.Zero);
+            Report["application_visible_root_windows"]=visible;Report["application_eligible_reader_windows"]=found.Count;
+            if(!enumerated) unavailable=true;
             if(unavailable) Fail("delivery-app-owner-changed");
-            if(found.Count>1) Fail("delivery-app-window-ambiguous");window=found.SingleOrDefault();return window;
+            Verify();
+            if(found.Count>1) Fail("delivery-app-window-ambiguous");window=BrowserExtensionDeliveryPredicates.UniqueEligibleReader(found.Count) ? found[0] : IntPtr.Zero;return window;
         }
         bool Bound(AutomationElement node,bool passwordMetadata=false) {
             if(node==null || !OwnsWindow(window)) return false;var root=AutomationElement.FromHandle(window);
@@ -265,6 +291,7 @@ public static partial class BrowserExtensionFixtureProgram {
         public void Dispose() { process.Dispose(); }
     }
     static partial class Native {
+        [DllImport("dwmapi.dll",EntryPoint="DwmGetWindowAttribute")] public static extern int DeliveryWindowCloak(IntPtr window,uint attribute,out int value,int size);
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern IntPtr CreateFileW(string path,uint access,uint sharing,IntPtr security,uint creation,uint flags,IntPtr template);
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] public static extern uint GetFinalPathNameByHandleW(IntPtr handle,StringBuilder value,uint length,uint flags);
         [DllImport("advapi32.dll",EntryPoint="RegGetValueW",CharSet=CharSet.Unicode)] public static extern int RegGetValueWString(IntPtr key,string subkey,string value,uint flags,out uint type,IntPtr data,ref uint bytes);

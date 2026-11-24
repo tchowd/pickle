@@ -5,11 +5,26 @@ function ConvertTo-PickleExtensionDeliveryDriver($Report) {
   $clean=ConvertTo-PickleExtensionDriverScalars $Report $true
   if (($clean.schema -isnot [int] -and $clean.schema -isnot [long]) -or $clean.schema -ne 1 -or $clean.test -cne 'windows-stable-extension-reference-delivery' -or $clean.scope -cne 'extension-native-reference-delivery' -or $clean.browser -cnotin @('chrome','edge') -or $clean.passed -isnot [bool]) { throw 'The delivery driver had the wrong closed scope.' }
   if (@($clean.PSObject.Properties.Name) -ccontains 'native_host_executed') { throw 'Delivery cannot invent direct native-host process observation.' }
+  foreach ($key in @('browser_launch_attempted','browser_not_started_cleanup_verified','browser_job_drained')) {
+    if ($clean.$key -isnot [bool]) { throw 'Delivery omitted its actual browser lifetime state.' }
+  }
+  foreach ($key in @('application_visible_root_windows','application_eligible_reader_windows')) {
+    if ($key -cin @($clean.PSObject.Properties.Name) -and ($clean.$key -lt 0 -or $clean.$key -gt 256)) { throw 'Delivery reader window counts exceeded their bound.' }
+  }
+  $windowCounts=@($clean.PSObject.Properties.Name | Where-Object { $_ -cin @('application_visible_root_windows','application_eligible_reader_windows') }).Count
+  if ($windowCounts -eq 1 -or ($windowCounts -eq 2 -and $clean.application_eligible_reader_windows -gt $clean.application_visible_root_windows)) { throw 'Delivery reader window counts were inconsistent.' }
   return $clean
+}
+function Assert-PickleExtensionBrowserCleanup($Report) {
+  $r=ConvertTo-PickleExtensionDeliveryDriver $Report
+  if ($r.browser_not_started_cleanup_verified) {
+    if ($r.browser_launch_attempted -or $r.browser_job_drained -or $r.passed -or $r.full_delivery_verified -isnot [bool] -or $r.full_delivery_verified -or $r.stage -cnotin @('arguments','delivery-app-ready') -or $r.atomic_job_membership_verified -eq $true -or $r.owned_window_verified -eq $true -or $r.native_host_registered -eq $true) { throw 'A browser constructor attempt or accepted delivery cannot claim not-started cleanup.' }
+  } elseif (!$r.browser_launch_attempted -or !$r.browser_job_drained) { throw 'The attempted browser job did not prove complete termination.' }
 }
 function Assert-PickleExtensionDeliveryDriver($Report,[string]$Browser) {
   $r=ConvertTo-PickleExtensionDeliveryDriver $Report
   if ($r.browser -cne $Browser) { throw 'The delivery browser identity changed.' }
+  if (!$r.browser_launch_attempted -or $r.browser_not_started_cleanup_verified) { throw 'Actual delivery requires a launched browser and real job drain.' }
   foreach ($key in @('passed','full_delivery_verified','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_loaded','browser_job_drained','app_launched','initial_compose_ready','native_host_registered','owned_registration_verified','owned_article_verified','context_preview_revealed','accepted_article_verified','native_host_route_verified','authenticated_bridge_verified','ordinary_disconnect_verified','ordinary_quit_verified')) {
     if ($r.$key -isnot [bool] -or !$r.$key) { throw 'The actual extension delivery chain did not complete.' }
   }
@@ -80,8 +95,10 @@ function Restore-PickleExtensionRegistrationBaseline($Baseline) {
 function Assert-PickleExtensionDeliveryCleanup($Report,[string]$Browser) {
   if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-extension-article-delivery' -or $Report.scope -cne 'extension-native-reference-delivery' -or $Report.browser -cne $Browser -or $Report.passed -isnot [bool]) { throw 'The delivery owner report had the wrong scope.' }
   $driver=ConvertTo-PickleExtensionDeliveryDriver $Report.driver
-  if ($driver.browser -cne $Browser -or $driver.browser_job_drained -isnot [bool] -or !$driver.browser_job_drained) { throw 'The exact browser job did not prove complete termination.' }
+  if ($driver.browser -cne $Browser) { throw 'The cleanup browser identity changed.' }
+  Assert-PickleExtensionBrowserCleanup $driver
   foreach ($key in @('owned_processes_stopped','profile_restored','registry_restored','archives_unchanged','bundled_extension_unchanged','lease_released','bridge_descriptor_removed')) { if ($Report.$key -isnot [bool] -or !$Report.$key) { throw 'The delivery owner did not prove complete cleanup.' } }
+  if ($Report.application_forced_stop -isnot [bool] -or ($Report.application_forced_stop -and ($Report.ordinary_exit -eq $true -or $Report.passed))) { throw 'Forced application cleanup cannot attest ordinary successful exit.' }
   if (($Report.application_pid -isnot [int] -and $Report.application_pid -isnot [long]) -or $Report.application_pid -le 0 -or $driver.application_pid -ne $Report.application_pid) { throw 'The driver did not retain the owned application identity.' }
   if ($Report.inference -eq $null -or @($Report.inference.PSObject.Properties).Count -ne 4 -or $Report.inference.rejected -isnot [bool] -or $Report.inference.rejected) { throw 'The delivery workflow did not preserve zero inference.' }
   foreach ($key in @('total_requests','show_count','chat_count')) { if (($Report.inference.$key -isnot [int] -and $Report.inference.$key -isnot [long]) -or $Report.inference.$key -lt 0 -or $Report.inference.$key -gt 16) { throw 'A delivery request counter was invalid.' } }
@@ -104,7 +121,7 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
   $work=Join-Path ([IO.Path]::GetTempPath()) ('pickle-extension-delivery-'+[guid]::NewGuid().ToString('N'))
   $null=Assert-PickleReadingDirectory $work;New-Item -ItemType Directory -Path $work | Out-Null
   $profile=Join-Path $work 'browser-profile';New-Item -ItemType Directory -Path $profile | Out-Null
-  $report=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser=$Browser;passed=$false;full_delivery_verified=$false;driver=$null;application_pid=$null;ordinary_exit=$false;inference=$null;proxy=$null;owned_processes_stopped=$false;profile_restored=$false;registry_restored=$false;archives_unchanged=$false;bundled_extension_unchanged=$false;lease_released=$false;bridge_descriptor_removed=$false;recovery_directory=$work}
+  $report=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser=$Browser;passed=$false;full_delivery_verified=$false;driver=$null;application_pid=$null;ordinary_exit=$false;application_forced_stop=$false;inference=$null;proxy=$null;owned_processes_stopped=$false;profile_restored=$false;registry_restored=$false;archives_unchanged=$false;bundled_extension_unchanged=$false;lease_released=$false;bridge_descriptor_removed=$false;recovery_directory=$work}
   $driver=$null;$app=$null;$proxy=$null;$observer=$null;$snapshot=$null;$failed=$false;$stage='prepare'
   try {
     [IO.File]::WriteAllText($EvidencePath,($report | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
@@ -134,11 +151,13 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
   finally {
     try {
       if ($null -ne $driver -and !$driver.HasExited) { $failed=$true;$driver.Kill();if (!$driver.WaitForExit(10000)) { throw 'The owned delivery driver did not stop.' } }
-      if ($null -ne $app -and !$app.HasExited) { $failed=$true;$app.Kill();if (!$app.WaitForExit(10000)) { throw 'The owned delivery app did not stop.' } }
+      if ($null -ne $app -and !$app.HasExited) { $failed=$true;$report.application_forced_stop=$true;$app.Kill();if (!$app.WaitForExit(10000)) { throw 'The owned delivery app did not stop.' } }
       foreach ($pair in @(@($proxy,'proxy-stop'),@($observer,'observer-stop'))) {
         $child=$pair[0];if ($null -ne $child -and !$child.HasExited) { [IO.File]::WriteAllText((Join-Path $work $pair[1]),'stop');if (!$child.WaitForExit(5000)) { $failed=$true;$child.Kill();if (!$child.WaitForExit(10000)) { throw 'An owned delivery server did not stop.' } } }
       }
-      $report.owned_processes_stopped=($null -ne $driver -and $driver.HasExited -and $null -ne $report.driver -and $report.driver.browser_job_drained -eq $true -and $null -ne $app -and $app.HasExited -and $null -ne $proxy -and $proxy.HasExited -and $null -ne $observer -and $observer.HasExited)
+      $browserCleanup=$false
+      if ($null -ne $report.driver) { Assert-PickleExtensionBrowserCleanup $report.driver;$browserCleanup=$true }
+      $report.owned_processes_stopped=($null -ne $driver -and $driver.HasExited -and $browserCleanup -and $null -ne $app -and $app.HasExited -and $null -ne $proxy -and $proxy.HasExited -and $null -ne $observer -and $observer.HasExited)
       if (!$report.owned_processes_stopped) { throw 'Complete owned process cleanup was not established.' }
       $report.ordinary_exit=($app.ExitCode -eq 0 -and $report.driver.ordinary_quit_verified -eq $true)
       if ($proxy.ExitCode -ne 0 -or $observer.ExitCode -ne 0) { throw 'An owned delivery observer exited unsuccessfully.' }
