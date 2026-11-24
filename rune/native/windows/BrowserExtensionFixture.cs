@@ -545,9 +545,12 @@ public static partial class BrowserExtensionFixtureProgram {
             stage="browser-cleanup";
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;
+            bool edgeZero=browser!=null && window!=IntPtr.Zero && Report.ContainsKey("browser") && Report.ContainsKey("candidate_extension_id_count") &&
+                Report["candidate_extension_id_count"] is int && BrowserExtensionEdgeIdentityPredicates.MayObserve((string)Report["browser"],stage,error.Code,(int)Report["candidate_extension_id_count"],Report.ContainsKey("folder_picker_closed") && (bool)Report["folder_picker_closed"]);
+            if(edgeZero) ObserveEdgePostPickerIdentity(window);
             if(browser!=null && window!=IntPtr.Zero && stage=="load-unpacked" && error.Code=="load-unpacked-unavailable" &&
                 Report.ContainsKey("browser") && (string)Report["browser"]=="edge") ObserveEdgeNavigation(window);
-            if(browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card" || stage=="loaded-extension-details")) {
+            if(!edgeZero && browser!=null && window!=IntPtr.Zero && (stage=="developer-mode" || stage=="loaded-extension-card" || stage=="loaded-extension-details")) {
                 if(stage=="developer-mode" && Report.ContainsKey("browser") && (string)Report["browser"]=="edge") ObserveEdgeNavigation(window);
                 if(Report.ContainsKey("browser") && (string)Report["browser"]=="edge") { try { ObserveEdgePolicies(); } catch { } }
                 try { ObserveFailure(window); } catch { Report["failure_observation_unavailable"]=true; }

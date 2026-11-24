@@ -27,6 +27,7 @@ public static class BrowserExtensionEdgeNavigationPredicates {
         return Array.IndexOf(new[]{50000,50002,50003,50005,50009,50011,50013,50019,50024,50031},value)>=0;
     }
     public static void SelfTest() {
+        BrowserExtensionEdgeIdentityPredicates.SelfTest();
         if(!MayRepeatAfterLoad("edge","load-unpacked-unavailable",true,true,false)) throw new Exception("load-menu-admission");
         foreach(string kind in new[]{"chrome",""}) if(MayRepeatAfterLoad(kind,"load-unpacked-unavailable",true,true,false)) throw new Exception("load-menu-edge-only");
         foreach(string failure in new[]{"stage-deadline","uia-element-not-owned","developer-toggle-unavailable",""}) if(MayRepeatAfterLoad("edge",failure,true,true,false)) throw new Exception("load-menu-exact-failure");
@@ -48,8 +49,105 @@ public static class BrowserExtensionEdgeNavigationPredicates {
     }
 }
 
+// Equality/syntax observations only; never an installed-extension identity rule.
+public static class BrowserExtensionEdgeIdentityPredicates {
+    public static bool MayObserve(string kind,string stage,string failure,int candidates,bool pickerClosed) {
+        return kind=="edge" && pickerClosed && candidates==0 &&
+            ((stage=="loaded-extension-details" && failure=="detail-candidate-unavailable") ||
+             (stage=="delivery-candidate" && failure=="loaded-extension-id-unavailable"));
+    }
+    public static int LabelFlags(string value) {
+        if(value==null || value.Length>4096) return 0;
+        int flags=(value=="Pickle — page and video context" ? 1 : 0) | (value=="0.1.0" ? 2 : 0);
+        if(BrowserExtensionPredicates.ExtensionId(value)) flags|=4;
+        else if(BrowserExtensionPredicates.IdFromLabel(value)!=null) flags|=8;
+        foreach(string known in new[]{"Failed to load extension","Error loading extension","Manifest file is missing or unreadable","Manifest is not valid JSON","Could not load manifest"})
+            if(value==known) flags|=16;
+        return flags;
+    }
+    public static void SelfTest() {
+        if(!MayObserve("edge","loaded-extension-details","detail-candidate-unavailable",0,true) ||
+            !MayObserve("edge","delivery-candidate","loaded-extension-id-unavailable",0,true)) throw new Exception("edge-zero-candidate-observation");
+        foreach(string kind in new[]{"chrome",""}) if(MayObserve(kind,"delivery-candidate","loaded-extension-id-unavailable",0,true)) throw new Exception("edge-identity-edge-only");
+        if(MayObserve("edge","delivery-candidate","loaded-extension-id-unavailable",1,true) || MayObserve("edge","delivery-candidate","loaded-extension-id-unavailable",0,false) ||
+            MayObserve("edge","delivery-connect","delivery-connect-unavailable",0,true) || MayObserve("edge","loaded-extension-details","detail-identity-unavailable",0,true)) throw new Exception("edge-identity-exact-boundary");
+        const string id="abcdefghijklmnopabcdefghijklmnop";
+        if(LabelFlags("Pickle — page and video context")!=1 || LabelFlags("0.1.0")!=2 || LabelFlags(id)!=4 || LabelFlags("ID: "+id)!=8 || LabelFlags("Failed to load extension")!=16) throw new Exception("edge-identity-closed-flags");
+        foreach(string unknown in new[]{null,"private unrelated text","0.1.0 extra","Pickle — page and video context other","Failed to load extension: unknown detail","https://example.test/"+id,"ID: "+id+" private",new string('x',4097)})
+            if(LabelFlags(unknown)!=0) throw new Exception("edge-identity-no-arbitrary-string");
+    }
+}
+
 #if !PICKLE_PREDICATES
 public static partial class BrowserExtensionFixtureProgram {
+    static void ObserveEdgePostPickerIdentity(IntPtr window) {
+        var records=new List<Dictionary<string,object>>();
+        var observation=new Dictionary<string,object>{{"stage","before-ownership"},{"incomplete",true},{"proof_verified",false},
+            {"nodes",0},{"property_errors",0},{"title_exact_count",0},{"version_exact_count",0},{"id_syntax_count",0},
+            {"extension_id_group_count",0},{"known_error_count",0},{"unclassified_text_count",0},{"matching_count",0},{"truncated",false},{"records",records}};
+        Report["edge_identity_observation"]=observation;
+        IntPtr owner=IntPtr.Zero;
+        try {
+            Check();uint pid;
+            if(browser==null || !browser.OwnsWindow(window) || Native.GetWindowThreadProcessId(window,out pid)==0 || pid==0) return;
+            owner=Native.OpenProcess(0x00101000,false,pid);if(!LayoutWindowBound(window,owner,pid)) return;
+            observation["stage"]="before-document";AutomationElement root,document;string uri;
+            // Existing bounded (1024-node) discovery proves the sole committed
+            // internal page. The subsequent observer scans only that document.
+            if(!LayoutPage(window,owner,pid,null,null,null,out root,out document,out uri)) return;
+            var queue=new Queue<KeyValuePair<AutomationElement,int>>();queue.Enqueue(new KeyValuePair<AutomationElement,int>(document,0));
+            observation["stage"]="traversal";
+            while(queue.Count>0) {
+                Check();if((int)observation["nodes"]+queue.Count>256 || !LayoutWindowBound(window,owner,pid)) return;
+                var entry=queue.Dequeue();var node=entry.Key;observation["nodes"]=(int)observation["nodes"]+1;
+                if(entry.Value>16 || !EdgeNavigationBound(node,document,root,window,true)) return;
+                if(node.Current.IsPassword) continue;
+                int role=node.Current.ControlType.Id;
+                if(role==50004 || (role==50030 && !Automation.Compare(node,document))) continue;
+                Func<bool> bound=()=>LayoutWindowBound(window,owner,pid) && EdgeNavigationBound(node,document,root,window,false);
+                string aid;if(!BrowserExtensionDetailsPredicates.Read(bound,()=>node.Current.AutomationId,out aid)) return;
+                bool group=role==50026 && aid=="extension-id";int flags=0;
+                if(role!=50030) {
+                    string label;if(!BrowserExtensionDetailsPredicates.Read(bound,()=>node.Current.Name,out label)) return;
+                    flags=BrowserExtensionEdgeIdentityPredicates.LabelFlags(label);
+                }
+                if(!bound() || node.Current.ControlType.Id!=role) return;
+                if(flags!=0 || group) {
+                    Dictionary<string,object> record=null;
+                    if(records.Count<16) {
+                        bool ancestorsTruncated;var ancestors=EdgeNavigationAncestors(node,document,root,window,out ancestorsTruncated);
+                        Native.Rect outer;if(!Native.GetWindowRect(window,out outer) || !bound()) return;
+                        var bounds=node.Current.BoundingRectangle;bool offscreen=node.Current.IsOffscreen;
+                        if(!bound() || ancestors.Count==0 || ancestors[0]!=role) return;
+                        record=new Dictionary<string,object>{{"role",role},{"title_exact",(flags&1)!=0},{"version_exact",(flags&2)!=0},
+                            {"id_syntax",(flags&4)!=0 ? 1 : (flags&8)!=0 ? 2 : 0},{"extension_id_group",group},{"known_error_exact",(flags&16)!=0},
+                            {"offscreen",offscreen},{"bounds_flags",BrowserExtensionPredicates.BoundsFlags(bounds.X,bounds.Y,bounds.Width,bounds.Height,outer.Left,outer.Top,outer.Right,outer.Bottom)},
+                            {"ancestor_roles",ancestors},{"ancestors_truncated",ancestorsTruncated}};
+                    }
+                    // Count only complete observations so retained-record count
+                    // cannot disagree after a property failure under the cap.
+                    if(record!=null) records.Add(record);
+                    observation["matching_count"]=(int)observation["matching_count"]+1;
+                    if((flags&1)!=0) observation["title_exact_count"]=(int)observation["title_exact_count"]+1;
+                    if((flags&2)!=0) observation["version_exact_count"]=(int)observation["version_exact_count"]+1;
+                    if((flags&12)!=0) observation["id_syntax_count"]=(int)observation["id_syntax_count"]+1;
+                    if(group) observation["extension_id_group_count"]=(int)observation["extension_id_group_count"]+1;
+                    if((flags&16)!=0) observation["known_error_count"]=(int)observation["known_error_count"]+1;
+                    observation["truncated"]=(int)observation["matching_count"]>16;
+                } else if(role==50020) observation["unclassified_text_count"]=(int)observation["unclassified_text_count"]+1;
+                if(entry.Value>=16) return;
+                var child=TreeWalker.RawViewWalker.GetFirstChild(node);
+                while(child!=null) {
+                    Check();if((int)observation["nodes"]+queue.Count>=256 || !EdgeNavigationBound(child,document,root,window,true)) return;
+                    queue.Enqueue(new KeyValuePair<AutomationElement,int>(child,entry.Value+1));child=TreeWalker.RawViewWalker.GetNextSibling(child);
+                }
+            }
+            Check();observation["stage"]="after-document";AutomationElement afterRoot,afterDocument;string afterUri;
+            if(!LayoutPage(window,owner,pid,root,document,uri,out afterRoot,out afterDocument,out afterUri)) return;
+            observation["proof_verified"]=true;observation["incomplete"]=false;observation["stage"]="complete";
+        } catch {observation["property_errors"]=(int)observation["property_errors"]+1;}
+        finally {if(owner!=IntPtr.Zero) Native.CloseHandle(owner);}
+    }
     static bool EdgeNavigationBound(AutomationElement node,AutomationElement document,
         AutomationElement root,IntPtr window,bool passwordLeaf) {
         bool first=true;

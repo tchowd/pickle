@@ -225,6 +225,42 @@ foreach ($change in @(@('browser','chrome'),@('passed',$true),@('stage','ordinar
   Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
 }
 $null=ConvertTo-PickleExtensionStageReport $failedNavigation
+$identity=[pscustomobject]@{stage='complete';incomplete=$false;proof_verified=$true;nodes=5;property_errors=0;title_exact_count=1;version_exact_count=0;id_syntax_count=1;extension_id_group_count=0;known_error_count=0;unclassified_text_count=2;matching_count=2;truncated=$false;records=@(
+  [pscustomobject]@{role=50020;title_exact=$true;version_exact=$false;id_syntax=0;extension_id_group=$false;known_error_exact=$false;offscreen=$false;bounds_flags=3;ancestor_roles=@(50020,50026,50030);ancestors_truncated=$false},
+  [pscustomobject]@{role=50020;title_exact=$false;version_exact=$false;id_syntax=2;extension_id_group=$false;known_error_exact=$false;offscreen=$false;bounds_flags=3;ancestor_roles=@(50020,50026,50030);ancestors_truncated=$false})}
+$identityClean=ConvertTo-PickleEdgeIdentityObservation $identity
+if ($identityClean.title_exact_count -ne 1 -or $identityClean.id_syntax_count -ne 1 -or $identityClean.extension_id_group_count -ne 0) { throw 'Independent closed labels were lost when the assumed ID group was absent.' }
+foreach ($change in @(@('stage','unknown'),@('incomplete',$true),@('proof_verified',$false),@('nodes',257),@('nodes',1),@('nodes','5'),@('matching_count',1),@('title_exact_count',0),@('id_syntax_count',0),@('truncated',$true),@('property_errors',1))) {
+  $bad=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+}
+foreach ($field in @('name','path','id','pixels')) {
+  $bad=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0] | Add-Member -NotePropertyName $field -NotePropertyValue 'not retained'
+  Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+}
+foreach ($change in @(@('role',49999),@('id_syntax',3),@('bounds_flags',8),@('title_exact','true'),@('version_exact',$true))) {
+  $bad=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0].($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+}
+$bad=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0].ancestor_roles=@(50026,50030)
+Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+$bad=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$bad.records[0].ancestor_roles=@(50020,50026)
+Assert-ExtensionRefused { ConvertTo-PickleEdgeIdentityObservation $bad }
+$identityPartial=$identity | ConvertTo-Json -Depth 6 | ConvertFrom-Json;$identityPartial.stage='traversal';$identityPartial.incomplete=$true;$identityPartial.proof_verified=$false;$identityPartial.property_errors=1
+$null=ConvertTo-PickleEdgeIdentityObservation $identityPartial
+$zero=[pscustomobject]@{schema=1;test='windows-stable-bundled-extension-load';scope='bundled-extension-load-only';browser='edge';passed=$false;full_delivery_verified=$false;stage='loaded-extension-details';failure='detail-candidate-unavailable';folder_picker_closed=$true;candidate_extension_id_count=0;edge_identity_observation=$identity}
+$zeroClean=ConvertTo-PickleExtensionStageReport $zero
+if ($zeroClean.failure -cne 'detail-candidate-unavailable' -or $zeroClean.passed -or !$zeroClean.edge_identity_observation.proof_verified) { throw 'Read-only identity diagnostics changed the original failure.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $zeroClean 'edge' }
+foreach ($change in @(@('browser','chrome'),@('passed',$true),@('stage','developer-mode'),@('failure','detail-identity-unavailable'),@('candidate_extension_id_count',1),@('candidate_extension_id_count',0.0),@('folder_picker_closed',$false))) {
+  $bad=$zero | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+}
+$fullZero=$zero | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$fullZero.test='windows-stable-extension-reference-delivery';$fullZero.scope='extension-native-reference-delivery';$fullZero.stage='delivery-candidate';$fullZero.failure='loaded-extension-id-unavailable'
+$fullZero | Add-Member bundled_extension_version '0.1.0'
+$fullClean=ConvertTo-PickleExtensionDriverScalars $fullZero $true
+if ($fullClean.failure -cne 'loaded-extension-id-unavailable' -or $fullClean.bundled_extension_version -cne '0.1.0') { throw 'The full delivery observation changed its mode or original failure.' }
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $fullZero }
 foreach ($change in @(@('browser','chrome'),@('passed',$true),@('stage','browser-cleanup'))) {
   $bad=$failedNavigation | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }

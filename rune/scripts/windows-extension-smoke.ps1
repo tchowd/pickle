@@ -101,7 +101,7 @@ function Build-PickleExtensionFixture([string]$Directory) {
   return $output
 }
 function Assert-PickleExtensionStageReport($Report,[string]$Browser) {
-  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure','error_kind','error_hresult','failure_observation','window_capture','edge_policy_observation','edge_navigation_observation') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
+  if (@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('failure','error_kind','error_hresult','failure_observation','window_capture','edge_policy_observation','edge_navigation_observation','edge_identity_observation') }).Count) { throw 'Failure observations cannot attest a successful loading stage.' }
   Assert-PickleExtensionRecoveredLayout $Report
   if (($Report.schema -isnot [int] -and $Report.schema -isnot [long]) -or $Report.schema -ne 1 -or $Report.test -cne 'windows-stable-bundled-extension-load' -or $Report.scope -cne 'bundled-extension-load-only' -or $Report.browser -cne $Browser) { throw 'The native setup stage report had the wrong scope.' }
   foreach ($key in @('passed','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_loaded','browser_job_drained')) {
@@ -338,6 +338,43 @@ function ConvertTo-PickleEdgeNavigation($Observation) {
   if (($null -eq $Observation.work_area_width) -ne ($null -eq $Observation.work_area_height)) { throw 'Partial Edge work-area dimensions refused.' }
   return [pscustomobject][ordered]@{stage=$Observation.stage;incomplete=$Observation.incomplete;proof_verified=$Observation.proof_verified;nodes=$Observation.nodes;controls=$Observation.controls;property_errors=$Observation.property_errors;truncated=$Observation.truncated;records=$clean;work_area_width=$Observation.work_area_width;work_area_height=$Observation.work_area_height;window_dpi=$Observation.window_dpi}
 }
+function ConvertTo-PickleEdgeIdentityObservation($Observation) {
+  $counts=@('nodes','property_errors','title_exact_count','version_exact_count','id_syntax_count','extension_id_group_count','known_error_count','unclassified_text_count','matching_count')
+  $keys=@('stage','incomplete','proof_verified','truncated','records')+$counts
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count -or $Observation.stage -isnot [string] -or $Observation.stage -cnotin @('before-ownership','before-document','traversal','after-document','complete')) { throw 'The Edge identity observation contained unknown fields or stage.' }
+  $clean=[ordered]@{stage=$Observation.stage}
+  foreach ($key in @('incomplete','proof_verified','truncated')) { if ($Observation.$key -isnot [bool]) { throw 'An Edge identity proof flag was not boolean.' };$clean[$key]=$Observation.$key }
+  foreach ($key in $counts) { $value=$Observation.$key;if (($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt 256) { throw 'An Edge identity count exceeded its bound.' };$clean[$key]=$value }
+  foreach ($key in @('property_errors','title_exact_count','version_exact_count','id_syntax_count','extension_id_group_count','known_error_count','unclassified_text_count','matching_count')) {
+    if ($key -cne 'property_errors' -and $clean[$key] -gt $clean.nodes) { throw 'An identity count exceeded observed nodes.' }
+  }
+  $records=@($Observation.records)
+  if ($records.Count -ne [Math]::Min(16,$clean.matching_count) -or $clean.truncated -ne ($clean.matching_count -gt 16) -or $clean.unclassified_text_count+$clean.matching_count -gt $clean.nodes) { throw 'Edge identity record counts disagreed.' }
+  if (($clean.proof_verified -or !$clean.incomplete -or $clean.stage -ceq 'complete') -and (!$clean.proof_verified -or $clean.incomplete -or $clean.stage -cne 'complete' -or $clean.property_errors -ne 0 -or $clean.nodes -eq 0)) { throw 'A partial identity observation claimed complete proof.' }
+  $recordKeys=@('role','title_exact','version_exact','id_syntax','extension_id_group','known_error_exact','offscreen','bounds_flags','ancestor_roles','ancestors_truncated')
+  $rows=@(foreach ($record in $records) {
+    if (@($record.PSObject.Properties).Count -ne $recordKeys.Count -or @($record.PSObject.Properties.Name | Where-Object { $_ -cnotin $recordKeys }).Count) { throw 'An identity record contained unknown fields.' }
+    $row=[ordered]@{}
+    foreach ($key in @('title_exact','version_exact','extension_id_group','known_error_exact','offscreen','ancestors_truncated')) { if ($record.$key -isnot [bool]) { throw 'An identity record flag was not boolean.' };$row[$key]=$record.$key }
+    foreach ($key in @('role','id_syntax','bounds_flags')) {
+      $value=$record.$key
+      if (($value -isnot [int] -and $value -isnot [long]) -or ($key -ceq 'role' -and ($value -lt 50000 -or $value -gt 50040)) -or ($key -ceq 'id_syntax' -and ($value -lt 0 -or $value -gt 2)) -or ($key -ceq 'bounds_flags' -and ($value -lt 0 -or $value -gt 7))) { throw 'An identity record number was outside its closed range.' }
+      $row[$key]=$value
+    }
+    $labels=[int]$row.title_exact+[int]$row.version_exact+[int]$row.known_error_exact+[int]($row.id_syntax -ne 0)
+    if ($labels -gt 1 -or ($labels -eq 0 -and !$row.extension_id_group) -or ($row.extension_id_group -and $row.role -ne 50026)) { throw 'An identity record contradicted its equality classification.' }
+    $ancestors=@($record.ancestor_roles)
+    if ($ancestors.Count -lt 1 -or $ancestors.Count -gt 8 -or $ancestors[0] -ne $row.role) { throw 'Identity ancestor roles were invalid.' }
+    foreach ($role in $ancestors) { if (($role -isnot [int] -and $role -isnot [long]) -or $role -lt 50000 -or $role -gt 50040) { throw 'An identity ancestor role was not numeric and bounded.' } }
+    if (!$row.ancestors_truncated -and $ancestors[-1] -ne 50030) { throw 'Identity ancestry did not reach its owned document.' }
+    $row.ancestor_roles=$ancestors;[pscustomobject]$row
+  })
+  foreach ($pair in @(@('title_exact_count','title_exact'),@('version_exact_count','version_exact'),@('extension_id_group_count','extension_id_group'),@('known_error_count','known_error_exact'),@('id_syntax_count','id_syntax'))) {
+    $seen=@($rows | Where-Object { if ($pair[1] -ceq 'id_syntax') { $_.id_syntax -ne 0 } else { $_.($pair[1]) } }).Count
+    if ($seen -gt $clean[$pair[0]] -or (!$clean.truncated -and $seen -ne $clean[$pair[0]])) { throw 'Identity equality counts disagreed with retained observations.' }
+  }
+  $clean.records=$rows;return [pscustomobject]$clean
+}
 function ConvertTo-PickleExtensionStageReport($Report) {
   return ConvertTo-PickleExtensionDriverScalars $Report $false
 }
@@ -365,7 +402,13 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
   $clean=[ordered]@{}
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
-    if ($key -ceq 'edge_navigation_observation') {
+    if ($key -ceq 'edge_identity_observation') {
+      $isComponentIdentityFailure=$Report.stage -ceq 'loaded-extension-details' -and $Report.failure -ceq 'detail-candidate-unavailable'
+      $isDeliveryIdentityFailure=$Delivery -and $Report.stage -ceq 'delivery-candidate' -and $Report.failure -ceq 'loaded-extension-id-unavailable'
+      if ($Report.browser -cne 'edge' -or $Report.passed -isnot [bool] -or $Report.passed -or (!$isComponentIdentityFailure -and !$isDeliveryIdentityFailure) -or $Report.folder_picker_closed -isnot [bool] -or !$Report.folder_picker_closed -or ($Report.candidate_extension_id_count -isnot [int] -and $Report.candidate_extension_id_count -isnot [long]) -or $Report.candidate_extension_id_count -ne 0) { throw 'Edge identity observations require the exact owned zero-candidate failure.' }
+      $clean[$key]=ConvertTo-PickleEdgeIdentityObservation $value
+    }
+    elseif ($key -ceq 'edge_navigation_observation') {
       $knownFailure=($Report.stage -ceq 'developer-mode' -and $Report.failure -cin @('developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','edge-layout-unverified','edge-layout-unavailable','edge-menu-unverified','edge-menu-unavailable','stage-deadline')) -or ($Report.stage -ceq 'load-unpacked' -and $Report.failure -ceq 'load-unpacked-unavailable')
       if ($Report.browser -cne 'edge' -or !$knownFailure -or $Report.passed -isnot [bool] -or $Report.passed) { throw 'Edge navigation observation is failure-only internal-page evidence.' }
       $clean[$key]=ConvertTo-PickleEdgeNavigation $value
