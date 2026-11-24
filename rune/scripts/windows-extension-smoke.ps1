@@ -143,10 +143,28 @@ function ConvertTo-PickleExtensionLayout($Observation) {
   } elseif ($clean.stage -ceq 'complete') { throw 'An unsafe layout record cannot claim completion.' }
   return [pscustomobject]$clean
 }
+function ConvertTo-PickleExtensionMenu($Observation) {
+  $bools=@('action_performed','safely_verified','before_verified','discovery_complete','control_verified','invoke_completed','after_verified','unavailable')
+  $keys=$bools+@('stage','candidate_count')
+  if (@($Observation.PSObject.Properties).Count -ne $keys.Count -or @($Observation.PSObject.Properties.Name | Where-Object { $_ -cnotin $keys }).Count) { throw 'The observed Edge menu record had unknown fields.' }
+  if ($Observation.stage -cnotin @('before-ownership','before-document','discovery','before-invoke','after-document','complete')) { throw 'The observed menu stage was invalid.' }
+  $clean=[ordered]@{stage=$Observation.stage}
+  foreach ($key in $bools) { if ($Observation.$key -isnot [bool]) { throw 'A menu proof flag was not boolean.' };$clean[$key]=$Observation.$key }
+  $count=$Observation.candidate_count
+  if (($count -isnot [int] -and $count -isnot [long]) -or $count -lt 0 -or $count -gt 1024) { throw 'The menu candidate count was invalid.' };$clean.candidate_count=$count
+  if (($clean.action_performed -and (!$clean.before_verified -or !$clean.discovery_complete -or !$clean.control_verified -or $count -ne 1)) -or ($clean.invoke_completed -and !$clean.action_performed) -or ($clean.after_verified -and !$clean.safely_verified)) { throw 'The menu action/ownership facts were inconsistent.' }
+  if ($clean.safely_verified) {
+    if ($clean.stage -cne 'complete' -or !$clean.action_performed -or !$clean.before_verified -or !$clean.discovery_complete -or $count -ne 1 -or !$clean.control_verified -or !$clean.invoke_completed -or !$clean.after_verified -or $clean.unavailable) { throw 'The observed menu action did not complete safely.' }
+  } elseif ($clean.stage -ceq 'complete') { throw 'An unverified menu action cannot claim completion.' }
+  return [pscustomobject]$clean
+}
 function Assert-PickleExtensionRecoveredLayout($Report) {
-  $keys=@($Report.PSObject.Properties.Name);$hasLayout=$keys -ccontains 'edge_layout_observation';$hasInitial=$keys -ccontains 'initial_developer_failure'
-  if ($hasLayout -or $hasInitial) {
-    if (!$hasLayout -or !$hasInitial -or $Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable' -or !(ConvertTo-PickleExtensionLayout $Report.edge_layout_observation).safely_verified) { throw 'A successful recovery needs one safely verified owned Edge layout.' }
+  # Historical layout receipts remain readable; the current producer uses menu.
+  $keys=@($Report.PSObject.Properties.Name);$hasLayout=$keys -ccontains 'edge_layout_observation';$hasMenu=$keys -ccontains 'edge_menu_observation';$hasInitial=$keys -ccontains 'initial_developer_failure'
+  if ($hasLayout -or $hasMenu -or $hasInitial) {
+    if ($hasLayout -eq $hasMenu -or !$hasInitial -or $Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable') { throw 'A recovery needs exactly one typed owned Edge action.' }
+    $proof=if ($hasMenu) { ConvertTo-PickleExtensionMenu $Report.edge_menu_observation } else { ConvertTo-PickleExtensionLayout $Report.edge_layout_observation }
+    if (!$proof.safely_verified) { throw 'A successful recovery needs a safely verified owned Edge action.' }
   }
 }
 function ConvertTo-PickleExtensionDeveloperObservation($Observation) {
@@ -329,10 +347,11 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
   $numbers+=@('candidate_extension_id_count')
   $fixed.stage+=@('loaded-extension-details');$fixed.extension_identity_proof=@('card','detail-view');$fixed.detail_identity_stage=@('candidate','route','name','id','version','path','recheck','verified')
   $fixed.initial_developer_failure=@('developer-toggle-unavailable')
-  $failures+=@('detail-candidate-invalid','detail-candidate-unavailable','detail-route-unavailable','detail-identity-unavailable','edge-layout-unverified','edge-layout-unavailable')
+  $failures+=@('detail-candidate-invalid','detail-candidate-unavailable','detail-route-unavailable','detail-identity-unavailable','edge-layout-unverified','edge-layout-unavailable','edge-menu-unverified','edge-menu-unavailable')
   if ($Delivery) {
     $fixed.test=@('windows-stable-extension-reference-delivery');$fixed.scope=@('extension-native-reference-delivery')
-    $fixed.stage+=@('delivery-app-ready','delivery-connect','delivery-article','delivery-shortcut','delivery-context','delivery-disconnect','delivery-quit')
+    $fixed.stage+=@('delivery-app-ready','delivery-candidate','delivery-connect','delivery-article','delivery-shortcut','delivery-context','delivery-disconnect','delivery-quit')
+    $fixed.extension_identity_proof+=@('authenticated-delivery')
     $booleans+=@('native_host_process_start_observed','native_host_route_verified','inference_action_invoked','bridge_token_read','native_window_pixels_verified','selected_text_capture_verified','visible_url_verified','initial_compose_ready','owned_registration_verified','owned_article_verified','context_preview_revealed','accepted_article_verified','ordinary_disconnect_verified','ordinary_quit_verified','delivery_cleanup_unavailable')
     $numbers+=@('application_pid','delivery_shortcut_events')
     $failures+=@('delivery-cleanup-deadline','delivery-wrong-profile','delivery-invalid-app-owner','delivery-app-not-ready','delivery-app-not-empty','delivery-bridge-not-ready','delivery-connect-unavailable','delivery-context-unavailable','delivery-unexpected-reading','delivery-disconnect-unavailable','delivery-host-files-remain','delivery-registry-remains','delivery-app-did-not-quit','delivery-app-quit-nonzero','delivery-path-unavailable','delivery-host-provenance-unavailable','delivery-registry-unavailable','delivery-host-manifest-mismatch','delivery-host-registration-mismatch','delivery-host-registry-mismatch','delivery-browser-not-owned','delivery-browser-not-foreground','delivery-article-url-mismatch','delivery-owned-article-unavailable','delivery-app-owner-changed','delivery-app-window-ambiguous','delivery-app-tree-bound','delivery-app-element-not-owned','delivery-app-control-ambiguous','delivery-app-label-bound','delivery-app-focus-unavailable','delivery-app-control-unavailable','delivery-app-invoke-unavailable','delivery-app-value-unavailable','delivery-app-value-not-applied','delivery-input-target-changed','delivery-input-incomplete')
@@ -341,8 +360,13 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
   foreach ($field in $Report.PSObject.Properties) {
     $key=$field.Name;$value=$field.Value
     if ($key -ceq 'edge_navigation_observation') {
-      if ($Report.browser -cne 'edge' -or $Report.stage -cne 'developer-mode' -or $Report.passed -isnot [bool] -or $Report.passed -or $Report.failure -cnotin @('developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','edge-layout-unverified','edge-layout-unavailable','stage-deadline')) { throw 'Edge navigation observation is failure-only internal-page evidence.' }
+      if ($Report.browser -cne 'edge' -or $Report.stage -cne 'developer-mode' -or $Report.passed -isnot [bool] -or $Report.passed -or $Report.failure -cnotin @('developer-toggle-unavailable','developer-toggle-pattern-unavailable','developer-mode-not-enabled','edge-layout-unverified','edge-layout-unavailable','edge-menu-unverified','edge-menu-unavailable','stage-deadline')) { throw 'Edge navigation observation is failure-only internal-page evidence.' }
       $clean[$key]=ConvertTo-PickleEdgeNavigation $value
+    }
+    elseif ($key -ceq 'edge_menu_observation') {
+      if ($Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable' -or $Report.passed -isnot [bool]) { throw 'Only the original Edge discovery failure can have a menu record.' }
+      $menu=ConvertTo-PickleExtensionMenu $value
+      if ($Report.passed -and !$menu.safely_verified) { throw 'An unsafe menu action cannot attest recovered success.' };$clean[$key]=$menu
     }
     elseif ($key -ceq 'edge_layout_observation') {
       if ($Report.browser -cne 'edge' -or $Report.initial_developer_failure -cne 'developer-toggle-unavailable' -or $Report.passed -isnot [bool]) { throw 'Only the original owned Edge discovery failure can have a layout record.' }
@@ -350,7 +374,8 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
       if ($Report.passed -and !$layout.safely_verified) { throw 'Unsafe layout cannot attest recovered success.' };$clean[$key]=$layout
     }
     elseif ($key -ceq 'initial_developer_failure') {
-      if ($Report.browser -cne 'edge' -or $value -cne 'developer-toggle-unavailable' -or @($Report.PSObject.Properties.Name) -cnotcontains 'edge_layout_observation') { throw 'The original discovery failure must retain its one owned Edge layout record.' };$clean[$key]=$value
+      $proofs=@($Report.PSObject.Properties.Name | Where-Object { $_ -cin @('edge_layout_observation','edge_menu_observation') }).Count
+      if ($Report.browser -cne 'edge' -or $value -cne 'developer-toggle-unavailable' -or $proofs -ne 1) { throw 'The original discovery failure must retain one owned Edge recovery record.' };$clean[$key]=$value
     }
     elseif ($key -ceq 'edge_policy_observation') {
       if ($Report.passed -isnot [bool] -or $Report.passed -or $Report.browser -cne 'edge' -or $Report.stage -cnotin @('developer-mode','loaded-extension-card','loaded-extension-details') -or $Report.failure -isnot [string]) { throw 'Edge policy presence is only a failed Edge stage diagnostic.' }
@@ -366,6 +391,7 @@ function ConvertTo-PickleExtensionDriverScalars($Report,[bool]$Delivery) {
     elseif ($fixed.ContainsKey($key) -and $value -cin $fixed[$key]) { $clean[$key]=$value }
     elseif ($key -ceq 'failure' -and $value -cin $failures) { $clean[$key]=$value }
     elseif ($key -ceq 'extension_id' -and $value -is [string] -and $value -cmatch '^[a-p]{32}$') { $clean[$key]=$value }
+    elseif ($Delivery -and $key -ceq 'bundled_extension_version' -and $value -is [string] -and $value -cmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}(?:\.\d{1,5})?$') { $clean[$key]=$value }
     elseif ($key -cin @('extension_version','browser_version') -and $value -is [string] -and $value -cmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}(?:\.\d{1,5})?$') { $clean[$key]=$value }
     else { throw 'The owned stage report contained an unsupported diagnostic field.' }
   }

@@ -9,6 +9,10 @@ using System.Windows.Automation;
 #endif
 
 public static class BrowserExtensionEdgeNavigationPredicates {
+    public const string MenuLabel="Extensions menu";
+    public static bool MayInvokeMenu(int count,int role,string name,bool enabled,bool visible,int bounds,bool invoke) {
+        return count==1 && role==50000 && name==MenuLabel && enabled && visible && bounds==3 && invoke;
+    }
     public static bool SafeLabel(string value) {
         if(String.IsNullOrEmpty(value) || value.Length>80 || value!=value.Trim()) return false;
         foreach(char c in value)
@@ -26,6 +30,14 @@ public static class BrowserExtensionEdgeNavigationPredicates {
             if(SafeLabel(bad)) throw new Exception("edge-safe-label-refusal");
         if(!SafeLabel(new string('a',80)) || !ControlRole(50000) || !ControlRole(50011) || ControlRole(50004) ||
             ControlRole(50020) || ControlRole(50030)) throw new Exception("edge-control-scope");
+        if(!MayInvokeMenu(1,50000,MenuLabel,true,true,3,true)) throw new Exception("edge-menu-observed-control");
+        foreach(int count in new[]{0,2,1024}) if(MayInvokeMenu(count,50000,MenuLabel,true,true,3,true)) throw new Exception("edge-menu-unique");
+        foreach(string wrong in new[]{null,"Menu","extensions menu","Extensions menu ","Discover extensions and themes from Edge Add-ons"})
+            if(MayInvokeMenu(1,50000,wrong,true,true,3,true)) throw new Exception("edge-menu-exact-label");
+        foreach(int role in new[]{50004,50005,50011,50020,50030}) if(MayInvokeMenu(1,role,MenuLabel,true,true,3,true)) throw new Exception("edge-menu-exact-button");
+        foreach(int bounds in new[]{0,1,2,4,5,6,7}) if(MayInvokeMenu(1,50000,MenuLabel,true,true,bounds,true)) throw new Exception("edge-menu-visible-bounds");
+        if(MayInvokeMenu(1,50000,MenuLabel,false,true,3,true) || MayInvokeMenu(1,50000,MenuLabel,true,false,3,true) ||
+            MayInvokeMenu(1,50000,MenuLabel,true,true,3,false)) throw new Exception("edge-menu-unsafe-control");
     }
 }
 
@@ -140,6 +152,80 @@ public static partial class BrowserExtensionFixtureProgram {
             if(owner!=IntPtr.Zero) Native.CloseHandle(owner);
             if(!(bool)observation["proof_verified"]) { observation["controls"]=0;observation["truncated"]=false; }
         }
+    }
+    static List<AutomationElement> EdgeMenus(IntPtr window,IntPtr owner,uint pid,
+        AutomationElement root,AutomationElement document,Dictionary<string,object> observation) {
+        var found=new List<AutomationElement>();int nodes=0;
+        observation["discovery_complete"]=false;observation["candidate_count"]=0;
+        var queue=new Queue<KeyValuePair<AutomationElement,int>>();queue.Enqueue(new KeyValuePair<AutomationElement,int>(document,0));
+        while(queue.Count>0) {
+            Check();if(nodes+queue.Count>1024 || !LayoutWindowBound(window,owner,pid)) return null;
+            var entry=queue.Dequeue();var node=entry.Key;nodes++;
+            if(entry.Value>16 || !EdgeNavigationBound(node,document,root,window,true)) return null;
+            if(node.Current.IsPassword) continue;
+            int role=node.Current.ControlType.Id;if(role==50030 && !Automation.Compare(node,document)) continue;
+            if(role==50000) {
+                if(node.Current.ControlType.Id!=50000 || !EdgeNavigationBound(node,document,root,window,false)) return null;
+                string name=node.Current.Name;
+                if(!EdgeNavigationBound(node,document,root,window,false) || node.Current.ControlType.Id!=50000) return null;
+                if(name==BrowserExtensionEdgeNavigationPredicates.MenuLabel) { found.Add(node);observation["candidate_count"]=found.Count; }
+            }
+            var child=TreeWalker.RawViewWalker.GetFirstChild(node);
+            while(child!=null) {
+                Check();if(entry.Value>=16 || nodes+queue.Count>=1024 || !EdgeNavigationBound(child,document,root,window,true)) return null;
+                queue.Enqueue(new KeyValuePair<AutomationElement,int>(child,entry.Value+1));child=TreeWalker.RawViewWalker.GetNextSibling(child);
+            }
+        }
+        observation["discovery_complete"]=true;return found;
+    }
+    static bool EdgeMenuControl(AutomationElement node,AutomationElement root,AutomationElement document,
+        IntPtr window,out InvokePattern invoke) {
+        invoke=null;Check();
+        if(!EdgeNavigationBound(node,document,root,window,false) || node.Current.ControlType.Id!=50000) return false;
+        if(!EdgeNavigationBound(node,document,root,window,false)) return false;
+        string name=node.Current.Name;
+        if(!EdgeNavigationBound(node,document,root,window,false) || node.Current.ControlType.Id!=50000) return false;
+        object pattern;bool supported=node.TryGetCurrentPattern(InvokePattern.Pattern,out pattern);
+        if(!EdgeNavigationBound(node,document,root,window,false)) return false;
+        var current=node.Current;var bounds=current.BoundingRectangle;Native.Rect outer;
+        if(!Native.GetWindowRect(window,out outer)) return false;
+        int flags=BrowserExtensionPredicates.BoundsFlags(bounds.X,bounds.Y,bounds.Width,bounds.Height,outer.Left,outer.Top,outer.Right,outer.Bottom);
+        if(!BrowserExtensionEdgeNavigationPredicates.MayInvokeMenu(1,current.ControlType.Id,name,current.IsEnabled,!current.IsOffscreen,flags,supported) ||
+            !EdgeNavigationBound(node,document,root,window,false)) return false;
+        invoke=(InvokePattern)pattern;return true;
+    }
+    // Only the observed internal-page Button is actionable. An Invoke return
+    // proves no menu contents or Developer setting; Main must use its original
+    // Toggle discovery/On checks after this scope-preserving action succeeds.
+    static bool TryOpenEdgeExtensionsMenu(IntPtr window,out bool actionPerformed) {
+        actionPerformed=false;IntPtr owner=IntPtr.Zero;
+        var observation=new Dictionary<string,object> {{"stage","before-ownership"},{"action_performed",false},{"safely_verified",false},
+            {"before_verified",false},{"discovery_complete",false},{"candidate_count",0},{"control_verified",false},
+            {"invoke_completed",false},{"after_verified",false},{"unavailable",false}};
+        Report["edge_menu_observation"]=observation;
+        try {
+            Check();uint pid;
+            if(browser==null || !Report.ContainsKey("browser") || (string)Report["browser"]!="edge" ||
+                !browser.OwnsWindow(window) || Native.GetWindowThreadProcessId(window,out pid)==0 || pid==0) return false;
+            owner=Native.OpenProcess(0x00101000,false,pid);if(!LayoutWindowBound(window,owner,pid)) return false;
+            observation["stage"]="before-document";AutomationElement root,document;string uri;
+            if(!LayoutPage(window,owner,pid,null,null,null,out root,out document,out uri)) return false;
+            observation["before_verified"]=true;observation["stage"]="discovery";
+            var found=EdgeMenus(window,owner,pid,root,document,observation);if(found==null || found.Count!=1) return false;
+            var selected=found[0];InvokePattern invoke;if(!EdgeMenuControl(selected,root,document,window,out invoke)) return false;
+            observation["stage"]="before-invoke";
+            AutomationElement freshRoot,freshDocument;string freshUri;
+            found=EdgeMenus(window,owner,pid,root,document,observation);
+            if(found==null || found.Count!=1 || !Automation.Compare(selected,found[0])) return false;
+            if(!LayoutPage(window,owner,pid,root,document,uri,out freshRoot,out freshDocument,out freshUri) ||
+                !EdgeMenuControl(selected,root,document,window,out invoke) || !LayoutWindowBound(window,owner,pid)) return false;
+            observation["control_verified"]=true;Check();
+            actionPerformed=true;observation["action_performed"]=true;invoke.Invoke();observation["invoke_completed"]=true;
+            observation["stage"]="after-document";
+            if(!LayoutPage(window,owner,pid,root,document,uri,out freshRoot,out freshDocument,out freshUri)) return false;
+            observation["after_verified"]=true;observation["safely_verified"]=true;observation["stage"]="complete";return true;
+        } catch { observation["unavailable"]=true;return false; }
+        finally { if(owner!=IntPtr.Zero) Native.CloseHandle(owner); }
     }
     static partial class Native {
         [StructLayout(LayoutKind.Sequential)] public struct EdgeNavigationMonitorInfo { public int Size;public Rect Monitor,Work;public uint Flags; }

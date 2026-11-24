@@ -172,6 +172,7 @@ public static class BrowserExtensionPredicates {
     }
     public static bool Browser(string value) { return value=="chrome" || value=="edge"; }
     public static bool LayoutAfterFailure(string kind,string failure) { return kind=="edge" && failure=="developer-toggle-unavailable"; }
+    public static bool MenuAfterFailure(string kind,string failure) { return kind=="edge" && failure=="developer-toggle-unavailable"; }
     public static bool ToggleCandidate(string actualName,string expectedName,bool visible,bool enabled,bool supportsToggle) {
         return actualName==expectedName && visible && enabled && supportsToggle;
     }
@@ -242,6 +243,8 @@ public static class BrowserExtensionPredicates {
     public static bool CommittedPage(bool entered,bool document,bool bound,int uriForm) { return entered && document && bound && (uriForm==1 || uriForm==2); }
     public static bool Scope(bool loaded,bool drained,bool fullDelivery) { return loaded && drained && !fullDelivery; }
     public static void SelfTest() {
+        if(!MenuAfterFailure("edge","developer-toggle-unavailable") || MenuAfterFailure("chrome","developer-toggle-unavailable") ||
+            MenuAfterFailure("edge","stage-deadline") || MenuAfterFailure("edge","uia-element-not-owned")) throw new Exception("menu-only-after-original-discovery-failure");
         if(!LayoutAfterFailure("edge","developer-toggle-unavailable") || LayoutAfterFailure("chrome","developer-toggle-unavailable") ||
             LayoutAfterFailure("edge","stage-deadline") || LayoutAfterFailure("edge","uia-element-not-owned")) throw new Exception("layout-only-after-original-discovery-failure");
         foreach(string policy in new[]{"ExtensionDeveloperModeSettings","DeveloperToolsAvailability"}) {
@@ -464,15 +467,15 @@ public static partial class BrowserExtensionFixtureProgram {
             try { Wait(()=> { developer=NamedToggle(window,"Developer mode"); return developer!=null; },20,"developer-toggle-unavailable"); }
             catch(ExtensionStageFailure initial) {
                 // Retain the initial discovery observation before the single
-                // approved owned-window layout experiment. No new deadline.
+                // observed-menu action. No new deadline or resize attempt.
                 try { ObserveDeveloper(window,kind,"developer_observation"); }
                 catch { Report["developer_observation_unavailable"]=true; }
-                if(!BrowserExtensionPredicates.LayoutAfterFailure(kind,initial.Code)) throw;
+                if(!BrowserExtensionPredicates.MenuAfterFailure(kind,initial.Code)) throw;
                 Report["initial_developer_failure"]=initial.Code;
-                bool performed;bool safe=TryEdgeDeveloperLayout(window,kind,out performed);
-                if(!safe) Fail(performed ? "edge-layout-unverified" : "edge-layout-unavailable");
+                bool performed;bool safe=TryOpenEdgeExtensionsMenu(window,out performed);
+                if(!safe) Fail(performed ? "edge-menu-unverified" : "edge-menu-unavailable");
                 // Exactly one repeat of the ORIGINAL selection contract, under
-                // the unchanged scenario deadline. No menu/policy workaround.
+                // the unchanged scenario deadline. No policy/Toggle bypass.
                 Wait(()=> { developer=NamedToggle(window,"Developer mode");return developer!=null; },20,"developer-toggle-unavailable");
             }
             Report["developer_toggle_found"]=true;
@@ -508,11 +511,21 @@ public static partial class BrowserExtensionFixtureProgram {
             Invoke(select);
             Wait(()=>!Native.IsWindow(picker) || !Native.IsWindowVisible(picker),10,"folder-picker-did-not-close");
             Report["folder_picker_closed"]=true;
-            stage="loaded-extension-details";
-            string id=ProveLoadedExtensionDetails(window,kind,extension,name,extensionVersion);
-            Report["extension_loaded"]=true;Report["extension_id"]=id;Report["extension_version"]=extensionVersion;
-            loaded=true;
-            if(delivery) { ContinueDelivery(window,kind,id);delivered=true; }
+            string id;
+            if(delivery) {
+                // This list ID is ONLY an unaccepted input to real Connect.
+                // Wrong origins must fail the unchanged extension/native route.
+                stage="delivery-candidate";id=null;
+                Wait(()=> { id=CandidateExtensionId(window,kind);return id!=null; },10,"loaded-extension-id-unavailable");
+                Report["bundled_extension_version"]=extensionVersion;
+                ContinueDelivery(window,kind,id);delivered=true;
+                loaded=true;
+            } else {
+                stage="loaded-extension-details";
+                id=ProveLoadedExtensionDetails(window,kind,extension,name,extensionVersion);
+                Report["extension_loaded"]=true;Report["extension_id"]=id;Report["extension_version"]=extensionVersion;
+                loaded=true;
+            }
             stage="browser-cleanup";
         } catch (ExtensionStageFailure error) {
             Report["failure"]=error.Code;

@@ -149,14 +149,14 @@ if (!$hasIdentity -and $Configuration -ceq 'debug' -and $env:GITHUB_ACTIONS -ceq
 . (Join-Path $PSScriptRoot 'windows-extension-smoke.ps1')
 . (Join-Path $PSScriptRoot 'windows-extension-delivery.ps1')
 if (Test-PickleExtensionSetupGate $Configuration $hasIdentity $PSEdition ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) $env:GITHUB_ACTIONS $env:RUNNER_ENVIRONMENT) {
-  # Keep the isolated load-only component, then attempt real article delivery
-  # separately for each successful browser. Each mode owns its profile/job.
+  # Keep strict load-only evidence, then attempt authenticated article delivery
+  # after either clean outcome. Each mode owns its own profile/job.
   & (Join-Path $PSScriptRoot 'test-windows-extension-smoke.ps1')
   & (Join-Path $PSScriptRoot 'test-windows-extension-delivery.ps1')
   $extensionFailures=[Collections.Generic.List[string]]::new()
   foreach ($browser in @('chrome','edge')) {
     if (!(Invoke-PickleExtensionCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-native-smoke.json"))) { $extensionFailures.Add($browser) }
-    elseif (!(Invoke-PickleExtensionDeliveryCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-delivery-native-smoke.json"))) { $extensionFailures.Add("$browser-delivery") }
+    if (!(Invoke-PickleExtensionDeliveryCore $testDirectory $browser (Join-Path $PWD "artifacts/windows-extension-$browser-delivery-native-smoke.json"))) { $extensionFailures.Add("$browser-delivery") }
   }
   # Each browser delegate has certified cleanup before returning a safe failure.
   # Preserve those independent reports before exercising the OS clipboard.

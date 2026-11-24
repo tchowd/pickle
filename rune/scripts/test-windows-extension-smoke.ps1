@@ -64,8 +64,8 @@ foreach ($scenario in @('both-pass','chrome-failed-cleanly','chrome-cleanup-unkn
     $failed=$false;try { & $ActualPair } catch { $failed=$true }
     $expected=if ($Scenario -ceq 'chrome-cleanup-unknown') { 'chrome' } else { 'chrome,edge' }
     if (($observed -join ',') -cne $expected -or $failed -ne ($Scenario -cne 'both-pass')) { throw 'The actual package did not collect safe failures, stop on uncertain cleanup, or fail after a rejected setup.' }
-    $expectedDelivery=if ($Scenario -ceq 'chrome-cleanup-unknown') { '' } elseif ($Scenario -ceq 'chrome-failed-cleanly') { 'edge' } else { 'chrome,edge' }
-    if (($deliveries -join ',') -cne $expectedDelivery) { throw 'Delivery must follow each successful component independently, and stop on unsafe cleanup.' }
+    $expectedDelivery=if ($Scenario -ceq 'chrome-cleanup-unknown') { '' } else { 'chrome,edge' }
+    if (($deliveries -join ',') -cne $expectedDelivery) { throw 'Delivery must follow each clean component outcome independently, and stop on unsafe cleanup.' }
     $expectedCopy=if ($Scenario -ceq 'chrome-cleanup-unknown') { 0 } else { 1 }
     $expectedReport=if ($copyFails) { 0 } else { $expectedCopy }
     if ($copy.called -ne $expectedCopy -or $copy.read -ne $expectedReport -or $copy.validated -ne $expectedReport) { throw 'Safe browser failures must allow Copy before aggregate refusal; unsafe cleanup must stop before Copy.' }
@@ -82,6 +82,10 @@ foreach ($key in @('owned_browser_foreground_verified','address_focus_ancestry_v
 $valid.navigation_shortcut_events=4;$valid.navigation_enter_events=2;$valid.navigation_confirm_shortcut_events=4;$valid.navigation_escape_events=2
 $report=ConvertTo-PickleExtensionStageReport ([pscustomobject]$valid)
 Assert-PickleExtensionStageReport $report 'chrome'
+$unacceptedDeliveryProof=$valid | ConvertTo-Json | ConvertFrom-Json
+$unacceptedDeliveryProof.extension_identity_proof='authenticated-delivery'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $unacceptedDeliveryProof }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $unacceptedDeliveryProof 'chrome' }
 foreach ($pair in @(@('failure','native-operation-failed'),@('error_kind','com'),@('error_hresult',0))) {
   $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1]
   $null=ConvertTo-PickleExtensionStageReport $bad
@@ -94,6 +98,34 @@ $recovered=$valid | ConvertTo-Json | ConvertFrom-Json;$recovered.browser='edge'
 $recovered | Add-Member -NotePropertyName initial_developer_failure -NotePropertyValue 'developer-toggle-unavailable'
 $recovered | Add-Member -NotePropertyName edge_layout_observation -NotePropertyValue $layout
 Assert-PickleExtensionStageReport (ConvertTo-PickleExtensionStageReport $recovered) 'edge'
+$menu=[pscustomobject][ordered]@{stage='complete';action_performed=$true;safely_verified=$true;before_verified=$true;discovery_complete=$true;candidate_count=1;control_verified=$true;invoke_completed=$true;after_verified=$true;unavailable=$false}
+$menuRecovered=$recovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$menuRecovered.PSObject.Properties.Remove('edge_layout_observation');$menuRecovered | Add-Member edge_menu_observation $menu
+Assert-PickleExtensionStageReport (ConvertTo-PickleExtensionStageReport $menuRecovered) 'edge'
+foreach ($change in @(@('stage','after-document'),@('action_performed',$false),@('safely_verified',$false),@('before_verified',$false),@('discovery_complete',$false),@('candidate_count',2),@('candidate_count','1'),@('control_verified',$false),@('invoke_completed',$false),@('after_verified',$false),@('unavailable',$true))) {
+  $bad=$menu | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionMenu $bad }
+}
+foreach ($key in @($menu.PSObject.Properties.Name)) {
+  $bad=$menu | ConvertTo-Json | ConvertFrom-Json;$bad.PSObject.Properties.Remove($key)
+  Assert-ExtensionRefused { ConvertTo-PickleExtensionMenu $bad }
+}
+$bad=$menu | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member raw_name 'not-retained'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionMenu $bad }
+# A deadline can expire after proving the control but before Invoke admission.
+$partialMenu=$menu | ConvertTo-Json | ConvertFrom-Json
+$partialMenu.stage='before-invoke';$partialMenu.action_performed=$false;$partialMenu.safely_verified=$false;$partialMenu.invoke_completed=$false;$partialMenu.after_verified=$false;$partialMenu.unavailable=$true
+if (!(ConvertTo-PickleExtensionMenu $partialMenu).control_verified) { throw 'Pre-Invoke control proof was erased.' }
+$partialMenu.action_performed=$true
+$partialReceipt=$menuRecovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$partialReceipt.passed=$false;$partialReceipt.edge_menu_observation=$partialMenu
+$partialReceipt | Add-Member failure 'edge-menu-unverified'
+if (!(ConvertTo-PickleExtensionStageReport $partialReceipt).edge_menu_observation.action_performed) { throw 'Unsafe attempted menu action lost its partial facts.' }
+Assert-ExtensionRefused { Assert-PickleExtensionStageReport $partialReceipt 'edge' }
+$bad=$menuRecovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad | Add-Member edge_layout_observation $layout
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
+$bad=$menuRecovered | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.browser='chrome'
+Assert-ExtensionRefused { ConvertTo-PickleExtensionStageReport $bad }
 foreach ($change in @(@('requested_outer_width',1024),@('after_outer_height',799),@('after_client_width',1281),@('action_performed',$false),@('safely_verified',$false),@('before_verified',$false),@('set_window_pos_succeeded',$false),@('after_verified',$false),@('unavailable',$true),@('stage','after-document'),@('before_client_width',0),@('after_outer_width','1280'))) {
   $bad=$layout | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
   Assert-ExtensionRefused { ConvertTo-PickleExtensionLayout $bad }

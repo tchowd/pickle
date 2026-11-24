@@ -8,17 +8,28 @@ foreach ($name in @('windows-extension-delivery.ps1','invoke-windows-extension-d
 }
 $trueFlags=@('passed','full_delivery_verified','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_card_identity_verified','extension_loaded','browser_job_drained','app_launched','initial_compose_ready','native_host_registered','owned_registration_verified','owned_article_verified','context_preview_revealed','accepted_article_verified','native_host_route_verified','authenticated_bridge_verified','ordinary_disconnect_verified','ordinary_quit_verified')
 $falseFlags=@('devtools_or_cdp_used','extension_code_modified','native_host_process_start_observed','inference_action_invoked','bridge_token_read','native_window_pixels_verified','selected_text_capture_verified','visible_url_verified')
-$valid=[ordered]@{schema=1;test='windows-stable-extension-reference-delivery';scope='extension-native-reference-delivery';browser='chrome';stage='browser-cleanup';application_pid=42;delivery_shortcut_events=6;extension_id='abcdefghijklmnopabcdefghijklmnop';extension_version='0.1.0';navigation_shortcut_events=4;navigation_enter_events=2;navigation_confirm_shortcut_events=4;navigation_escape_events=2;extension_identity_proof='detail-view';extension_card_identity_verified=$false;extension_details_identity_verified=$true;owned_extension_folder_verified=$true}
-# Current producer proves details, never labels the absent list card proved.
-$trueFlags=@($trueFlags | Where-Object { $_ -cne 'extension_card_identity_verified' })+@('extension_details_identity_verified','owned_extension_folder_verified')
-$falseFlags+=@('extension_card_identity_verified')
-$valid.detail_identity_stage='verified'
+$valid=[ordered]@{schema=1;test='windows-stable-extension-reference-delivery';scope='extension-native-reference-delivery';browser='chrome';stage='browser-cleanup';application_pid=42;delivery_shortcut_events=6;extension_id='abcdefghijklmnopabcdefghijklmnop';bundled_extension_version='0.1.0';navigation_shortcut_events=4;navigation_enter_events=2;navigation_confirm_shortcut_events=4;navigation_escape_events=2;extension_identity_proof='authenticated-delivery'}
+# Actual accepted authenticated text is the proof, not candidate/list details.
+$trueFlags=@($trueFlags | Where-Object { $_ -cne 'extension_card_identity_verified' })
+$falseFlags+=@('extension_card_identity_verified','extension_details_identity_verified','owned_extension_folder_verified','extension_name_found','extension_version_found')
 foreach ($key in $trueFlags) { $valid[$key]=$true };foreach ($key in $falseFlags) { $valid[$key]=$false }
 $valid=$valid | ConvertTo-Json -Depth 5 | ConvertFrom-Json
 Assert-PickleExtensionDeliveryDriver $valid 'chrome'
 Assert-DeliveryRefused { ConvertTo-PickleExtensionStageReport $valid }
 Assert-DeliveryRefused { Assert-PickleExtensionStageReport $valid 'chrome' }
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $valid 'edge' }
+$partial=$valid | ConvertTo-Json | ConvertFrom-Json
+$partial.passed=$false;$partial.full_delivery_verified=$false;$partial.stage='delivery-disconnect'
+$partial | Add-Member failure 'delivery-disconnect-unavailable'
+$retained=ConvertTo-PickleExtensionDeliveryDriver $partial
+if (!$retained.accepted_article_verified -or !$retained.authenticated_bridge_verified -or !$retained.extension_loaded -or $retained.extension_identity_proof -cne 'authenticated-delivery') { throw 'A later cleanup failure erased the already accepted authenticated route.' }
+Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $retained 'chrome' }
+foreach ($proof in @('card','detail-view','candidate','')) {
+  $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad.extension_identity_proof=$proof
+  Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $bad 'chrome' }
+}
+$bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member detail_identity_stage 'verified'
+Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $bad 'chrome' }
 foreach ($key in $trueFlags) {
   $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad.$key=$false
   Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $bad 'chrome' }
@@ -27,11 +38,11 @@ foreach ($key in $falseFlags) {
   $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad.$key=$true
   Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $bad 'chrome' }
 }
-foreach ($change in @(@('schema','1'),@('passed','true'),@('delivery_shortcut_events',5),@('delivery_shortcut_events','6'),@('application_pid',0),@('navigation_enter_events',1),@('extension_id','not-a-public-id'),@('extension_version','0.1.1'),@('scope','bundled-extension-load-only'))) {
+foreach ($change in @(@('schema','1'),@('passed','true'),@('delivery_shortcut_events',5),@('delivery_shortcut_events','6'),@('application_pid',0),@('navigation_enter_events',1),@('extension_id','not-a-public-id'),@('bundled_extension_version','0.1.1'),@('scope','bundled-extension-load-only'))) {
   $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad.($change[0])=$change[1]
   Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $bad 'chrome' }
 }
-foreach ($key in @('raw_source','native_host_executed','delivery_cleanup_unavailable','error_kind','error_hresult','failure')) {
+foreach ($key in @('extension_version','raw_source','native_host_executed','delivery_cleanup_unavailable','error_kind','error_hresult','failure')) {
   $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad | Add-Member -NotePropertyName $key -NotePropertyValue $false
   Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $bad 'chrome' }
 }

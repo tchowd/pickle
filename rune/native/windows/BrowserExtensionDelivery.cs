@@ -61,6 +61,9 @@ public static partial class BrowserExtensionFixtureProgram {
         Report.Remove("native_host_executed");Report["native_host_process_start_observed"]=false;Report["native_host_route_verified"]=false;
         Report["app_launched"]=false;Report["inference_action_invoked"]=false;Report["bridge_token_read"]=false;
         Report["native_window_pixels_verified"]=false;Report["selected_text_capture_verified"]=false;Report["visible_url_verified"]=false;
+        Report["extension_loaded"]=false;Report["extension_card_identity_verified"]=false;
+        Report["extension_details_identity_verified"]=false;Report["owned_extension_folder_verified"]=false;
+        Report["extension_name_found"]=false;Report["extension_version_found"]=false;
     }
     static void PrepareDelivery(Dictionary<string,string> options) {
         deliverySupport=DirectoryPath(options["--support"]);
@@ -102,6 +105,9 @@ public static partial class BrowserExtensionFixtureProgram {
         },10,"delivery-context-unavailable");
         if(deliveryApp.Find("answer")!=null || deliveryApp.Find("answer-draft")!=null || deliveryApp.Find("consent-continue")!=null) Fail("delivery-unexpected-reading");
         Report["accepted_article_verified"]=true;Report["native_host_route_verified"]=true;Report["authenticated_bridge_verified"]=true;
+        // Preserve accepted route facts even if later Disconnect/Quit fails.
+        // This establishes origin-bound delivery, not browser details metadata.
+        Report["extension_id"]=id;Report["extension_identity_proof"]="authenticated-delivery";Report["extension_loaded"]=true;
         // This transitive route proof does not invent an observation of the
         // short-lived native host's PID or its process-start event.
         stage="delivery-disconnect";DisconnectDelivery();
