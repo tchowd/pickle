@@ -2,6 +2,16 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'windows-extension-delivery.ps1')
 function Assert-DeliveryRefused([scriptblock]$Operation) { $refused=$false;try { & $Operation } catch { $refused=$true };if (!$refused) { throw 'Expected native-delivery safety refusal.' } }
+function New-DeliveryRegistryBaseline {
+  $rows=[Collections.Generic.List[object]]::new()
+  foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32,[Microsoft.Win32.RegistryView]::Registry64)) {
+    foreach ($leaf in Get-PickleExtensionRegistryPaths) {
+      $parts=$leaf.Split([char]92)
+      for ($length=1;$length -le $parts.Length;$length++) { $rows.Add([pscustomobject]@{View=$view;Path=($parts[0..($length-1)] -join '\');Existed=$false}) }
+    }
+  }
+  return ,$rows
+}
 foreach ($name in @('windows-extension-delivery.ps1','invoke-windows-extension-delivery.ps1','test-windows-extension-delivery.ps1','windows-extension-smoke.ps1','test-windows-package.ps1')) {
   $tokens=$null;$errors=$null;$null=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $name),[ref]$tokens,[ref]$errors)
   if ($errors.Count) { throw 'A delivery script did not parse.' }
@@ -121,9 +131,72 @@ Assert-DeliveryRefused { Assert-PickleExtensionDeliveryReport $beforeBrowser 'ch
 $beforeBrowser.ordinary_exit=$true;Assert-DeliveryRefused { Assert-PickleExtensionDeliveryCleanup $beforeBrowser 'chrome' }
 $bad=$outer | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.application_forced_stop=$true
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryReport $bad 'chrome' }
-foreach ($stage in @('host-absence','registry-absence','registry-baseline','private arbitrary message')) {
+foreach ($stage in @('host-absence','registry-state','registry-baseline','private arbitrary message')) {
   $bad=$outer | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.cleanup_stage=$stage
   Assert-DeliveryRefused { Assert-PickleExtensionDeliveryCleanup $bad 'chrome' }
+}
+& {
+  $mock=[pscustomobject]@{states=@{};calls=0;unreadable=$false}
+  function Get-PickleExtensionRegistryLeafState($Hive,$View,$Path) {
+    $mock.calls++;if ($mock.unreadable) { throw 'Owned registry read refused.' }
+    $key="$Hive|$View|$Path"
+    if ($mock.states.ContainsKey($key)) { return $mock.states[$key] }
+    return [pscustomobject]@{Present=$false;Values=0;Subkeys=0}
+  }
+  $baseline=New-DeliveryRegistryBaseline
+  Assert-PickleExtensionPostExitRegistryState $baseline 'chrome'
+  if ($mock.calls -ne 12) { throw 'The post-exit proof did not inspect every fixed hive, view and browser leaf.' }
+  $chrome='SOFTWARE\Google\Chrome\NativeMessagingHosts\com.pickle.reader'
+  $edge='SOFTWARE\Microsoft\Edge\NativeMessagingHosts\com.pickle.reader'
+  foreach ($browser in @('chrome','edge')) {
+    $leaf=if ($browser -ceq 'chrome') { $chrome } else { $edge };$mock.states=@{}
+    foreach ($view in @('Registry32','Registry64')) { $mock.states["CurrentUser|$view|$leaf"]=[pscustomobject]@{Present=$true;Values=0;Subkeys=0} }
+    Assert-PickleExtensionPostExitRegistryState $baseline $browser
+    # Aliased views and leaves already absent after a previous exact removal
+    # remain valid, without treating another browser or hive as owned.
+    $mock.states.Remove("CurrentUser|Registry32|$leaf")
+    Assert-PickleExtensionPostExitRegistryState $baseline $browser
+  }
+  foreach ($key in @("LocalMachine|Registry32|$chrome","CurrentUser|Registry64|$edge")) {
+    $mock.states=@{};$mock.states[$key]=[pscustomobject]@{Present=$true;Values=0;Subkeys=0}
+    Assert-DeliveryRefused { Assert-PickleExtensionPostExitRegistryState $baseline 'chrome' }
+  }
+  foreach ($state in @(
+    [pscustomobject]@{Present=$true;Values=1;Subkeys=0},[pscustomobject]@{Present=$true;Values=0;Subkeys=1},
+    [pscustomobject]@{Present='true';Values=0;Subkeys=0},[pscustomobject]@{Present=$false;Values=1;Subkeys=0},
+    [pscustomobject]@{Present=$true;Values=-1;Subkeys=0},[pscustomobject]@{Present=$true;Values=0;Subkeys=0;Unknown=$false}
+  )) {
+    $mock.states=@{};$mock.states["CurrentUser|Registry32|$chrome"]=$state
+    Assert-DeliveryRefused { Assert-PickleExtensionPostExitRegistryState $baseline 'chrome' }
+  }
+  $mock.states=@{};$mock.unreadable=$true
+  Assert-DeliveryRefused { Assert-PickleExtensionPostExitRegistryState $baseline 'chrome' }
+  $mock.unreadable=$false
+  Assert-DeliveryRefused { Assert-PickleExtensionPostExitRegistryState $null 'chrome' }
+  foreach ($mutation in @('missing','duplicate','conflicting','wrong-view','wrong-path','nonbool','unknown')) {
+    $bad=New-DeliveryRegistryBaseline;$index=0
+    for ($i=0;$i -lt $bad.Count;$i++) { if ($bad[$i].Path -ceq $chrome) { $index=$i;break } }
+    switch ($mutation) {
+      'missing' { $bad.RemoveAt($index) }
+      'duplicate' { $bad.Add($bad[$index]) }
+      'conflicting' { $bad[$index].Existed=$true }
+      'wrong-view' { $bad[$index].View=[Microsoft.Win32.RegistryView]::Default }
+      'wrong-path' { $bad[$index].Path=$edge }
+      'nonbool' { $bad[$index].Existed='false' }
+      'unknown' { $bad[$index] | Add-Member Unexpected $false }
+    }
+    Assert-DeliveryRefused { Assert-PickleExtensionPostExitRegistryState $bad 'chrome' }
+  }
+}
+# Execute the original strict preflight and final-after-baseline guard calls.
+# Empty baseline skips native writes here; the unchanged final guard must run.
+& {
+  $strict=[pscustomobject]@{calls=0}
+  function Assert-PickleExtensionRegistryAbsent { $strict.calls++;throw 'Strict key absence refused.' }
+  Assert-DeliveryRefused { Get-PickleExtensionRegistrationBaseline }
+  if ($strict.calls -ne 1) { throw 'Strict registration preflight was bypassed.' }
+  Assert-DeliveryRefused { Restore-PickleExtensionRegistrationBaseline @() }
+  if ($strict.calls -ne 2) { throw 'Strict final key absence after baseline restoration was bypassed.' }
 }
 $owned=Join-Path ([IO.Path]::GetTempPath()) ('pickle-final-host-proof-'+[guid]::NewGuid().ToString('N'))
 if ($owned.StartsWith('/var/') -and (Test-Path -LiteralPath '/private/var')) { $owned='/private'+$owned }
@@ -139,18 +212,19 @@ try {
   & {
     param($Directory,$Native)
     $calls=[pscustomobject]@{registry=0;restore=0;denyRegistry=$false}
-    function Assert-PickleExtensionRegistryAbsent { $calls.registry++;if ($calls.denyRegistry) { throw 'Owned registry proof refused.' } }
+    function Get-PickleExtensionRegistryLeafState { $calls.registry++;if ($calls.denyRegistry) { throw 'Owned registry proof refused.' };return [pscustomobject]@{Present=$false;Values=0;Subkeys=0} }
+    $baseline=New-DeliveryRegistryBaseline
     $receipt=[pscustomobject]@{cleanup_stage='not-started'}
-    Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true
-    if ($calls.registry -ne 1 -or $receipt.cleanup_stage -cne 'registry-absence') { throw 'The post-exit registry absence guard was skipped.' }
+    Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true $baseline 'chrome'
+    if ($calls.registry -ne 12 -or $receipt.cleanup_stage -cne 'registry-state') { throw 'The post-exit registry state guard was skipped.' }
     # An earlier provisional/no-match result cannot cover a late Connect write.
     [IO.File]::WriteAllText((Join-Path $Native 'late-owned-host'),'owned bytes')
-    Assert-DeliveryRefused { Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true;$calls.restore++ }
-    if ($calls.restore -ne 0 -or $calls.registry -ne 1 -or $receipt.cleanup_stage -cne 'host-absence') { throw 'Late host reappearance reached restoration.' }
+    Assert-DeliveryRefused { Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true $baseline 'chrome';$calls.restore++ }
+    if ($calls.restore -ne 0 -or $calls.registry -ne 12 -or $receipt.cleanup_stage -cne 'host-absence') { throw 'Late host reappearance reached restoration.' }
     Remove-Item -LiteralPath (Join-Path $Native 'late-owned-host')
     $calls.denyRegistry=$true
-    Assert-DeliveryRefused { Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true;$calls.restore++ }
-    if ($calls.restore -ne 0 -or $receipt.cleanup_stage -cne 'registry-absence') { throw 'Registry absence failure reached restoration.' }
+    Assert-DeliveryRefused { Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true $baseline 'chrome';$calls.restore++ }
+    if ($calls.restore -ne 0 -or $receipt.cleanup_stage -cne 'registry-state') { throw 'Registry state failure reached restoration.' }
   } $owned $native
   & {
     param($Directory)

@@ -131,11 +131,57 @@ function Assert-PickleExtensionFinalHostAbsent([string]$Support,[bool]$AppDead,[
   if (($attributes -band [IO.FileAttributes]::ReparsePoint) -or !($attributes -band [IO.FileAttributes]::Directory)) { throw 'The native-host path was unsafe; absence was not proved.' }
   foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($native)) { throw 'Native-host entries remain after application shutdown; recovery data was preserved.' }
 }
-function Assert-PickleExtensionPostExitAbsence($Report,[string]$Support,[bool]$AppDead,[bool]$LeaseIdle) {
+function Get-PickleExtensionRegistryLeafState([Microsoft.Win32.RegistryHive]$Hive,[Microsoft.Win32.RegistryView]$View,[string]$Path) {
+  if (!$IsWindows) { throw 'Native-host registry inspection requires Windows.' }
+  $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive,$View)
+  try {
+    $key=$base.OpenSubKey($Path,$false)
+    try { return [pscustomobject]@{Present=($null -ne $key);Values=$(if ($null -eq $key) { 0 } else { $key.ValueCount });Subkeys=$(if ($null -eq $key) { 0 } else { $key.SubKeyCount })} }
+    finally { if ($null -ne $key) { $key.Dispose() } }
+  } finally { $base.Dispose() }
+}
+function Assert-PickleExtensionPostExitRegistryState($Baseline,[ValidateSet('chrome','edge')][string]$Browser) {
+  # Validate the complete original snapshot shape/order before permitting any
+  # exception to key absence. Only a tested browser's newly created empty HKCU
+  # leaf may remain after RegDeleteKeyValueW removed the default value.
+  $expected=[Collections.Generic.List[object]]::new()
+  $views=@([Microsoft.Win32.RegistryView]::Registry32,[Microsoft.Win32.RegistryView]::Registry64)
+  foreach ($view in $views) {
+    foreach ($leaf in Get-PickleExtensionRegistryPaths) {
+      $parts=$leaf.Split([char]92)
+      for ($length=1;$length -le $parts.Length;$length++) { $expected.Add([pscustomobject]@{View=$view;Path=($parts[0..($length-1)] -join '\')}) }
+    }
+  }
+  $rows=@($Baseline)
+  if ($rows.Count -ne $expected.Count) { throw 'The original registration baseline was missing or incomplete.' }
+  for ($index=0;$index -lt $expected.Count;$index++) {
+    $row=$rows[$index];$keys=@($row.PSObject.Properties.Name)
+    if ($keys.Count -ne 3 -or @($keys | Where-Object { $_ -cnotin @('View','Path','Existed') }).Count -or $row.View -isnot [Microsoft.Win32.RegistryView] -or $row.View -ne $expected[$index].View -or $row.Path -isnot [string] -or $row.Path -cne $expected[$index].Path -or $row.Existed -isnot [bool]) { throw 'The original registration baseline was unknown or unreadable.' }
+  }
+  $vendor=if ($Browser -ceq 'edge') { 'Microsoft\Edge' } else { 'Google\Chrome' }
+  $allowed='SOFTWARE\'+$vendor+'\NativeMessagingHosts\com.pickle.reader'
+  foreach ($view in $views) {
+    $original=@($rows | Where-Object { $_.View -eq $view -and $_.Path -ceq $allowed })
+    if ($original.Count -ne 1 -or $original[0].Existed) { throw 'The tested native-host leaf was not explicitly absent at baseline.' }
+  }
+  foreach ($hive in @([Microsoft.Win32.RegistryHive]::CurrentUser,[Microsoft.Win32.RegistryHive]::LocalMachine)) {
+    foreach ($view in $views) {
+      foreach ($path in Get-PickleExtensionRegistryPaths) {
+        $state=Get-PickleExtensionRegistryLeafState $hive $view $path;$keys=@($state.PSObject.Properties.Name)
+        if ($keys.Count -ne 3 -or @($keys | Where-Object { $_ -cnotin @('Present','Values','Subkeys') }).Count -or $state.Present -isnot [bool]) { throw 'The post-exit registration state was unknown.' }
+        foreach ($name in @('Values','Subkeys')) { if (($state.$name -isnot [int] -and $state.$name -isnot [long]) -or $state.$name -lt 0 -or $state.$name -gt [int]::MaxValue) { throw 'The post-exit registration counts were invalid.' } }
+        if (!$state.Present) {
+          if ($state.Values -ne 0 -or $state.Subkeys -ne 0) { throw 'Missing registration state had inconsistent counts.' }
+        } elseif ($hive -ne [Microsoft.Win32.RegistryHive]::CurrentUser -or $path -cne $allowed -or $state.Values -ne 0 -or $state.Subkeys -ne 0) { throw 'Unexpected post-exit registration data was preserved; cleanup was refused.' }
+      }
+    }
+  }
+}
+function Assert-PickleExtensionPostExitAbsence($Report,[string]$Support,[bool]$AppDead,[bool]$LeaseIdle,$Baseline,[ValidateSet('chrome','edge')][string]$Browser) {
   $Report.cleanup_stage='host-absence'
   Assert-PickleExtensionFinalHostAbsent $Support $AppDead $LeaseIdle
-  $Report.cleanup_stage='registry-absence'
-  Assert-PickleExtensionRegistryAbsent
+  $Report.cleanup_stage='registry-state'
+  Assert-PickleExtensionPostExitRegistryState $Baseline $Browser
 }
 function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[ValidateSet('chrome','edge')][string]$Browser,[string]$EvidencePath) {
   if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Native reference delivery runs only on hosted Windows CI.' }
@@ -204,7 +250,7 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
       Assert-PickleReadingOwnedArchives $snapshot;$report.archives_unchanged=$true
       # Real Disconnect must have removed every host file/default value. Only
       # the newly created EMPTY registry keys are eligible for direct cleanup.
-      Assert-PickleExtensionPostExitAbsence $report $support $app.HasExited $report.lease_released
+      Assert-PickleExtensionPostExitAbsence $report $support $app.HasExited $report.lease_released $registry $Browser
       $report.cleanup_stage='registry-baseline'
       Restore-PickleExtensionRegistrationBaseline $registry;$report.registry_restored=$true
       $report.cleanup_stage='profile-restoration'
