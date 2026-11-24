@@ -5,6 +5,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'windows-sdk.ps1')
+. (Join-Path $PSScriptRoot 'windows-nsis.ps1')
+if ($Installer) {
+  $makensis = Get-PickleNsisCompiler
+  if (!$makensis) { throw 'NSIS is required to produce the installer. Install NSIS and retry.' }
+}
 Set-Location (Join-Path $PSScriptRoot '..')
 $buildTarget = 'x86_64-pc-windows-msvc'
 # Explicit --target is essential even on an x64 host: Cargo must keep host proc
@@ -74,9 +79,6 @@ if ($env:PICKLE_SIGN_CERT_THUMBPRINT) {
 }
 Compress-Archive -Path "$stage/*" -DestinationPath (Join-Path $PWD 'artifacts/PickleRune-windows.zip') -Force
 if ($Installer) {
-  $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
-  if (!$makensis) { $makensis = "${env:ProgramFiles(x86)}/NSIS/makensis.exe" }
-  if (!(Test-Path $makensis)) { throw 'NSIS is required to produce the installer. Install NSIS and retry.' }
   $metadata = (& cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json)
   if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the application version.' }
   $appVersion = ($metadata.packages | Where-Object { $_.name -eq 'pickle-app' }).version

@@ -90,7 +90,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install nsis --yes --no-progress
+          ./scripts/test-windows-nsis.ps1
+          . ./scripts/windows-nsis.ps1
+          Install-PickleNsis
           ./scripts/build-windows.ps1 -Configuration debug -Installer
           ./scripts/test-windows-package.ps1
           $stage = (Get-ChildItem artifacts/windows-* -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
@@ -150,7 +152,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install nsis --yes --no-progress
+          ./scripts/test-windows-nsis.ps1
+          . ./scripts/windows-nsis.ps1
+          Install-PickleNsis
           ./scripts/build-windows.ps1 -Configuration release -Installer
           ./scripts/test-windows-package.ps1 -Configuration release
           ./scripts/test-signed-identity-ci.ps1 -Configuration release
