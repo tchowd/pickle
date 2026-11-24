@@ -5,7 +5,7 @@ function ConvertTo-PickleExtensionDeliveryDriver($Report) {
   $clean=ConvertTo-PickleExtensionDriverScalars $Report $true
   if (($clean.schema -isnot [int] -and $clean.schema -isnot [long]) -or $clean.schema -ne 1 -or $clean.test -cne 'windows-stable-extension-reference-delivery' -or $clean.scope -cne 'extension-native-reference-delivery' -or $clean.browser -cnotin @('chrome','edge') -or $clean.passed -isnot [bool]) { throw 'The delivery driver had the wrong closed scope.' }
   if (@($clean.PSObject.Properties.Name) -ccontains 'native_host_executed') { throw 'Delivery cannot invent direct native-host process observation.' }
-  foreach ($key in @('browser_launch_attempted','browser_not_started_cleanup_verified','browser_job_drained')) {
+  foreach ($key in @('browser_launch_attempted','browser_not_started_cleanup_verified','browser_job_drained','connect_attempted','disconnect_attempted','connect_notice_observed','disconnect_notice_observed','disconnect_no_match_notice_observed')) {
     if ($clean.$key -isnot [bool]) { throw 'Delivery omitted its actual browser lifetime state.' }
   }
   foreach ($key in @('application_visible_root_windows','application_eligible_reader_windows')) {
@@ -18,13 +18,14 @@ function ConvertTo-PickleExtensionDeliveryDriver($Report) {
 function Assert-PickleExtensionBrowserCleanup($Report) {
   $r=ConvertTo-PickleExtensionDeliveryDriver $Report
   if ($r.browser_not_started_cleanup_verified) {
-    if ($r.browser_launch_attempted -or $r.browser_job_drained -or $r.passed -or $r.full_delivery_verified -isnot [bool] -or $r.full_delivery_verified -or $r.stage -cnotin @('arguments','delivery-app-ready') -or $r.atomic_job_membership_verified -eq $true -or $r.owned_window_verified -eq $true -or $r.native_host_registered -eq $true) { throw 'A browser constructor attempt or accepted delivery cannot claim not-started cleanup.' }
+    if ($r.browser_launch_attempted -or $r.browser_job_drained -or $r.connect_attempted -or $r.disconnect_attempted -or $r.passed -or $r.full_delivery_verified -isnot [bool] -or $r.full_delivery_verified -or $r.stage -cnotin @('arguments','delivery-app-ready') -or $r.atomic_job_membership_verified -eq $true -or $r.owned_window_verified -eq $true -or $r.native_host_registered -eq $true) { throw 'A browser constructor attempt or accepted delivery cannot claim not-started cleanup.' }
   } elseif (!$r.browser_launch_attempted -or !$r.browser_job_drained) { throw 'The attempted browser job did not prove complete termination.' }
 }
 function Assert-PickleExtensionDeliveryDriver($Report,[string]$Browser) {
   $r=ConvertTo-PickleExtensionDeliveryDriver $Report
   if ($r.browser -cne $Browser) { throw 'The delivery browser identity changed.' }
   if (!$r.browser_launch_attempted -or $r.browser_not_started_cleanup_verified) { throw 'Actual delivery requires a launched browser and real job drain.' }
+  if (!$r.connect_attempted -or !$r.disconnect_attempted) { throw 'Actual delivery requires the ordinary Connect and Disconnect actions.' }
   foreach ($key in @('passed','full_delivery_verified','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_loaded','browser_job_drained','app_launched','initial_compose_ready','native_host_registered','owned_registration_verified','owned_article_verified','context_preview_revealed','accepted_article_verified','native_host_route_verified','authenticated_bridge_verified','ordinary_disconnect_verified','ordinary_quit_verified')) {
     if ($r.$key -isnot [bool] -or !$r.$key) { throw 'The actual extension delivery chain did not complete.' }
   }
@@ -99,6 +100,7 @@ function Assert-PickleExtensionDeliveryCleanup($Report,[string]$Browser) {
   Assert-PickleExtensionBrowserCleanup $driver
   foreach ($key in @('owned_processes_stopped','profile_restored','registry_restored','archives_unchanged','bundled_extension_unchanged','lease_released','bridge_descriptor_removed')) { if ($Report.$key -isnot [bool] -or !$Report.$key) { throw 'The delivery owner did not prove complete cleanup.' } }
   if ($Report.application_forced_stop -isnot [bool] -or ($Report.application_forced_stop -and ($Report.ordinary_exit -eq $true -or $Report.passed))) { throw 'Forced application cleanup cannot attest ordinary successful exit.' }
+  if ($Report.cleanup_stage -isnot [string] -or $Report.cleanup_stage -cne 'complete') { throw 'The final host/registry/profile cleanup sequence did not complete.' }
   if (($Report.application_pid -isnot [int] -and $Report.application_pid -isnot [long]) -or $Report.application_pid -le 0 -or $driver.application_pid -ne $Report.application_pid) { throw 'The driver did not retain the owned application identity.' }
   if ($Report.inference -eq $null -or @($Report.inference.PSObject.Properties).Count -ne 4 -or $Report.inference.rejected -isnot [bool] -or $Report.inference.rejected) { throw 'The delivery workflow did not preserve zero inference.' }
   foreach ($key in @('total_requests','show_count','chat_count')) { if (($Report.inference.$key -isnot [int] -and $Report.inference.$key -isnot [long]) -or $Report.inference.$key -lt 0 -or $Report.inference.$key -gt 16) { throw 'A delivery request counter was invalid.' } }
@@ -109,6 +111,31 @@ function Assert-PickleExtensionDeliveryReport($Report,[string]$Browser) {
   Assert-PickleExtensionDeliveryCleanup $Report $Browser
   if (!$Report.passed -or $Report.full_delivery_verified -isnot [bool] -or !$Report.full_delivery_verified -or $Report.ordinary_exit -isnot [bool] -or !$Report.ordinary_exit) { throw 'Real native delivery was not verified.' }
   Assert-PickleExtensionDeliveryDriver $Report.driver $Browser
+}
+function Get-PickleExtensionStrictAttributes([string]$Path) {
+  try { return [IO.File]::GetAttributes($Path) }
+  catch {
+    $error=$_.Exception
+    for ($depth=0;$error -and $depth -lt 8;$depth++) {
+      if ($error -is [IO.FileNotFoundException] -or $error -is [IO.DirectoryNotFoundException]) { return $null }
+      $error=$error.InnerException
+    }
+    throw 'The owned native-host path was unreadable; absence was not proved.'
+  }
+}
+function Assert-PickleExtensionFinalHostAbsent([string]$Support,[bool]$AppDead,[bool]$LeaseIdle) {
+  if (!$AppDead -or !$LeaseIdle) { throw 'Final native-host absence requires the dead owned application and idle lease.' }
+  $root=Assert-PickleReadingDirectory $Support
+  $native=Join-Path $root 'NativeHost';$attributes=Get-PickleExtensionStrictAttributes $native
+  if ($null -eq $attributes) { return }
+  if (($attributes -band [IO.FileAttributes]::ReparsePoint) -or !($attributes -band [IO.FileAttributes]::Directory)) { throw 'The native-host path was unsafe; absence was not proved.' }
+  foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($native)) { throw 'Native-host entries remain after application shutdown; recovery data was preserved.' }
+}
+function Assert-PickleExtensionPostExitAbsence($Report,[string]$Support,[bool]$AppDead,[bool]$LeaseIdle) {
+  $Report.cleanup_stage='host-absence'
+  Assert-PickleExtensionFinalHostAbsent $Support $AppDead $LeaseIdle
+  $Report.cleanup_stage='registry-absence'
+  Assert-PickleExtensionRegistryAbsent
 }
 function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[ValidateSet('chrome','edge')][string]$Browser,[string]$EvidencePath) {
   if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Native reference delivery runs only on hosted Windows CI.' }
@@ -121,7 +148,7 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
   $work=Join-Path ([IO.Path]::GetTempPath()) ('pickle-extension-delivery-'+[guid]::NewGuid().ToString('N'))
   $null=Assert-PickleReadingDirectory $work;New-Item -ItemType Directory -Path $work | Out-Null
   $profile=Join-Path $work 'browser-profile';New-Item -ItemType Directory -Path $profile | Out-Null
-  $report=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser=$Browser;passed=$false;full_delivery_verified=$false;driver=$null;application_pid=$null;ordinary_exit=$false;application_forced_stop=$false;inference=$null;proxy=$null;owned_processes_stopped=$false;profile_restored=$false;registry_restored=$false;archives_unchanged=$false;bundled_extension_unchanged=$false;lease_released=$false;bridge_descriptor_removed=$false;recovery_directory=$work}
+  $report=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser=$Browser;passed=$false;full_delivery_verified=$false;driver=$null;application_pid=$null;ordinary_exit=$false;application_forced_stop=$false;inference=$null;proxy=$null;owned_processes_stopped=$false;profile_restored=$false;registry_restored=$false;archives_unchanged=$false;bundled_extension_unchanged=$false;lease_released=$false;bridge_descriptor_removed=$false;cleanup_stage='not-started';recovery_directory=$work}
   $driver=$null;$app=$null;$proxy=$null;$observer=$null;$snapshot=$null;$failed=$false;$stage='prepare'
   try {
     [IO.File]::WriteAllText($EvidencePath,($report | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
@@ -150,6 +177,7 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
   } catch { $failed=$true;$report.failure_stage=$stage;$report.failure='The controlled native reference delivery did not complete.' }
   finally {
     try {
+      $report.cleanup_stage='owned-processes'
       if ($null -ne $driver -and !$driver.HasExited) { $failed=$true;$driver.Kill();if (!$driver.WaitForExit(10000)) { throw 'The owned delivery driver did not stop.' } }
       if ($null -ne $app -and !$app.HasExited) { $failed=$true;$report.application_forced_stop=$true;$app.Kill();if (!$app.WaitForExit(10000)) { throw 'The owned delivery app did not stop.' } }
       foreach ($pair in @(@($proxy,'proxy-stop'),@($observer,'observer-stop'))) {
@@ -160,6 +188,7 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
       $report.owned_processes_stopped=($null -ne $driver -and $driver.HasExited -and $browserCleanup -and $null -ne $app -and $app.HasExited -and $null -ne $proxy -and $proxy.HasExited -and $null -ne $observer -and $observer.HasExited)
       if (!$report.owned_processes_stopped) { throw 'Complete owned process cleanup was not established.' }
       $report.ordinary_exit=($app.ExitCode -eq 0 -and $report.driver.ordinary_quit_verified -eq $true)
+      $report.cleanup_stage='observer-state'
       if ($proxy.ExitCode -ne 0 -or $observer.ExitCode -ne 0) { throw 'An owned delivery observer exited unsuccessfully.' }
       $observerState=Read-PickleReadingJson (Join-Path $work 'observer-state.json')
       $counters=[ordered]@{}
@@ -167,17 +196,24 @@ function Invoke-PickleExtensionDeliveryStage([string]$PackageDirectory,[Validate
       if ($counters.Count -eq 3) { $report.observer_counts=[pscustomobject]$counters }
       $report.inference=ConvertTo-PickleExtensionZeroInference $observerState
       $report.proxy=ConvertTo-PickleExtensionProxyState (Read-PickleReadingJson (Join-Path $work 'proxy-state.json'))
+      $report.cleanup_stage='lease'
       $report.lease_released=(Invoke-PickleReadingLease $application) -eq 0
       $report.bridge_descriptor_removed=!(Test-Path -LiteralPath (Join-Path $support 'BrowserBridge/connection.json'))
       if (!$report.lease_released -or !$report.bridge_descriptor_removed) { throw 'The application lease or bridge was still live.' }
+      $report.cleanup_stage='archives'
       Assert-PickleReadingOwnedArchives $snapshot;$report.archives_unchanged=$true
       # Real Disconnect must have removed every host file/default value. Only
       # the newly created EMPTY registry keys are eligible for direct cleanup.
-      Assert-PickleExtensionHostFilesAbsent $support
+      Assert-PickleExtensionPostExitAbsence $report $support $app.HasExited $report.lease_released
+      $report.cleanup_stage='registry-baseline'
       Restore-PickleExtensionRegistrationBaseline $registry;$report.registry_restored=$true
+      $report.cleanup_stage='profile-restoration'
       Restore-PickleReadingProfile $snapshot { $app.HasExited -and (Invoke-PickleReadingLease $application) -eq 0 };$report.profile_restored=$true
+      $report.cleanup_stage='bundle'
       Assert-PickleExtensionFingerprint $bundle.Inventory (Get-PickleExtensionFingerprint $bundle.Directory);$report.bundled_extension_unchanged=$true
+      $report.cleanup_stage='profile-directory'
       Remove-Item -LiteralPath $profile -Recurse -Force
+      $report.cleanup_stage='complete'
       if (!$failed) { Assert-PickleExtensionDeliveryDriver $report.driver $Browser;$report.full_delivery_verified=$true;$report.passed=$true }
     } catch { $failed=$true;$report.passed=$false;$report.full_delivery_verified=$false;$report.cleanup_failure='Owned delivery cleanup or baseline verification did not complete.' }
     finally {

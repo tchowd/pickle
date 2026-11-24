@@ -6,15 +6,27 @@ foreach ($name in @('windows-extension-delivery.ps1','invoke-windows-extension-d
   $tokens=$null;$errors=$null;$null=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $name),[ref]$tokens,[ref]$errors)
   if ($errors.Count) { throw 'A delivery script did not parse.' }
 }
-$trueFlags=@('passed','full_delivery_verified','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_card_identity_verified','extension_loaded','browser_job_drained','browser_launch_attempted','app_launched','initial_compose_ready','native_host_registered','owned_registration_verified','owned_article_verified','context_preview_revealed','accepted_article_verified','native_host_route_verified','authenticated_bridge_verified','ordinary_disconnect_verified','ordinary_quit_verified')
+$trueFlags=@('passed','full_delivery_verified','atomic_job_membership_verified','owned_window_verified','owned_browser_foreground_verified','address_focus_ancestry_verified','address_focus_known_name','address_focus_is_edit','address_focus_value_supported','navigation_value_verified','extensions_document_verified','committed_internal_uri_verified','developer_mode_enabled','load_unpacked_invoked','folder_picker_owned','folder_path_value_verified','folder_picker_closed','extension_card_identity_verified','extension_loaded','browser_job_drained','browser_launch_attempted','app_launched','initial_compose_ready','native_host_registered','owned_registration_verified','owned_article_verified','context_preview_revealed','accepted_article_verified','native_host_route_verified','authenticated_bridge_verified','ordinary_disconnect_verified','ordinary_quit_verified','connect_attempted','disconnect_attempted')
 $falseFlags=@('devtools_or_cdp_used','extension_code_modified','native_host_process_start_observed','inference_action_invoked','bridge_token_read','native_window_pixels_verified','selected_text_capture_verified','visible_url_verified','browser_not_started_cleanup_verified')
 $valid=[ordered]@{schema=1;test='windows-stable-extension-reference-delivery';scope='extension-native-reference-delivery';browser='chrome';stage='browser-cleanup';application_pid=42;delivery_shortcut_events=6;extension_id='abcdefghijklmnopabcdefghijklmnop';bundled_extension_version='0.1.0';navigation_shortcut_events=4;navigation_enter_events=2;navigation_confirm_shortcut_events=4;navigation_escape_events=2;extension_identity_proof='authenticated-delivery'}
 # Actual accepted authenticated text is the proof, not candidate/list details.
 $trueFlags=@($trueFlags | Where-Object { $_ -cne 'extension_card_identity_verified' })
 $falseFlags+=@('extension_card_identity_verified','extension_details_identity_verified','owned_extension_folder_verified','extension_name_found','extension_version_found')
 foreach ($key in $trueFlags) { $valid[$key]=$true };foreach ($key in $falseFlags) { $valid[$key]=$false }
+$noticeFlags=@('connect_notice_observed','disconnect_notice_observed','disconnect_no_match_notice_observed')
+foreach ($key in $noticeFlags) { $valid[$key]=$false }
 $valid=$valid | ConvertTo-Json -Depth 5 | ConvertFrom-Json
 Assert-PickleExtensionDeliveryDriver $valid 'chrome'
+# Complete product-written proof is sufficient without any UI status notice.
+$noticeOnly=$valid | ConvertTo-Json | ConvertFrom-Json;$noticeOnly.connect_notice_observed=$true
+foreach ($key in @('native_host_registered','owned_registration_verified')) {
+  $bad=$noticeOnly | ConvertTo-Json | ConvertFrom-Json;$bad.$key=$false
+  Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $bad 'chrome' }
+}
+foreach ($key in $noticeFlags) {
+  $bad=$valid | ConvertTo-Json | ConvertFrom-Json;$bad.$key='true'
+  Assert-DeliveryRefused { ConvertTo-PickleExtensionDeliveryDriver $bad }
+}
 Assert-DeliveryRefused { ConvertTo-PickleExtensionStageReport $valid }
 Assert-DeliveryRefused { Assert-PickleExtensionStageReport $valid 'chrome' }
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $valid 'edge' }
@@ -63,7 +75,7 @@ Assert-DeliveryRefused { Test-PickleExtensionRemoveNewKey $false $true 1 0 }
 Assert-DeliveryRefused { Test-PickleExtensionRemoveNewKey $false $true 0 1 }
 Assert-DeliveryRefused { Test-PickleExtensionRemoveNewKey $false $true -1 0 }
 $cleanupFlags=@('owned_processes_stopped','profile_restored','registry_restored','archives_unchanged','bundled_extension_unchanged','lease_released','bridge_descriptor_removed')
-$outer=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser='chrome';passed=$true;full_delivery_verified=$true;driver=$valid;application_pid=42;ordinary_exit=$true;application_forced_stop=$false;inference=$none;proxy=[pscustomobject]@{total_requests=1;pages_served=1;rejected_requests=0;forwarded_requests=0}}
+$outer=[ordered]@{schema=1;test='windows-stable-extension-article-delivery';scope='extension-native-reference-delivery';browser='chrome';passed=$true;full_delivery_verified=$true;driver=$valid;application_pid=42;ordinary_exit=$true;application_forced_stop=$false;cleanup_stage='complete';inference=$none;proxy=[pscustomobject]@{total_requests=1;pages_served=1;rejected_requests=0;forwarded_requests=0}}
 foreach ($key in $cleanupFlags) { $outer[$key]=$true }
 $outer=$outer | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 Assert-PickleExtensionDeliveryReport $outer 'chrome'
@@ -82,7 +94,7 @@ $bad=$outer | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.application_pid=43
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryCleanup $bad 'chrome' }
 $bad=$outer | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.ordinary_exit=$false
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryReport $bad 'chrome' }
-$never=[pscustomobject]@{schema=1;test='windows-stable-extension-reference-delivery';scope='extension-native-reference-delivery';browser='chrome';passed=$false;full_delivery_verified=$false;application_pid=42;app_launched=$true;stage='delivery-app-ready';browser_launch_attempted=$false;browser_not_started_cleanup_verified=$true;browser_job_drained=$false;failure='delivery-app-window-ambiguous';delivery_cleanup_unavailable=$true;application_visible_root_windows=2;application_eligible_reader_windows=2}
+$never=[pscustomobject]@{schema=1;test='windows-stable-extension-reference-delivery';scope='extension-native-reference-delivery';browser='chrome';passed=$false;full_delivery_verified=$false;application_pid=42;app_launched=$true;stage='delivery-app-ready';browser_launch_attempted=$false;browser_not_started_cleanup_verified=$true;browser_job_drained=$false;failure='delivery-app-window-ambiguous';delivery_cleanup_unavailable=$true;application_visible_root_windows=2;application_eligible_reader_windows=2;connect_attempted=$false;disconnect_attempted=$false;connect_notice_observed=$false;disconnect_notice_observed=$false;disconnect_no_match_notice_observed=$false}
 Assert-PickleExtensionBrowserCleanup $never
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryDriver $never 'chrome' }
 foreach ($change in @(@('browser_launch_attempted',$true),@('browser_job_drained',$true),@('browser_not_started_cleanup_verified',$false),@('browser_launch_attempted','false'),@('passed',$true),@('full_delivery_verified',$true),@('stage','launch-contained-browser'),@('application_visible_root_windows',257),@('application_eligible_reader_windows',-1))) {
@@ -109,6 +121,43 @@ Assert-DeliveryRefused { Assert-PickleExtensionDeliveryReport $beforeBrowser 'ch
 $beforeBrowser.ordinary_exit=$true;Assert-DeliveryRefused { Assert-PickleExtensionDeliveryCleanup $beforeBrowser 'chrome' }
 $bad=$outer | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.application_forced_stop=$true
 Assert-DeliveryRefused { Assert-PickleExtensionDeliveryReport $bad 'chrome' }
+foreach ($stage in @('host-absence','registry-absence','registry-baseline','private arbitrary message')) {
+  $bad=$outer | ConvertTo-Json -Depth 8 | ConvertFrom-Json;$bad.cleanup_stage=$stage
+  Assert-DeliveryRefused { Assert-PickleExtensionDeliveryCleanup $bad 'chrome' }
+}
+$owned=Join-Path ([IO.Path]::GetTempPath()) ('pickle-final-host-proof-'+[guid]::NewGuid().ToString('N'))
+if ($owned.StartsWith('/var/') -and (Test-Path -LiteralPath '/private/var')) { $owned='/private'+$owned }
+New-Item -ItemType Directory -Path $owned | Out-Null
+try {
+  Assert-PickleExtensionFinalHostAbsent $owned $true $true
+  Assert-DeliveryRefused { Assert-PickleExtensionFinalHostAbsent $owned $false $true }
+  Assert-DeliveryRefused { Assert-PickleExtensionFinalHostAbsent $owned $true $false }
+  $native=Join-Path $owned 'NativeHost';[IO.File]::WriteAllText($native,'owned wrong type')
+  Assert-DeliveryRefused { Assert-PickleExtensionFinalHostAbsent $owned $true $true }
+  Remove-Item -LiteralPath $native;New-Item -ItemType Directory -Path $native | Out-Null
+  Assert-PickleExtensionFinalHostAbsent $owned $true $true
+  & {
+    param($Directory,$Native)
+    $calls=[pscustomobject]@{registry=0;restore=0;denyRegistry=$false}
+    function Assert-PickleExtensionRegistryAbsent { $calls.registry++;if ($calls.denyRegistry) { throw 'Owned registry proof refused.' } }
+    $receipt=[pscustomobject]@{cleanup_stage='not-started'}
+    Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true
+    if ($calls.registry -ne 1 -or $receipt.cleanup_stage -cne 'registry-absence') { throw 'The post-exit registry absence guard was skipped.' }
+    # An earlier provisional/no-match result cannot cover a late Connect write.
+    [IO.File]::WriteAllText((Join-Path $Native 'late-owned-host'),'owned bytes')
+    Assert-DeliveryRefused { Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true;$calls.restore++ }
+    if ($calls.restore -ne 0 -or $calls.registry -ne 1 -or $receipt.cleanup_stage -cne 'host-absence') { throw 'Late host reappearance reached restoration.' }
+    Remove-Item -LiteralPath (Join-Path $Native 'late-owned-host')
+    $calls.denyRegistry=$true
+    Assert-DeliveryRefused { Assert-PickleExtensionPostExitAbsence $receipt $Directory $true $true;$calls.restore++ }
+    if ($calls.restore -ne 0 -or $receipt.cleanup_stage -cne 'registry-absence') { throw 'Registry absence failure reached restoration.' }
+  } $owned $native
+  & {
+    param($Directory)
+    function Get-PickleExtensionStrictAttributes { throw 'Unreadable owned path.' }
+    Assert-DeliveryRefused { Assert-PickleExtensionFinalHostAbsent $Directory $true $true }
+  } $owned
+} finally { Remove-Item -LiteralPath $owned -Recurse -Force }
 # Entry rejects nonhosted/nonWindows invocation before containment or startup.
 if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
   Assert-DeliveryRefused { & (Join-Path $PSScriptRoot 'invoke-windows-extension-delivery.ps1') -PackageDirectory 'not-opened' -Browser chrome -EvidencePath 'not-opened' }

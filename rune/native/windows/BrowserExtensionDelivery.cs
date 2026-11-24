@@ -25,6 +25,7 @@ public static class BrowserExtensionDeliveryPredicates {
     }
     public static bool BrowserNeverStarted(bool attempted,bool hasJob,bool drained) { return !attempted && !hasJob && !drained; }
     public static bool UniqueEligibleReader(int count) { return count==1; }
+    public static bool ShouldInvokeDisconnect(bool connectAttempted,bool disconnectAttempted) { return connectAttempted && !disconnectAttempted; }
     public static bool Article(IEnumerable<string> labels) {
         var values=labels.Select(Normalize).ToArray();
         return values.Contains(ArticleTitle+" · article") && values.Contains(ArticleText);
@@ -42,6 +43,7 @@ public static class BrowserExtensionDeliveryPredicates {
             EligibleReader(true,true,true,false,0,480,180) || EligibleReader(true,true,true,true,1,480,180) ||
             EligibleReader(true,true,true,true,0,479,180) || EligibleReader(true,true,true,true,0,480,179)) throw new Exception("delivery-reader-eligibility");
         if(!UniqueEligibleReader(1) || UniqueEligibleReader(0) || UniqueEligibleReader(2) || UniqueEligibleReader(256)) throw new Exception("delivery-reader-uniqueness");
+        if(!ShouldInvokeDisconnect(true,false) || ShouldInvokeDisconnect(false,false) || ShouldInvokeDisconnect(true,true)) throw new Exception("delivery-disconnect-after-attempt-once");
         if(!BrowserNeverStarted(false,false,false) || BrowserNeverStarted(true,false,false) ||
             BrowserNeverStarted(false,true,false) || BrowserNeverStarted(false,false,true) || BrowserNeverStarted(true,true,true)) throw new Exception("delivery-browser-not-started");
         if(!Article(new[]{ArticleTitle+" · article",ArticleText}) || Article(new[]{ArticleTitle+" · article"}) || Article(new[]{ArticleText}) ||
@@ -59,7 +61,7 @@ public static class BrowserExtensionDeliveryPredicates {
 public static partial class BrowserExtensionFixtureProgram {
     static DeliveryApplication deliveryApp;
     static string deliverySupport,deliveryKind,deliveryId;
-    static bool deliveryConnected,deliveryDisconnected,deliveryOrdinaryExit;
+    static bool deliveryConnectAttempted,deliveryDisconnectAttempted,deliveryDisconnectInvoked,deliveryDisconnected,deliveryOrdinaryExit;
     static DateTime deliveryCleanupDeadline;
     static bool DeliveryStopped { get { return deliveryOrdinaryExit && deliveryDisconnected; } }
     static void DeliveryCheck() { if(deliveryCleanupDeadline==default(DateTime)) Check();else if(DateTime.UtcNow>=deliveryCleanupDeadline) Fail("delivery-cleanup-deadline"); }
@@ -77,6 +79,8 @@ public static partial class BrowserExtensionFixtureProgram {
         Report["extension_details_identity_verified"]=false;Report["owned_extension_folder_verified"]=false;
         Report["extension_name_found"]=false;Report["extension_version_found"]=false;
         Report["browser_launch_attempted"]=false;Report["browser_not_started_cleanup_verified"]=false;
+        Report["connect_attempted"]=false;Report["disconnect_attempted"]=false;
+        Report["connect_notice_observed"]=false;Report["disconnect_notice_observed"]=false;Report["disconnect_no_match_notice_observed"]=false;
     }
     static void PrepareDelivery(Dictionary<string,string> options) {
         deliverySupport=DirectoryPath(options["--support"]);
@@ -101,9 +105,11 @@ public static partial class BrowserExtensionFixtureProgram {
         deliveryKind=kind;deliveryId=id;
         stage="delivery-connect";
         deliveryApp.Invoke("open-settings");deliveryApp.SetField("extension-id",id);
+        deliveryConnectAttempted=true;Report["connect_attempted"]=true;
         deliveryApp.Invoke(kind=="edge" ? "connect-edge" : "connect-chrome");
-        DeliveryWait(()=>deliveryApp.HasText("Browser host connected. Enable browser references and use the extension's Use this page action."),10,"delivery-connect-unavailable");
-        VerifyRegistration(kind,id);deliveryConnected=true;Report["native_host_registered"]=true;Report["owned_registration_verified"]=true;
+        DeliveryWait(()=>VerifyRegistration(kind,id),10,"delivery-connect-unavailable");
+        Report["connect_notice_observed"]=ObserveDeliveryNotice("Browser host connected. Enable browser references and use the extension's Use this page action.");
+        Report["native_host_registered"]=true;Report["owned_registration_verified"]=true;
         stage="delivery-article";
         NavigateArticle(window);
         stage="delivery-shortcut";Native.BrowserSendPage(window);Report["delivery_shortcut_events"]=6;
@@ -127,16 +133,51 @@ public static partial class BrowserExtensionFixtureProgram {
         stage="delivery-quit";QuitDelivery();
     }
     static void DisconnectDelivery() {
-        if(!deliveryConnected) { deliveryDisconnected=true;return; }
+        if(!deliveryConnectAttempted) { deliveryDisconnected=true;return; }
         if(deliveryDisconnected) return;
-        deliveryApp.Invoke("open-settings");deliveryApp.SetField("extension-id",deliveryId);
-        deliveryApp.Invoke(deliveryKind=="edge" ? "disconnect-edge" : "disconnect-chrome");
-        DeliveryWait(()=>deliveryApp.HasText("Pickle's browser host was disconnected. Existing saved answers are kept."),10,"delivery-disconnect-unavailable");
-        string directory=Path.Combine(deliverySupport,"NativeHost",deliveryKind);
-        foreach(string name in new[]{"registration.json","com.pickle.reader.json","pickle-browser-host.exe"}) if(File.Exists(Path.Combine(directory,name))) Fail("delivery-host-files-remain");
-        if(Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any()) Fail("delivery-host-files-remain");
-        foreach(int view in new[]{32,64}) if(RegistryManifest(deliveryKind,view)!=null) Fail("delivery-registry-remains");
+        // At most one ordinary Disconnect, including recovery after an attempted
+        // Connect whose acknowledgement/proof was never obtained.
+        if(BrowserExtensionDeliveryPredicates.ShouldInvokeDisconnect(deliveryConnectAttempted,deliveryDisconnectAttempted)) {
+            deliveryApp.Invoke("open-settings");deliveryApp.SetField("extension-id",deliveryId);
+            deliveryDisconnectAttempted=true;Report["disconnect_attempted"]=true;
+            deliveryApp.Invoke(deliveryKind=="edge" ? "disconnect-edge" : "disconnect-chrome");deliveryDisconnectInvoked=true;
+        }
+        if(!deliveryDisconnectInvoked) Fail("delivery-disconnect-unavailable");
+        DeliveryWait(()=>DeliveryHostAbsent(),10,"delivery-disconnect-unavailable");
+        Report["disconnect_notice_observed"]=ObserveDeliveryNotice("Pickle's browser host was disconnected. Existing saved answers are kept.");
+        Report["disconnect_no_match_notice_observed"]=ObserveDeliveryNotice("No matching browser host is installed.");
+        // This is provisional until the parent proves absence again after the
+        // real app exits/drains workers and its lease is idle. Connect and
+        // Disconnect are independent async jobs; no-match is not completion.
         deliveryDisconnected=true;Report["ordinary_disconnect_verified"]=true;
+    }
+    static bool ObserveDeliveryNotice(string expected) {
+        try {DeliveryCheck();return deliveryApp.HasText(expected);} catch {return false;}
+    }
+    static bool DeliveryEntryExists(string path,bool directory) {
+        FileAttributes attributes;
+        try {attributes=File.GetAttributes(path);}
+        catch(FileNotFoundException) {return false;}
+        catch(DirectoryNotFoundException) {return false;}
+        if((attributes&FileAttributes.ReparsePoint)!=0 || ((attributes&FileAttributes.Directory)!=0)!=directory) Fail("delivery-host-path-unsafe");
+        return true;
+    }
+    static bool DeliveryHostAbsent() {
+        DeliveryCheck();DirectoryPath(deliverySupport);
+        string native=Path.Combine(deliverySupport,"NativeHost");
+        bool nativeExists=DeliveryEntryExists(native,true);
+        if(nativeExists) foreach(string child in Directory.EnumerateFileSystemEntries(native)) {
+            DeliveryCheck();if(Path.GetFileName(child)!=deliveryKind) Fail("delivery-host-files-remain");DeliveryEntryExists(child,true);
+        }
+        string directory=Path.Combine(deliverySupport,"NativeHost",deliveryKind);
+        bool exists=nativeExists && DeliveryEntryExists(directory,true),remaining=false;
+        if(exists) foreach(string path in Directory.EnumerateFileSystemEntries(directory)) {
+            DeliveryCheck();string leaf=Path.GetFileName(path);
+            if(leaf!="registration.json" && leaf!="com.pickle.reader.json" && leaf!="pickle-browser-host.exe") Fail("delivery-host-files-remain");
+            DeliveryEntryExists(path,false);remaining=true;
+        }
+        foreach(int view in new[]{32,64}) if(RegistryManifest(deliveryKind,view)!=null) remaining=true;
+        return !remaining;
     }
     static void QuitDelivery() {
         if(deliveryApp==null || deliveryApp.Exited) return;
@@ -180,17 +221,27 @@ public static partial class BrowserExtensionFixtureProgram {
             result=result.Substring(0,result.Length-1);if(result.IndexOf('\0')>=0) Fail("delivery-registry-unavailable");return result;
         } finally { Marshal.FreeHGlobal(buffer); }
     }
-    static void VerifyRegistration(string kind,string id) {
+    static bool VerifyRegistration(string kind,string id) {
+        DeliveryCheck();DirectoryPath(deliverySupport);
         string directory=Path.Combine(deliverySupport,"NativeHost",kind),host=Path.Combine(directory,"pickle-browser-host.exe"),manifest=Path.Combine(directory,"com.pickle.reader.json"),origin="chrome-extension://"+id+"/";
-        var value=ReadObject(manifest,16384);if(!BrowserExtensionDeliveryPredicates.HostShape(value,origin) || !String.Equals(Canonical((string)value["path"]),Canonical(host),StringComparison.OrdinalIgnoreCase)) Fail("delivery-host-manifest-mismatch");
-        var registration=ReadObject(Path.Combine(directory,"registration.json"),16384);
-        string app=registration.ContainsKey("application") ? registration["application"] as string : null,bridge=registration.ContainsKey("bridge_directory") ? registration["bridge_directory"] as string : null;
-        if(registration.Count!=4 || !registration.ContainsKey("browser") || registration["browser"] as string!=(kind=="edge" ? "Edge" : "Chrome") ||
-            !registration.ContainsKey("allowed_origin") || registration["allowed_origin"] as string!=origin || app==null || bridge==null ||
-            !String.Equals(Canonical(app),deliveryApp.Executable,StringComparison.OrdinalIgnoreCase) || !String.Equals(Canonical(bridge),Canonical(Path.Combine(deliverySupport,"BrowserBridge")),StringComparison.OrdinalIgnoreCase)) Fail("delivery-host-registration-mismatch");
-        if(HashFile(host)!=HashFile(Path.Combine(Path.GetDirectoryName(deliveryApp.InputExecutable),"pickle-browser-host.exe"))) Fail("delivery-host-provenance-unavailable");
+        bool exists=DeliveryEntryExists(Path.Combine(deliverySupport,"NativeHost"),true) && DeliveryEntryExists(directory,true);
+        bool hasHost=exists && DeliveryEntryExists(host,false),hasManifest=exists && DeliveryEntryExists(manifest,false);
+        string registrationPath=Path.Combine(directory,"registration.json");bool hasRegistration=exists && DeliveryEntryExists(registrationPath,false);
+        // Only absent not-yet-published components are pending. Any present
+        // wrong schema/origin/path/hash/registry or unreadable data fails now.
+        if(hasManifest) {
+            var value=ReadObject(manifest,16384);if(!BrowserExtensionDeliveryPredicates.HostShape(value,origin) || !String.Equals(Canonical((string)value["path"]),Canonical(host),StringComparison.OrdinalIgnoreCase)) Fail("delivery-host-manifest-mismatch");
+        }
+        if(hasRegistration) {
+            var registration=ReadObject(registrationPath,16384);
+            string app=registration.ContainsKey("application") ? registration["application"] as string : null,bridge=registration.ContainsKey("bridge_directory") ? registration["bridge_directory"] as string : null;
+            if(registration.Count!=4 || !registration.ContainsKey("browser") || registration["browser"] as string!=(kind=="edge" ? "Edge" : "Chrome") ||
+                !registration.ContainsKey("allowed_origin") || registration["allowed_origin"] as string!=origin || app==null || bridge==null ||
+                !String.Equals(Canonical(app),deliveryApp.Executable,StringComparison.OrdinalIgnoreCase) || !String.Equals(Canonical(bridge),Canonical(Path.Combine(deliverySupport,"BrowserBridge")),StringComparison.OrdinalIgnoreCase)) Fail("delivery-host-registration-mismatch");
+        }
+        if(hasHost && HashFile(host)!=HashFile(Path.Combine(Path.GetDirectoryName(deliveryApp.InputExecutable),"pickle-browser-host.exe"))) Fail("delivery-host-provenance-unavailable");
         int found=0;foreach(int view in new[]{32,64}) { string path=RegistryManifest(kind,view);if(path==null) continue;if(!String.Equals(Canonical(path),Canonical(manifest),StringComparison.OrdinalIgnoreCase)) Fail("delivery-host-registry-mismatch");found++; }
-        if(found==0) Fail("delivery-host-registry-mismatch");
+        return hasHost && hasManifest && hasRegistration && found>0;
     }
     static void NavigateArticle(IntPtr window) {
         if(!browser.OwnsWindow(window)) Fail("delivery-browser-not-owned");Native.SetForegroundWindow(window);
