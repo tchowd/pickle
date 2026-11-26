@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08110e">
+  <title>Deep-space observatory · Portal Lab</title>
+  <script>
+    if (window.parent === window) location.replace('./#observatory');
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; color: #dfdfbc; background: #08110e;
+      font-family: "Courier Prime", "Courier New", monospace;
+    }
+    main {
+      min-height: 100vh; min-height: 100svh; margin: auto; max-width: 80rem;
+      padding: clamp(1.5rem, 5vw, 5rem);
+      display: grid; grid-template-columns: minmax(13rem, .8fr) minmax(0, 1.3fr);
+      align-items: center; gap: clamp(1rem, 5vw, 6rem);
+    }
+    h1 { font: normal clamp(2.5rem, 5.6vw, 5.5rem)/.99 Georgia, serif; letter-spacing: -.045em; margin: 0; }
+    p { color: #b4b6a1; font-size: .95rem; line-height: 1.65; max-width: 31ch; margin: 1.5rem 0 2rem; }
+    a { display: inline-flex; align-items: center; min-height: 44px; color: #bdf09f; text-underline-offset: .35em; }
+    a:focus-visible { outline: 2px solid #e5ffb3; outline-offset: 4px; }
+    svg { display: block; width: 100%; overflow: visible; }
+    @media (max-width: 640px) {
+      main { height: 100vh; padding: 5vh 7vw; grid-template-columns: 1fr 1fr; gap: 3vw; }
+      h1 { font-size: 6.4vw; }
+      p { font-size: clamp(14px, 2.8vw, 17px); line-height: 1.4; margin: 3vh 0; }
+      a { min-height: 44px; font-size: max(14px, 3vw); }
+    }
+    @media (max-width: 180px) {
+      main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; padding: 4vh 7vw; gap: 0; }
+      svg { grid-row: 1; width: auto; height: 39vh; justify-self: center; }
+      section { text-align: center; }
+      h1 { font-size: max(9px, 7vw); }
+      p { display: none; }
+      a { min-height: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>Deep-space observatory</h1>
+      <p>The green signal on the scope marks your return path to the workbench.</p>
+      <a href="./#portal" target="_parent">← Return to lab</a>
+    </section>
+    <svg viewBox="0 0 520 520" role="img" aria-labelledby="scope-title">
+      <title id="scope-title">Circular star scope showing the lab's return signal</title>
+      <defs>
+        <linearGradient id="bezel" x2=".75" y2="1">
+          <stop stop-color="#776e50"/><stop offset=".18" stop-color="#444438"/>
+          <stop offset=".55" stop-color="#232920"/><stop offset=".83" stop-color="#393b2d"/><stop offset="1" stop-color="#655a40"/>
+        </linearGradient>
+        <path id="division" d="M260 36v10m19.5 -9.2 -.7 6m19.9 -3.5 -1 5" fill="none" stroke="#b0be96"/>
+        <g id="quadrant"><use href="#division"/><use href="#division" transform="rotate(15 260 260)"/><use href="#division" transform="rotate(30 260 260)"/><use href="#division" transform="rotate(45 260 260)"/><use href="#division" transform="rotate(60 260 260)"/><use href="#division" transform="rotate(75 260 260)"/></g>
+        <g id="fastener"><circle r="3.6" fill="#1a1e17" stroke="#807b5f"/><path d="m-2 1.4 4 -2.8" stroke="#555647"/></g>
+        <radialGradient id="glass"><stop stop-color="#23392b"/><stop offset=".75" stop-color="#13291f"/><stop offset="1" stop-color="#09140f"/></radialGradient>
+        <radialGradient id="signal"><stop stop-color="#ecffc4"/><stop offset=".19" stop-color="#abf781"/><stop offset="1" stop-color="#67e462" stop-opacity="0"/></radialGradient>
+        <pattern id="stars" patternUnits="userSpaceOnUse" width="89" height="109" patternTransform="rotate(11)">
+          <g fill="#c8dcbc"><circle cx="12" cy="19" r="1.2"/><circle cx="73" cy="42" r=".8"/><circle cx="33" cy="87" r=".7"/><circle cx="63" cy="96" r="1.3"/></g>
+        </pattern>
+      </defs>
+      <circle cx="260" cy="260" r="250" fill="url(#bezel)" stroke="#595744" stroke-width="3"/>
+      <circle cx="260" cy="260" r="247" fill="none" stroke="#c4b68c" stroke-opacity=".4"/>
+      <circle cx="260" cy="260" r="240" fill="url(#glass)" stroke="#060c09" stroke-width="8"/>
+      <circle cx="260" cy="260" r="231" fill="url(#stars)"/>
+      <g>
+        <use href="#fastener" x="87" y="87"/><use href="#fastener" x="433" y="87"/>
+        <use href="#fastener" x="87" y="433"/><use href="#fastener" x="433" y="433"/>
+      </g>
+      <g stroke="#7f9974" fill="none">
+        <circle cx="260" cy="260" r="224" stroke-width="6" stroke-dasharray="1 13.07"/>
+        <g opacity=".32"><circle cx="260" cy="260" r="180"/><circle cx="260" cy="260" r="116"/><circle cx="260" cy="260" r="55"/><path d="M260 46v428M46 260h428"/></g>
+      </g>
+      <g opacity=".82"><use href="#quadrant"/><use href="#quadrant" transform="rotate(90 260 260)"/><use href="#quadrant" transform="rotate(180 260 260)"/><use href="#quadrant" transform="rotate(270 260 260)"/></g>
+      <g fill="#b6c4a1" font-family="monospace" font-size="11" text-anchor="middle" letter-spacing="1">
+        <text x="260" y="60">000</text><text x="462" y="264">090</text>
+        <text x="260" y="468">180</text><text x="59" y="264">270</text>
+      </g>
+      <g fill="none" stroke="#8aa981" opacity=".48">
+        <circle cx="260" cy="260" r="7"/>
+        <path d="M240 256v8m40 -8v8m-24 -24h8m-8 40h8"/>
+        <circle cx="260" cy="260" r="147" stroke-dasharray="1 8"/>
+      </g>
+      <path d="m104 226 52 -35 56 27 39 -56 73 23 38 -33" fill="none" stroke="#a4bd89" opacity=".65"/>
+      <g fill="#eef2cf"><circle cx="104" cy="226" r="2.4"/><circle cx="156" cy="191" r="3"/><circle cx="212" cy="218" r="2.7"/><circle cx="251" cy="162" r="3.6"/><circle cx="324" cy="185" r="2.5"/><circle cx="362" cy="152" r="3"/></g>
+      <circle cx="307" cy="297" r="22" fill="url(#signal)"/>
+      <g fill="none" stroke="#bdf09f"><circle cx="307" cy="297" r="15"/><path d="m317 311 17 24h29"/></g>
+      <text x="328" y="355" font-family="monospace" font-size="13" fill="#c3ecb1">LAB</text>
+    </svg>
+  </main>
+</body>
+</html>

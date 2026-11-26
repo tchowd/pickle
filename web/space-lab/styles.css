@@ -1,0 +1,162 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #000; }
+.lab-viewport {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: clip;
+  background: #080c10;
+}
+.lab-camera {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform: translate(0, 0) scale(1);
+  transition: transform 1050ms cubic-bezier(.36, 0, .16, 1);
+  display: grid;
+  grid-template-rows: minmax(0, 627fr) auto minmax(0, 1112fr);
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  overflow: hidden;
+  background: #080c10;
+}
+.lab-camera.close-up {
+  transform: translate(var(--camera-x), var(--camera-y)) scale(var(--zoom));
+  transition-duration: 1350ms;
+}
+.lab-surround {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.scene {
+  grid-row: 2;
+  position: relative;
+  width: min(100%, calc(100vh * 16 / 9));
+  width: min(100%, calc(100dvh * 16 / 9));
+}
+.extension {
+  align-self: stretch;
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+.extension-above { grid-row: 1; }
+.extension-below { grid-row: 3; }
+.extension svg {
+  position: absolute;
+  width: 100%;
+  height: max(100%, var(--paint-height));
+  display: block;
+}
+.extension-above svg {
+  bottom: 0;
+}
+.extension-below svg {
+  top: 0;
+}
+@media (max-aspect-ratio: 16/9) {
+  .lab-surround { display: none; }
+}
+.scene > svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.power {
+  position: absolute;
+  left: 59%;
+  top: 55.6%;
+  transform: translate(-50%, -50%);
+  width: max(24px, 2.5%);
+  aspect-ratio: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.power:focus-visible { outline: 2px solid white; }
+.portal-entry {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  position: absolute;
+  left: 40%;
+  top: 20%;
+  width: 22.5%;
+  height: 30%;
+  border-radius: 7% / 9%;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.monitor-content, .portal-optics {
+  position: absolute;
+  left: calc(100% * 814 / 2048);
+  top: calc(100% * 224 / 1152);
+  width: calc(100% * 473 / 2048);
+  height: calc(100% * 363 / 1152);
+  background: #08110e;
+  clip-path: url(#monitor-viewport);
+}
+.monitor-content iframe {
+  display: block;
+  border: 0;
+  /* Lay out the page at reading size, then map it back onto the painted glass. */
+  width: calc(100% * var(--zoom));
+  height: calc(100% * var(--zoom));
+  transform: scale(var(--inverse-zoom));
+  transform-origin: top left;
+}
+.monitor-content::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 48%, transparent 49%, #00170760 95%);
+}
+.portal-entry:focus-visible {
+  outline: 2px solid #d6ff9b;
+  outline-offset: 3px;
+}
+@media (hover: hover) {
+  .portal-entry:hover { box-shadow: inset 0 0 18px #c3ff8638; }
+}
+.portal-optics { pointer-events: none; overflow: hidden; }
+.plasma-film {
+  position: absolute;
+  left: 50%; top: 50%;
+  height: 167%; aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  background-size: cover;
+}
+.portal-optics canvas, .crt-surface {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+}
+.portal-optics canvas { opacity: 0; }
+.crt-surface {
+  background:
+    radial-gradient(ellipse at 17% -30%, #f1ffd523, transparent 51%),
+    radial-gradient(ellipse at 49% 48%, transparent 46%, #02190970 100%),
+    repeating-linear-gradient(0deg, transparent 0 2px, #0c260e0a 2px 3px);
+  box-shadow: inset 0 0 10px #03180980;
+}
+.running .plasma-film { animation: drift-plasma 52s linear infinite; }
+@keyframes drift-plasma {
+  to { transform: translate(-50%, -50%) rotate(1turn); }
+}
+.entering .plasma-film {
+  animation: enter-vortex var(--transit-duration) cubic-bezier(.48,.08,.66,1) forwards;
+}
+@keyframes enter-vortex {
+  to { transform: translate(-50%, -50%) rotate(1turn) scale(1.95); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lab-camera, .lab-camera.close-up { transition: none; }
+  .running .plasma-film, .entering .plasma-film { animation: none; }
+}
